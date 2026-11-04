@@ -10,6 +10,7 @@ dist/
 data/private/
 data/raw/
 data/runs/
+data/market/
 logs/
 backups/
 *.sqlite*

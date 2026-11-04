@@ -13,12 +13,12 @@ import sys
 import time
 import uuid
 import webbrowser
-from datetime import datetime, timedelta, time as clock
+from datetime import date, datetime, timedelta, time as clock
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import account, login
+from . import account, login, master, sources
 from .backtest import compare, load_bars, simulate
 from .audit import audit_dataset
 from .common import IST, atomic_json, money, now, timestamp
@@ -348,6 +348,13 @@ def parser():
     a = sub.add_parser("dashboard"); a.add_argument("--port", type=int, default=8765)
     a = sub.add_parser("backup"); a.add_argument("destination", type=Path)
     a = sub.add_parser("audit"); a.add_argument("file", type=Path); a.add_argument("--output", type=Path, default=Path("data/runs/audit.json"))
+    a = sub.add_parser("fetch-public", help="download official NSE/BSE daily files for one trading date")
+    a.add_argument("--date", type=date.fromisoformat, required=True); a.add_argument("--sources", nargs="*")
+    a = sub.add_parser("build-master", help="security master usable for one session")
+    a.add_argument("--date", type=date.fromisoformat, required=True)
+    a = sub.add_parser("snapshot", help="rules-engine input for one NSE symbol and session, with provenance")
+    a.add_argument("--date", type=date.fromisoformat, required=True); a.add_argument("--symbol", required=True)
+    p.add_argument("--market-dir", type=Path, default=Path("data/market"))
     return p
 
 
@@ -425,6 +432,14 @@ def main():
             finally:
                 db.close()
             print("Consistent SQLite backup saved.")
+        elif args.command == "fetch-public":
+            for r in sources.collect(args.market_dir, args.date, args.sources):
+                print(f"{r['source']:<28} {r.get('key', ''):<11} {r['result']}")
+        elif args.command == "build-master":
+            print(json.dumps(master.build_master(args.market_dir, args.date), indent=1, default=str))
+        elif args.command == "snapshot":
+            snap, prov = master.build_nse_snapshot(args.market_dir, args.symbol, args.date)
+            print(json.dumps({"snapshot": master.snapshot_json(snap), "provenance": prov}, indent=1, default=str))
         elif args.command == "audit":
             atomic_json(args.output, audit_dataset(args.file))
             print("Dataset audit saved; unresolved data flags remain blockers to strategy certification.")
