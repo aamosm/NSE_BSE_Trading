@@ -24,9 +24,9 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-# Writes only the login state, session token and pause control; market data is read-only here.
-ReadWritePaths=/var/lib/marketlab/private
-ReadOnlyPaths=/var/lib/marketlab/market
+# Writes the login state, session token and pause control. The market directory must also be writable:
+# SQLite in WAL mode creates -wal/-shm files even for readers of catalog.sqlite3.
+ReadWritePaths=/var/lib/marketlab
 MemoryMax=256M
 CPUQuota=25%
 
