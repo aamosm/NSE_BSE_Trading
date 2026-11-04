@@ -54,8 +54,9 @@ def test_shape_policy_and_staleness():
 def test_holiday_weekend_and_unloaded_calendars():
     hol = run(order(submitted_at=ist(2026, 11, 10, 10, 0)), eq_snapshot(as_of=date(2026, 11, 10)))
     assert "MARKET_HOLIDAY" in blocks(hol)
+    # Muhurat (8 Nov 2026) now uses its own table: 18:00 is after the 16:00 close.
     muhurat = run(order(submitted_at=ist(2026, 11, 8, 18, 0)), eq_snapshot(as_of=date(2026, 11, 8)))
-    assert "SESSION_UNKNOWN" in blocks(muhurat)
+    assert "SESSION_NOT_ACCEPTING_ORDERS" in blocks(muhurat)
     bse = run(order(exchange=Exchange.BSE), eq_snapshot(exchange=Exchange.BSE, series="A", tick_size=D("0.01")))
     assert "SESSION_UNKNOWN" in blocks(bse)
 

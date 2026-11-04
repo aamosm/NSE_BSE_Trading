@@ -10,8 +10,9 @@ Effective-dated regimes:
   15:50-16:00.
 
 Random-closure windows are treated as *not accepting* new orders, because acceptance is not
-guaranteed. Special sessions (IPO/relisting day, periodic call auction, Muhurat) are out of scope
-here and are rejected by the engine.
+guaranteed. Special sessions use only their own circular's table (``SPECIAL_TIMETABLES``); a special
+session without a loaded table raises ``RuleUnknown``. IPO/relisting special pre-open and periodic
+call auctions are out of scope and are rejected by the engine.
 """
 
 from __future__ import annotations
@@ -126,6 +127,41 @@ def _close(d: date, cas_applies: bool) -> list[Window]:
     ]
 
 
+def _muhurat_2026(cas: bool) -> list[Window]:
+    """NSE/CMTR/76941, Sunday 8 Nov 2026. Random closure in the last 2 minutes of each entry period."""
+    pre = [
+        Window(SessionKind.PRE_OPEN_ALL, _t("14:05"), _t("14:10")),
+        Window(SessionKind.PRE_OPEN_LIMIT_ONLY, _t("14:10"), _t("14:13")),
+        Window(SessionKind.PRE_OPEN_RANDOM_CLOSE, _t("14:13"), _t("14:15")),
+        Window(SessionKind.PRE_OPEN_MATCHING, _t("14:15"), _t("14:20")),  # matching 14:15-14:17, buffer to 14:20
+    ]
+    if not cas:
+        return pre + [
+            Window(SessionKind.CONTINUOUS, _t("14:20"), _t("15:30")),
+            Window(SessionKind.CLOSED, _t("15:30"), _t("15:50")),
+            Window(SessionKind.POST_CLOSE, _t("15:50"), _t("16:00")),
+        ]
+    return pre + [
+        Window(SessionKind.CONTINUOUS, _t("14:20"), _t("15:15")),
+        Window(SessionKind.CAS_TRANSITION, _t("15:15"), _t("15:20")),
+        Window(SessionKind.CAS_ALL, _t("15:20"), _t("15:25")),
+        Window(SessionKind.CAS_LIMIT_ONLY, _t("15:25"), _t("15:28")),
+        Window(SessionKind.CAS_RANDOM_CLOSE, _t("15:28"), _t("15:30")),
+        Window(SessionKind.CAS_MATCHING, _t("15:30"), _t("15:35")),
+        Window(SessionKind.CLOSED, _t("15:35"), _t("15:50")),
+        Window(SessionKind.POST_CLOSE, _t("15:50"), _t("16:00")),
+    ]
+
+
+SPECIAL_TIMETABLES = {
+    (Exchange.NSE, date(2026, 11, 8)): _muhurat_2026,
+}
+SESSION_CITES["muhurat_2026"] = Cite(("NSE/CMTR/76941",), Status.PRIMARY,
+                                     "Muhurat 8 Nov 2026: block deal 13:50-14:05; pre-open 14:05-14:15 (limit and "
+                                     "market to 14:10, limit only to 14:15); normal market 14:20-15:30 (15:15 for "
+                                     "CAS stocks); CAS 15:15-15:35; post-close 15:50-16:00.")
+
+
 def cas_applies(d: date, has_derivatives: bool | None) -> bool:
     if d < CAS_FROM:
         return False
@@ -146,11 +182,18 @@ def session_at(ts: datetime, exchange: Exchange, has_derivatives: bool | None,
         raise ValueError("Timestamp must be timezone-aware")
     local = ts.astimezone(IST)
     d, t = local.date(), local.time()
-    if calendar.is_special_session(exchange, d):
-        raise RuleUnknown(f"{d} is a special session (e.g. Muhurat); its timetable is not loaded")
-    if not calendar.is_trading_day(exchange, d):
+    if calendar.has_special_timetable(exchange, d):
+        build = SPECIAL_TIMETABLES.get((exchange, d))
+        if build is None:
+            raise RuleUnknown(f"{d}: special session timetable missing from rules.sessions")
+        windows = tuple(build(cas_applies(d, has_derivatives)))
+    elif calendar.is_special_session(exchange, d):
+        raise RuleUnknown(f"{d} is a special session; its timetable is not loaded")
+    elif not calendar.is_trading_day(exchange, d):
         return SessionKind.NON_TRADING_DAY
-    for w in timetable(d, has_derivatives):
+    else:
+        windows = timetable(d, has_derivatives)
+    for w in windows:
         if w.start <= t < w.end:
             return w.kind
     return SessionKind.CLOSED

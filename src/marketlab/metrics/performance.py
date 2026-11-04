@@ -56,7 +56,7 @@ def trading_sessions_in_year(calendar: MarketCalendar, exchange: Exchange, year:
     d = date(year, 1, 1)
     n = 0
     while d.year == year:
-        if calendar.is_trading_day(exchange, d):
+        if calendar.is_trading_day(exchange, d) and not calendar.is_special_session(exchange, d):
             n += 1
         d += timedelta(days=1)
     return n

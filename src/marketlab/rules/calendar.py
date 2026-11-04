@@ -26,8 +26,11 @@ class CalendarYear:
     year: int
     trading_holidays: frozenset[date]  # weekday closures
     settlement_holidays: frozenset[date]  # weekday settlement closures (superset of most trading holidays)
-    special_sessions: frozenset[date] = frozenset()  # short sessions with unknown timings (Muhurat): blocked
+    special_sessions: frozenset[date] = frozenset()  # special sessions whose timetable is NOT loaded: blocked
     weekend_trading_days: frozenset[date] = frozenset()  # full weekend sessions at standard timings
+    # Special sessions with a loaded timetable (rules.sessions.SPECIAL_TIMETABLES): date -> pre-open start.
+    # They are trading days with settlement obligations; ordinary weekday hours never apply to them.
+    special_timetable_opens: tuple[tuple[date, time], ...] = ()
     cites: tuple[Cite, ...] = field(default=())
 
 
@@ -51,7 +54,9 @@ NSE_2026 = CalendarYear(
         "2026-08-26", "2026-09-14", "2026-10-02", "2026-10-20", "2026-11-10", "2026-11-24",
         "2026-12-25",
     ])),
-    special_sessions=frozenset({_d("2026-11-08")}),  # Muhurat trading (Sunday); timings not yet notified
+    # Muhurat trading, Sunday 8 Nov 2026: own timetable (NSE/CMTR/76941), pre-open from 14:05; settles
+    # 9 Nov 2026 as M 2026211 (NCL/CMPT/77037). Sunday stays a settlement holiday.
+    special_timetable_opens=((_d("2026-11-08"), time(14, 5)),),
     # Union Budget, Sunday 1 Feb 2026: standard timings (pre-open 09:00-09:08, normal 09:15-15:30),
     # settled 2 Feb; 1 Feb itself was a settlement holiday (no T0 session).
     weekend_trading_days=frozenset({_d("2026-02-01")}),
@@ -62,6 +67,9 @@ NSE_2026 = CalendarYear(
              "15 Jan 2026 ad hoc trading and settlement holiday; NSE original not yet read."),
         Cite(("NSE/CMTR/72349", "NCL/CMPT/72384"), Status.PRIMARY,
              "Live trading session on Sunday 1 Feb 2026 at standard market timings; T+1 settlement 2 Feb 2026."),
+        Cite(("NSE/CMTR/76941", "NCL/CMPT/77037"), Status.PRIMARY,
+             "Muhurat session Sunday 8 Nov 2026 (14:05-16:00 incl. pre-open, CAS and post-close); trades settle "
+             "9 Nov 2026."),
     ),
 )
 
@@ -83,6 +91,13 @@ class MarketCalendar:
             for d in y.weekend_trading_days:
                 if d.year != y.year or d.weekday() < 5 or d in y.special_sessions:
                     raise ValueError(f"{d}: weekend trading days must be weekend dates in the year, not specials")
+            opens = dict(y.special_timetable_opens)
+            if len(opens) != len(y.special_timetable_opens):
+                raise ValueError("Duplicate special timetable date")
+            for d in opens:
+                if (d.year != y.year or d in y.special_sessions or d in y.trading_holidays
+                        or d in y.weekend_trading_days):
+                    raise ValueError(f"{d}: a special timetable date must be in the year and not otherwise listed")
             self._years[key] = y
 
     def year(self, exchange: Exchange, d: date) -> CalendarYear:
@@ -95,20 +110,29 @@ class MarketCalendar:
         return (exchange, d.year) in self._years
 
     def is_special_session(self, exchange: Exchange, d: date) -> bool:
-        return d in self.year(exchange, d).special_sessions
+        """Any special session, whether or not its timetable is loaded (Budget Sunday is not special)."""
+        y = self.year(exchange, d)
+        return d in y.special_sessions or d in dict(y.special_timetable_opens)
+
+    def has_special_timetable(self, exchange: Exchange, d: date) -> bool:
+        return d in dict(self.year(exchange, d).special_timetable_opens)
 
     def is_trading_day(self, exchange: Exchange, d: date) -> bool:
         """Full trading day: a non-holiday weekday, or a weekend day the exchange runs with standard
         timings (e.g. Budget Sunday). Short special sessions with unknown timings (Muhurat) are not."""
         y = self.year(exchange, d)
-        if d in y.weekend_trading_days:
+        if d in y.weekend_trading_days or d in dict(y.special_timetable_opens):
             return True
-        return d.weekday() < 5 and d not in y.trading_holidays
+        return d.weekday() < 5 and d not in y.trading_holidays and d not in y.special_sessions
 
     def session_open(self, exchange: Exchange, d: date) -> time | None:
         """Earliest order-entry time (pre-open start) of the day's session; None on a non-trading day."""
-        if self.is_special_session(exchange, d):
+        y = self.year(exchange, d)
+        if d in y.special_sessions:
             raise RuleUnknown(f"{d} is a special session whose timetable is not loaded")
+        special = dict(y.special_timetable_opens)
+        if d in special:
+            return special[d]
         return REGULAR_OPEN if self.is_trading_day(exchange, d) else None
 
     def is_settlement_day(self, exchange: Exchange, d: date) -> bool:

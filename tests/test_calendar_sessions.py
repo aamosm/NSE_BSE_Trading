@@ -124,10 +124,16 @@ def test_regimes_before_cas_and_before_new_preopen(cal):
 
 
 def test_non_trading_days_and_special_sessions(cal):
+    from dataclasses import replace
+    from marketlab.rules import MarketCalendar
     assert session_at(ist(2026, 11, 7, 10, 0), NSE, False, cal) is SessionKind.NON_TRADING_DAY  # Saturday
     assert session_at(ist(2026, 11, 10, 10, 0), NSE, False, cal) is SessionKind.NON_TRADING_DAY  # holiday
+    # A special session without a loaded timetable still fails closed.
+    blocked = MarketCalendar((replace(NSE_2026, special_timetable_opens=(),
+                                      special_sessions=frozenset({date(2026, 11, 8)})),))
     with pytest.raises(RuleUnknown):
-        session_at(ist(2026, 11, 8, 18, 0), NSE, False, cal)  # Muhurat: timetable not loaded
+        session_at(ist(2026, 11, 8, 14, 30), NSE, False, blocked)
+    assert not blocked.is_trading_day(NSE, date(2026, 11, 8))
 
 
 def test_session_requires_known_fno_status_after_cas(cal):

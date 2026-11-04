@@ -181,7 +181,8 @@ def evaluate_order(
                 Cite(("ZERODHA/GSM2", "ZERODHA/SURV-INDICATORS"), Status.BROKER_OFFICIAL))
 
     if order.product is Product.MIS:
-        _check_mis(c, order, inst, position, series, restr, t2t, pol, d, local)
+        _check_mis(c, order, inst, position, series, restr, t2t, pol, d, local,
+                   special=_is_special(calendar, order.exchange, d))
     elif order.side is Side.SELL:
         _check_cnc_sell(c, order, position, series, t2t, pol, calendar, d)
 
@@ -196,8 +197,17 @@ def evaluate_order(
 # ------------------------------------------------------------------------------------------------
 
 
+def _is_special(calendar, exchange, d):
+    """True/False, or None when the calendar for that year is not loaded (treated as unknown)."""
+    try:
+        return calendar.is_special_session(exchange, d)
+    except RuleUnknown:
+        return None
+
+
 def _check_mis(c: _Collector, order: OrderRequest, inst: InstrumentSnapshot, position: PositionState,
-               series: instruments.SeriesRule | None, restr: instruments.Restrictions, t2t: bool, pol: Policy, d: date, local: datetime) -> None:
+               series: instruments.SeriesRule | None, restr: instruments.Restrictions, t2t: bool, pol: Policy, d: date, local: datetime,
+               special: bool | None = False) -> None:
     if t2t:
         c.block("T2T_NO_INTRADAY", "Trade-for-trade securities must be delivered; intraday (MIS) is not possible.",
                 Cite(("NSE/CMTR/73927", "ZERODHA/T2T"), Status.PRIMARY))
@@ -210,6 +220,8 @@ def _check_mis(c: _Collector, order: OrderRequest, inst: InstrumentSnapshot, pos
         c.block("MIS_NOT_ELIGIBLE", "Security is not on the broker's intraday list.",
                 Cite(("ZERODHA/MIS-BLOCKS",), Status.BROKER_OFFICIAL))
     try:
+        if special is not False:
+            raise RuleUnknown(f"The broker's MIS square-off time for the special session on {d} is not loaded")
         cutoff = broker.mis_cutoff(d, inst.has_derivatives)
         if local.time() >= cutoff:
             c.block("MIS_CUTOFF_PASSED", f"MIS orders are not accepted after {cutoff:%H:%M} IST "
