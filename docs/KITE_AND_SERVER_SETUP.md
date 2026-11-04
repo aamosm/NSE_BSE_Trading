@@ -13,14 +13,14 @@ The active package has no third-party runtime dependency. The pinned requirement
 1. Open https://developers.kite.trade/ yourself and use the official registration flow.
 2. Choose the paid market/historical-data plan if you need quote/history access. The published price checked on 4 November 2026 is ₹500/month per API key. Personal/free does not include those data services [S01].
 3. Use your own Kite account with the app. Follow the console's current app/account fields.
-4. Set the redirect URL to http://127.0.0.1:8766/callback for this manual token-copy workflow. The program does not run a callback server; the browser may show a connection error after successful Kite login. The redirect URL in its address bar contains the short-lived request_token.
+4. Set the redirect URL to http://127.0.0.1:8766/ (any path on that port works, e.g. /callback). During `auth` the program listens on 127.0.0.1:8766 only, catches the redirect, and shows "Kite login received" in the browser. If the port is busy or nothing arrives within 5 minutes, it falls back to asking you to paste the redirected URL (hidden input).
 5. Keep the API key and secret privately. Do not commit them, paste them into Claude/Fable/ChatGPT, put them in command arguments, or screenshot the resulting token URL.
 
 Run in PowerShell from the project folder:
 
     .\.venv\Scripts\python.exe -m marketlab auth
 
-The program asks for the key/secret using hidden input, opens the official login page, and then asks for the request token or whole redirected URL using hidden input. Complete password/OTP entry yourself in Kite. Paste the redirect immediately; request tokens expire within minutes. It exchanges that token through the documented API, saves only the resulting key/access-token/expiry locally, and does not store your API secret.
+The program reads the API key from data/private/kite_app.json if present (`{"api_key": "...", "redirect_port": 8766}`; git-ignored, holds no secret), otherwise asks for it. It always asks for the API secret using hidden input and never saves it. It opens the official login page and captures the redirect as described above. Complete password/OTP entry yourself in Kite. Paste the redirect immediately; request tokens expire within minutes. It exchanges that token through the documented API, saves only the resulting key/access-token/expiry locally, and does not store your API secret.
 
 If the developer console rejects the local redirect URL or the login page behaves differently, stop and use its current supported redirect configuration; do not bypass authentication. The provider flow must be verified on your account.
 

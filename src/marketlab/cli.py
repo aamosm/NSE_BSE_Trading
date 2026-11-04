@@ -13,6 +13,8 @@ import sys
 import time
 import webbrowser
 from datetime import datetime, timedelta, time as clock
+from decimal import Decimal
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -20,7 +22,7 @@ from .backtest import compare, load_bars, simulate
 from .audit import audit_dataset
 from .common import IST, atomic_json, money, now, timestamp
 from .dashboard import serve
-from .kite import AuthenticationRequired, KiteError, KiteReadOnly
+from .kite import AuthenticationRequired, KiteError, KiteReadOnly, PermissionDenied
 from .news import fetch_feed, ingest_feed
 from .store import Store
 from .experiments import Experiment
@@ -38,15 +40,87 @@ def state_write(root, **updates):
     atomic_json(path, state)
 
 
-def auth(root, no_browser=False):
-    api_key = getpass.getpass("Kite API key (hidden): ").strip()
+APP_FILE = "kite_app.json"  # API key and redirect port only; never the API secret
+REQUEST_TOKEN = re.compile(r"[A-Za-z0-9]{6,64}")
+
+
+def load_app(root):
+    path = root/APP_FILE
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+class CallbackCatcher:
+    """One-shot loopback listener for Kite's login redirect (the documented redirect flow, not a bypass).
+
+    It binds 127.0.0.1 only, never logs request lines (they carry the request token) and stops after
+    the first redirect with a well-formed request_token and status=success.
+    """
+
+    def __init__(self, port):
+        result = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                q = parse_qs(urlsplit(self.path).query)
+                token = q.get("request_token", [""])[0]
+                ok = bool(REQUEST_TOKEN.fullmatch(token)) and q.get("status", ["success"])[0] == "success"
+                body = (b"Kite login received. You can close this tab and return to the terminal." if ok
+                        else b"Waiting for the Kite login redirect.")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                if ok:
+                    result["token"] = token
+
+            def log_message(self, *args):
+                pass
+
+        self._result = result
+        self.server = HTTPServer(("127.0.0.1", port), Handler)
+        self.server.timeout = 0.5
+        self.port = self.server.server_address[1]
+
+    def wait(self, timeout=300.0):
+        deadline = time.monotonic() + timeout
+        while "token" not in self._result and time.monotonic() < deadline:
+            self.server.handle_request()
+        return self._result.get("token")
+
+    def close(self):
+        self.server.server_close()
+
+
+def auth(root, no_browser=False, port=None, timeout=300.0):
+    app = load_app(root)
+    api_key = app.get("api_key") or getpass.getpass("Kite API key (hidden): ").strip()
     secret = getpass.getpass("Kite API secret (hidden; not saved): ").strip()
+    login_url = "https://kite.zerodha.com/connect/login?" + urlencode({"v": 3, "api_key": api_key})
+    catcher = None
     if not no_browser:
-        webbrowser.open("https://kite.zerodha.com/connect/login?" + urlencode({"v": 3, "api_key": api_key}))
-    print("Complete Kite login yourself. Paste the request_token or complete redirected URL below.")
-    print("No password or OTP is read by this program. See docs/KITE_AND_SERVER_SETUP.md.")
-    value = getpass.getpass("Request token / redirected URL (hidden): ").strip()
-    token = parse_qs(urlsplit(value).query).get("request_token", [""])[0] if "://" in value else value
+        try:
+            catcher = CallbackCatcher(int(port or app.get("redirect_port", 8766)))
+        except OSError:
+            print("Could not listen on the redirect port; falling back to pasting the redirected URL.")
+    print("Complete Kite login yourself in the browser. No password or OTP is read by this program.")
+    print("If the browser does not open, visit: " + login_url)
+    token = ""
+    try:
+        if not no_browser:
+            webbrowser.open(login_url)
+        if catcher:
+            print(f"Waiting up to {int(timeout)} s for the redirect to 127.0.0.1:{catcher.port} ...")
+            token = catcher.wait(timeout) or ""
+    finally:
+        if catcher:
+            catcher.close()
+    if not token:
+        value = getpass.getpass("Request token / redirected URL (hidden): ").strip()
+        token = parse_qs(urlsplit(value).query).get("request_token", [""])[0] if "://" in value else value
+    if not REQUEST_TOKEN.fullmatch(token):
+        raise ValueError("No well-formed request_token was received; run auth again")
     session = KiteReadOnly(api_key).exchange_token(token, secret)
     access_token = session.get("access_token")
     if not isinstance(access_token, str) or not access_token:
@@ -69,31 +143,103 @@ def client(root):
 
 
 def collect_once(root, symbols, instruments=False):
+    """Read account snapshots, then optional quotes/instrument dumps.
+
+    An expired session stops everything. An endpoint the Kite plan does not include is recorded as
+    unavailable and the remaining reads continue; nothing is retried automatically.
+    """
     kite = client(root)
     db = Store(root/"evidence.sqlite3")
-    counts = {}
+    counts, unavailable = {}, {}
     try:
         for kind, path in [("holdings", "/portfolio/holdings"), ("positions", "/portfolio/positions"),
                            ("trades", "/trades"), ("funds", "/user/margins/equity")]:
-            payload = kite.get(path)
+            try:
+                payload = kite.get(path)
+            except PermissionDenied:
+                unavailable[kind] = "PERMISSION_DENIED"
+                continue
             db.append(kind, "kite:" + path, "BROKER_ACCOUNT", payload)
             counts[kind] = len(payload) if isinstance(payload, list) else "snapshot"
         if symbols:
-            payload = kite.quotes(symbols)
-            db.append("quotes", "kite:/quote", "WATCHLIST", payload)
-            counts["quotes"] = len(payload)
+            try:
+                payload = kite.quotes(symbols)
+                db.append("quotes", "kite:/quote", "WATCHLIST", payload)
+                counts["quotes"] = len(payload)
+            except PermissionDenied:
+                unavailable["quotes"] = "PERMISSION_DENIED (paid Kite Connect data plan required)"
         if instruments:
             for exchange in ("NSE", "BSE"):
-                raw = kite.get("/instruments/" + exchange)
+                try:
+                    raw = kite.get("/instruments/" + exchange)
+                except PermissionDenied:
+                    unavailable["instruments_" + exchange] = "PERMISSION_DENIED"
+                    continue
                 db.append("instrument_master", "kite:/instruments/" + exchange, exchange, {"csv": raw})
                 # Instrument dump has no universal ISIN mapping; do not infer identity from token.
                 atomic_json(root/("instruments_" + exchange + ".json"),
                             {"received_at": now(), "rows": list(csv.DictReader(io.StringIO(raw)))})
-        state_write(root, collection={"status": "COLLECTED", "last_success_at": now(), "counts": counts},
+                counts["instruments_" + exchange] = "snapshot"
+        status = "COLLECTED" if not unavailable else "COLLECTED_PARTIAL"
+        state_write(root, collection={"status": status, "last_success_at": now(), "counts": counts,
+                                      "unavailable": unavailable},
                     message="Broker snapshots were saved. No order or forecast was produced.")
     finally:
         db.close()
-    print("Read-only collection complete.")
+    print("Read-only collection complete." + (f" Not available on this plan: {', '.join(unavailable)}."
+                                               if unavailable else ""))
+
+
+def _num(x):
+    try:
+        return Decimal(str(x)).quantize(Decimal("0.01"))
+    except Exception:
+        return Decimal("0.00")
+
+
+def summary_text(root):
+    """Plain-text view of the latest collected snapshots (terminal only; never written to status.json)."""
+    db = Store(root/"evidence.sqlite3")
+    try:
+        latest = {}
+        for kind in ("holdings", "positions", "trades", "funds"):
+            rows = db.as_of(kind, "BROKER_ACCOUNT", now())
+            latest[kind] = rows[-1] if rows else None
+    finally:
+        db.close()
+    if not any(latest.values()):
+        return "No broker snapshot collected yet. Run auth, then collect."
+    out = ["Read-only Kite snapshot (this application cannot place or change orders)."]
+    h = latest["holdings"]
+    if h is not None:
+        rows = h["payload"] if isinstance(h["payload"], list) else []
+        out.append(f"\nHoldings at {h['available_at']}: {len(rows)} stocks")
+        invested = current = Decimal("0")
+        for r in sorted(rows, key=lambda r: str(r.get("tradingsymbol", ""))):
+            qty = int(r.get("quantity") or 0) + int(r.get("t1_quantity") or 0)
+            avg, ltp = _num(r.get("average_price")), _num(r.get("last_price"))
+            invested += avg * qty
+            current += ltp * qty
+            out.append(f"  {str(r.get('tradingsymbol', '?')):<14} {str(r.get('exchange', '')):<4} qty {qty:>6}  "
+                       f"avg {avg:>10}  last {ltp:>10}  value {ltp * qty:>12}  P&L {ltp * qty - avg * qty:>11}")
+        if rows:
+            out.append(f"  Total invested {invested}  current {current}  unrealised P&L {current - invested}"
+                       " (before selling costs)")
+    f = latest["funds"]
+    if f is not None and isinstance(f["payload"], dict):
+        av = f["payload"].get("available") or {}
+        ut = f["payload"].get("utilised") or {}
+        out.append(f"\nEquity funds at {f['available_at']}: net {_num(f['payload'].get('net'))}, "
+                   f"cash {_num(av.get('cash'))}, opening balance {_num(av.get('opening_balance'))}, "
+                   f"live balance {_num(av.get('live_balance'))}, used {_num(ut.get('debits'))}")
+    p = latest["positions"]
+    if p is not None and isinstance(p["payload"], dict):
+        out.append(f"\nPositions: {len(p['payload'].get('net') or [])} net, "
+                   f"{len(p['payload'].get('day') or [])} today")
+    t = latest["trades"]
+    if t is not None:
+        out.append(f"Today's executed trades: {len(t['payload']) if isinstance(t['payload'], list) else 0}")
+    return "\n".join(out)
 
 
 def historical(root, token, interval, start, end, output, exchange, symbol, isin):
@@ -204,7 +350,8 @@ def parser():
     p = argparse.ArgumentParser(description="NSE/BSE cash research. No live order commands exist.")
     p.add_argument("--private-dir", type=Path, default=Path("data/private"))
     sub = p.add_subparsers(dest="command", required=True)
-    a = sub.add_parser("auth"); a.add_argument("--no-browser", action="store_true")
+    a = sub.add_parser("auth"); a.add_argument("--no-browser", action="store_true"); a.add_argument("--port", type=int)
+    sub.add_parser("summary")
     a = sub.add_parser("collect"); a.add_argument("--symbols", nargs="*", default=[]); a.add_argument("--instruments", action="store_true")
     a = sub.add_parser("watch"); a.add_argument("--symbols", nargs="*", default=[]); a.add_argument("--interval", type=int, default=300)
     a = sub.add_parser("history")
@@ -230,7 +377,9 @@ def main():
     root.mkdir(parents=True, exist_ok=True)
     try:
         if args.command == "auth":
-            auth(root, args.no_browser)
+            auth(root, args.no_browser, args.port)
+        elif args.command == "summary":
+            print(summary_text(root))
         elif args.command == "collect":
             collect_once(root, args.symbols, args.instruments)
         elif args.command == "watch":
@@ -297,8 +446,8 @@ def main():
             atomic_json(args.output, audit_dataset(args.file))
             print("Dataset audit saved; unresolved data flags remain blockers to strategy certification.")
     except (KiteError, OSError, ValueError, KeyError, RuntimeError) as e:
-        # Avoid accidental provider bodies, tokens or account data in diagnostic output.
-        print(f"{type(e).__name__}: operation stopped. Check inputs, local permissions and the setup guide.", file=sys.stderr)
+        # Messages are this application's own (KiteError never carries provider bodies or tokens).
+        print(f"{type(e).__name__}: {e}. Operation stopped; see docs/KITE_AND_SERVER_SETUP.md.", file=sys.stderr)
         raise SystemExit(2) from None
     except KeyboardInterrupt:
         print("Stopped.")

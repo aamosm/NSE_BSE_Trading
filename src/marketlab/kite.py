@@ -32,6 +32,23 @@ class ReadOnlyViolation(KiteError):
     pass
 
 
+class PermissionDenied(KiteError):
+    """Kite refused an endpoint for this app/account (e.g. quotes or history without the paid data plan)."""
+
+
+_ERROR_TYPE = re.compile(r"[A-Za-z]{1,40}")
+
+
+def _error_type(e: HTTPError) -> str:
+    """Kite's enumerated error_type (e.g. TokenException). Never the message or any other body field."""
+    try:
+        body = json.loads(e.read(65536) or b"{}")
+    except Exception:
+        return ""
+    kind = body.get("error_type", "") if isinstance(body, dict) else ""
+    return kind if isinstance(kind, str) and _ERROR_TYPE.fullmatch(kind) else ""
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise KiteError("Unexpected provider redirect refused")
@@ -75,10 +92,20 @@ class KiteReadOnly:
                 raw = response.read(MAX_RESPONSE + 1)
                 encoding = response.headers.get("Content-Encoding", "")
         except HTTPError as e:
-            if e.code in (401, 403):
-                raise AuthenticationRequired("Kite authentication expired or permission denied; log in again") from None
-            # Provider bodies and URLs can contain sensitive data; do not log them.
-            raise KiteError(f"Kite HTTP {e.code}; no automatic retry") from None
+            # Provider bodies and URLs can contain sensitive data; only the enumerated error type is used.
+            kind = _error_type(e)
+            if kind == "TokenException" or e.code == 401:
+                raise AuthenticationRequired("Kite session expired or invalid (TokenException); run auth again") from None
+            if kind == "PermissionException":
+                raise PermissionDenied("Kite refused this endpoint (PermissionException); your Kite app plan "
+                                       "may not include it") from None
+            if e.code == 403:
+                raise AuthenticationRequired("Kite returned HTTP 403; the session expired or access was denied") from None
+            if kind == "InputException" and path == "/session/token":
+                raise KiteError("Kite rejected the login exchange (InputException): the request token may have "
+                                "expired (it lasts a few minutes) or the API secret is wrong") from None
+            label = f" ({kind})" if kind else ""
+            raise KiteError(f"Kite HTTP {e.code}{label}; no automatic retry") from None
         except (URLError, TimeoutError):
             raise KiteError("Kite connection failed; no automatic retry") from None
         if len(raw) > MAX_RESPONSE:
@@ -92,7 +119,7 @@ class KiteReadOnly:
             return raw.decode("utf-8-sig")
         try:
             body = json.loads(raw)
-            if body.get("status") != "success":
+            if not isinstance(body, dict) or body.get("status") != "success":
                 raise KiteError("Kite returned an unsuccessful response")
             return body["data"]
         except (ValueError, KeyError, TypeError):
