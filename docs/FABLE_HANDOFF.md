@@ -1,15 +1,20 @@
 # Fable handoff (input to session 1: design freeze)
 
-Prepared 5 November 2026. **Do not spend the session yet.** Session 1 should start only after the backfills in `DATA_READINESS.md` §4 (steps 1–3) are done and this file is refreshed with the real coverage numbers.
+Prepared 5 November 2026; updated the same day.
 
-Allowed outcome: **INSUFFICIENT DATA**, per horizon, with the data that would change it.
+**Owner decision (5 Nov 2026):** session 1 runs now as a **design-only** specification, before the historical backfill. The prompt is `prompts/02_FABLE_SESSION_1_DESIGN.txt`. The earlier prompt is in `prompts/archive/`.
 
-Attach exactly these files:
+Its engineering deliverables are already done and verified in **`docs/FABLE_SESSION_1_PREP.md`**: read that first. Parameters that need data stay symbolic, with a stated INSUFFICIENT DATA gate.
+
+Files for the session:
+- `docs/FABLE_SESSION_1_PREP.md`;
 - this file;
-- `DATA_READINESS.md`;
+- `docs/DATA_READINESS.md`;
 - `docs/FABLE_MATH_SPEC.md`;
 - `docs/RESEARCH_BRIEF.md`;
-- `prompts/02_FABLE_SESSION_1_DESIGN.txt` (the prompt).
+- `docs/READING_LIST.md`;
+- `docs/HANDOFF.md`;
+- `src/marketlab/research.py` (Forecast and proposal gate).
 
 ## 1. Fixed constraints
 

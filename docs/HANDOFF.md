@@ -27,7 +27,11 @@ Updated 5 November 2026 by Claude (implementation owner).
 | `8a06ae7` | Web unit: writable data directory (SQLite WAL readers need it) |
 | `d7383b4` | Sources: NSE index closes and clearing holidays; `verify-calendar` |
 | `d939cb0` | Login catcher threaded (idle browser connections could delay the redirect) |
-| docs commit | This handoff, `DATA_READINESS.md`, `SOURCE_STATUS.md`, `FABLE_HANDOFF.md`; scope updates to AGENTS, CLAUDE, README, ROADMAP, GPT_SUMMARY, RULES_REGISTER, RESET_REVIEW, ARCHITECTURE, setup guide and Fable prompts |
+| `19db166` | This handoff, `DATA_READINESS.md`, `SOURCE_STATUS.md`, `FABLE_HANDOFF.md`; scope updates to AGENTS, CLAUDE, README, ROADMAP, GPT_SUMMARY, RULES_REGISTER, RESET_REVIEW, ARCHITECTURE, setup guide and Fable prompts |
+| `5eec923` | Band-change files are fetched for the session they take effect in (6/6 cross-check) |
+| `62e31e5` | Research service: budgeted Perplexity Agent and Search adapters, `evidence.v1` schema and validation, five versioned templates, job queue, archive, replay |
+| `660770f` | Laptop operation: measured end-of-day timing, bounded catch-up, late start, sleep gaps, `fresh_for_cash_decision`, Windows Task Scheduler script |
+| Fable-prep commit | `FABLE_SESSION_1_PREP.md`, `READING_LIST.md`, the owner's Fable prompt (verbatim), doc updates |
 
 ## Verified on this laptop (Windows 11, Python 3.13.7)
 
@@ -76,9 +80,21 @@ All passed in their final runs. 148 tests are new (8 files); 435 are collected i
 8. **Exchange website terms of use** not reviewed.
 9. **Legacy account evidence.** Collections before 5 Nov have no batch, so the account view starts from the 5 Nov batch.
 
+## Research provider status (5 Nov 2026)
+
+- The owner's Perplexity key is stored in `data/private/.env` (git-ignored, user-only ACL).
+- **Agent API:** returns 403 `restricted_api_key`, so extraction jobs cannot run yet.
+- **Search API:** works (verified with the domain filter).
+- **Spend:** capped in software at $5/month and $0.50/day (`researcher/budget.py`). Spend to date: $0.0071.
+
 ## One-time actions for the owner
 
 1. **Change the Zerodha password.** It was typed into an earlier chat. Optionally regenerate the Kite API secret, then update `data/private/.env`.
+1a. **Perplexity:**
+   - In the API console (https://console.perplexity.ai), create a **new** key with Agent API access. The current key was pasted into chat and is restricted.
+   - Put it in `data/private/.env` as `PERPLEXITY_API_KEY`, then revoke the old key.
+   - Run `marketlab research-smoke --tools` to verify model, tools, schema and filter compatibility.
+   - Optionally register the laptop tasks with `deploy\windows\register_tasks.ps1`.
 2. **Push the branch** when you want GPT to review it: `git push origin cash-research-reset`.
 3. **Rent the server and follow `docs/DEPLOYMENT.md` §3 in order:**
    - SSH key, then a DigitalOcean Ubuntu 24.04 2 GiB droplet in BLR1, then `provision.sh`;

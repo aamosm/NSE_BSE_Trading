@@ -34,7 +34,7 @@ Status 5 November 2026. This file follows the consolidated handoff (`CLAUDE_MAST
 4. **Cost reconciliation** against one real contract note and funds statement, done locally by the owner. Never committed.
 5. **Earnings-event data path** for one liquid stock: announcement timestamps, filing links and the price reaction. The RSS feeds started on 5 Nov.
 6. **Refresh `DATA_READINESS.md` and `FABLE_HANDOFF.md`** with real coverage. Then GPT checks the bundle.
-7. **Fable session 1:** design freeze.
+7. **Fable session 1:** design freeze. **Brought forward by the owner on 5 Nov 2026 as design-only**, using `docs/FABLE_SESSION_1_PREP.md`. Its data-dependent parameters are re-checked after the backfill (step 2).
 8. **Claude implements the frozen specification:**
    - REPLAY and FORWARD_PAPER adapters around one decision engine;
    - the paper cash ledger and reservations (R03, R06, R07);

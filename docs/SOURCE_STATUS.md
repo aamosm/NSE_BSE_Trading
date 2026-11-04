@@ -67,6 +67,24 @@ On 5 Nov a full collection **batch** completed (status COLLECTED). Rate limits a
 5. **Muhurat.** NSE/CMTR/76941 (session table) and NCL/CMPT/77037 (8 Nov trades settle 9 Nov, M 2026211) were read in full and encoded.
 6. **STT.** Zerodha documents nearest-rupee rounding but not the aggregation level. NSE/INSP/45900 shows contract-note STT is an integer field. The aggregation basis (per client, security and day) comes from a third-party copy of the 2004 draft rules, so it stays an ASSUMPTION until checked against one real contract note.
 
+7. **Publication times (Last-Modified, IST, for 4 Nov 2026):**
+   - NSE bhavcopy 16:38 and BSE bhavcopy 16:34;
+   - sec_list 18:00 and REG1_IND 19:50;
+   - index closes 23:20 and delivery data 23:55.
+
+   The scheduler fetches end-of-day files from 16:45 and retries until they are stored. These are single observations, so the distribution is still to be measured.
+8. **Band-change files are named after the session they take effect in.** `eq_band_changes_05112026` was published 4 Nov 18:00, and all six changes already appear in `sec_list_04112026`. This also cross-checks that sec_list dated D describes D+1.
+
+## 4a. Research providers (5 Nov 2026)
+
+| Route | Result |
+| --- | --- |
+| Perplexity Agent API `POST /v1/agent` | **403 `restricted_api_key`** with the owner's key; compatibility of model + web_search + JSON schema + domain filter **not yet verified** |
+| Perplexity `GET /v1/models` | 200 (54 models, including `openai/gpt-6-luna`) |
+| Perplexity Search API `POST /search` | 200. `search_domain_filter` honoured (5/5 results on nsearchives.nseindia.com; the Muhurat circular CMTR76941 found); $0.001 (fast); 0.61 s |
+
+All spend goes through `researcher/budget.py`. The ledger total on 5 Nov is $0.0071, including one out-of-band diagnostic search recorded by hand.
+
 ## 5. Next acquisition work (in order)
 
 1. Backfill the UDiFF bhavcopy (Jul 2024 →) and the old-format bhavcopy (2016 →), with a parser for the old layout. Throttle to one file per 1.5 s, resumable through the catalog.

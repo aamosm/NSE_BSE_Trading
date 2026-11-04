@@ -1,46 +1,161 @@
-FABLE SESSION 1 OF 2: research design freeze. Token budget is limited. Spend it on reasoning, not on code or prose.
+[Owner's prompt for Fable session 1, copied verbatim on 5 Nov 2026. Omitted: the closing paragraph addressed to the preparing model (Claude Opus) and an API credential. The previous version of this prompt is in prompts/archive/.]
 
-You are the quantitative designer for a cash-only NSE/BSE research system. Claude implements; GPT reviews. You will see this project once more, at the end, to audit evidence. Anything you leave vague now will be guessed by someone else later, so be exact.
+READ THE ENDING BEFORE BEGINNING:
+Continue the existing NSE/BSE cash-research project.
 
-ATTACHED (read only these; do not request the whole repository):
-- docs/FABLE_HANDOFF.md: actual schemas, cost specification with computed round trips, data expected after backfill, and the questions that need your reasoning.
-- docs/DATA_READINESS.md: per-field and per-horizon coverage and blockers (what can and cannot be modelled today).
-- docs/FABLE_MATH_SPEC.md and docs/RESEARCH_BRIEF.md: requirements and constraints (treat as requirements, not results).
-- Cost facts are in FABLE_HANDOFF.md section 3 (STT per security-day rounded to the rupee; DP Rs 15.34 per ISIN per delivery sell day; round trips Rs 1,000 delivery 1.76%, Rs 2,000 0.99%, Rs 10,000 0.38%; intraday Rs 10,000 0.11% before spread). The contract-note basis is not yet reconciled.
-- Research families (interfaces, not a commitment to fund all four): established companies (longer horizons), company events (earnings/guidance), new listings, intraday. One allocator and one shared cash book.
-- The exchange rules engine already blocks illegal or unknown-status entries; the Forecast contract is listed in FABLE_HANDOFF.md section 2.
+Read the latest local HANDOFF, DATA_READINESS, FABLE_HANDOFF,
+RESEARCH_BRIEF, FABLE_MATH_SPEC, current cost summary and Forecast
+interface. The latest milestone report supersedes older status claims.
 
-HARD CONSTRAINTS:
-- Long-only cash. Integer shares. About Rs 10,000 of capital. No MTF, shorting, derivatives or live orders.
-- Only point-in-time information. Every label starts at the first tradable price after the decision, never the signal bar's close. NSE's close is a VWAP or auction price.
-- A small preregistered candidate set. Every trial counts, including failures.
+Do not rebuild infrastructure, edit the main repository, run tests,
+place orders, purchase services or invent missing historical data.
+This session is a design specification for the missing forecasting,
+allocation and research-orchestration layers.
 
-DELIVER, in this order. Stop early rather than pad:
-1. Feasibility verdict.
-   - Given the cost model, Rs 10,000, integer shares and the dataset actually available: which horizons (intraday / swing 5-20 sessions / core 60-250 sessions) are even testable?
-   - For each testable horizon, the minimum net edge per trade and the minimum number of independent observations needed to detect it (MinTRL or a power calculation, with stated assumptions).
-   - Say plainly if a horizon cannot be validated with the data or capital.
-2. Exact definitions, for each surviving horizon:
-   - information set I(t), with publication lags;
-   - label formula, entry/exit price rule, label end time for purging;
-   - corporate-action treatment;
-   - universe rule (historical, survivorship-aware).
-3. Preregistered candidates: at most 6 in total for the first cycle, including the controls (cash, a buy-and-hold benchmark, equal weight).
-   - For each: features with exact formulas and lookbacks; fitted parameters and where they are fitted; the parameter grid (small); ablations.
-   - Count the trials this implies, for DSR/PBO.
-4. Evaluation protocol (dependence-aware: overlapping labels, cross-sectional correlation and regimes reduce the effective number of observations):
-   - walk-forward windows (dates or rules); purging and embargo per horizon; inner validation; untouched final holdout;
-   - metrics: net Rs after all costs, calibration (Brier/pinball), drawdown, turnover;
-   - the PROMOTION RULE, written before any result exists;
-   - the stress tests (costs x2, latency, missed fills, removing the best stock/year).
-5. Allocation for small capital:
-   - an integer, fixed-cost-aware formulation (the DP charge makes it non-convex) with a no-trade region;
-   - solvable exactly by enumeration or a small MIP at this size;
-   - how forecasts of different horizons share one cash budget and per-ISIN exposure.
-6. An implementation contract for Claude:
-   - function signatures with input/output types;
-   - for each, at least one hand-worked numeric test vector (inputs, expected outputs to the paisa or 1e-9);
-   - the list of artefacts the runner must save for your session 2 audit.
-7. SEARCH_REQUESTS: facts you need that are not in the bundle. For each, the affected definition and what you assumed meanwhile.
+Retain useful existing interfaces. Identify exactly what is reused,
+extended and new. Resolve conflicting old deliverable instructions
+in favour of design-only work for this session.
 
-Do not write production code, model cards or results. Do not claim any edge exists. INSUFFICIENT DATA is an allowed answer for any horizon or family: give the reason and the data that would make it testable.
+OPERATING MODEL
+
+The initial deployment is the owner's Windows laptop, not a VPS.
+All schedule times use Asia/Kolkata, regardless of machine timezone.
+
+Proposed normal-day schedule:
+- 08:00: start and manual official Kite authentication.
+- 08:05–08:15: account/data/rules/calendar health checks.
+- 08:15–08:45: overnight research and morning summary.
+- 09:00–16:15: continuous collection and monitoring.
+- 16:15–16:45: reconciliation, available closing data and summary.
+- Optional 18:30–19:00: late filings and delayed data.
+- Separate bounded weekend research jobs.
+the timings and other parts of this entire prompt are suggestions. if you find better implementations or find these to be wrong and think your idea is more accurate predictor. then go ahead and do so and explain as well.
+Treat these as operating windows, not exchange-session definitions.
+Use the existing dated exchange calendars and instrument-specific
+session rules, including auctions, special sessions and holidays.
+
+Do not assume the funds-addition delay from 00:00 to 07:30 defines
+the availability of every Kite endpoint. Require fresh confirmed
+account data before cash-dependent proposals.
+
+Design startup, late login, laptop sleep, lost internet, maintenance,
+token expiry, missed jobs and restart behaviour. Preserve last good
+data with explicit age; unknown values must not become zero.
+
+Catch-up downloads must not create fictional past decisions or fills.
+Missing intraday depth/ticks cannot be reconstructed from daily bars.
+Keep actual account observations separate from paper accounting.
+
+FORECASTING PRIORITY
+
+Specify company-event forecasting over multi-session horizons first,
+supported by financials, price response, liquidity and market context.
+
+Compare:
+A. Prices/liquidity/context.
+B. A plus financials and official events.
+C. B plus news/attention.
+
+Keep longer-term company selection extensible. Intraday and first-day
+IPO strategies require separate data/execution readiness.
+
+Define labels, fitting, calibration, uncertainty, abstention, exits,
+whole-share allocation, shared cash and concentration constraints.
+Use the existing forecast/rules/cost contracts wherever suitable.
+
+RESEARCH SERVICE
+
+Separate:
+1. Direct collection from known official sources.
+2. Scheduled and event-triggered targeted search.
+3. Optional bounded deep-research jobs.
+
+The candidate combined search/extraction provider is Perplexity Agent
+API, subject to verifying model/tool/schema/filter compatibility.
+Keep the provider replaceable; do not invent endpoint capabilities.
+
+Start with a proposed $5–10 monthly runtime search/extraction ceiling.
+This is separate from the Fable development budget.
+
+Define job priority, daily/monthly limits, tool-call and token limits,
+timeouts, deduplication, caching and exhaustion behaviour.
+Enforce limits in software; a sentence in a prompt is not a budget cap.
+
+Use exchange, regulator and company IR sources for factual events.
+Use a separately approved publisher set to measure news attention.
+Do not count syndicated copies as independent confirmations.
+
+Create versioned prompt templates for:
+- Overnight updates.
+- Upcoming-event verification.
+- Material-event investigation.
+- Contradiction resolution.
+- Bounded deeper company research.
+
+Each template must receive explicit company identifiers, aliases,
+time window, task, allowed sources, requested fields and known facts.
+It must request new evidence and contradictions, not a buy/sell opinion.
+
+Provide the JSON Schema and validation rules. Include event identity,
+publication/receipt/effective times, amounts and units, source URLs,
+supporting passages, novelty, contradictions and unknown fields.
+
+Require retrieval evidence for citations; validate returned domains
+and redirects. Treat retrieved text as untrusted data, not instructions.
+No credentials, private account details or trading tools go to the LLM.
+
+REPRODUCIBILITY AND SOURCE SCORING
+
+Do not assume fresh LLM/search calls reproduce previous output.
+
+Archive source evidence where permitted, hashes, search results,
+extractions, model identifiers, prompts, schema versions and usage.
+Record retention limitations where source terms restrict archiving.
+
+Historical replay consumes saved point-in-time evidence and accepted
+facts. It must not search today's internet or substitute newer facts.
+
+Separate factual source reliability, extraction accuracy and calibrated
+market probabilities. Do not use self-rated AI confidence as a trading
+probability or update source trust based simply on trading profit.
+
+Specify how reviewed factual outcomes can update reliability estimates,
+including small-sample uncertainty and minimum evidence requirements.
+All predictive-weight changes happen in offline versioned research.
+
+LATENCY AND SAFE OPERATION
+
+The collector, numerical decision engine and research worker must not
+block one another. Deep research is never in the critical decision path.
+
+Specify freshness requirements by horizon and data type.
+Record publication, receipt, extraction completion, decision and
+simulated execution times.
+
+A forecast may use a researched fact only after that fact was available
+to this system. Late results cannot retroactively improve a decision.
+
+Define asynchronous queues, bounded retries, rate limits, job expiry,
+duplicate suppression and revalidation before accepting a proposal.
+
+If required evidence is unavailable, choose WAIT/ABSTAIN.
+Do not silently substitute stale information or fabricated fills.
+
+During market hours, development and historical experiments must use
+separate processes/data copies and resource limits. No hot replacement
+of the active model or strategy.
+
+DELIVER
+
+1. A concise extension map against the existing project.
+2. The forecasting and allocation mathematical specification.
+3. A calendar-aware laptop operating/state-transition specification.
+4. Research-job schemas, prompt templates and provider adapter contract.
+5. Source/extraction reliability and reproducibility rules.
+6. A cost/latency budget with explicit assumptions and measurements needed.
+7. Function contracts and hand-worked numerical examples.
+8. A frozen historical/prospective evaluation plan.
+9. SEARCH_REQUESTS for GPT and a prioritized implementation backlog.
+use search req sparce.
+Clearly separate design defaults, verified facts and unknowns.
+Do not claim the model is trained, profitable or ready for live trading.
