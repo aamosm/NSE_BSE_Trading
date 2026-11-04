@@ -1,0 +1,11 @@
+Real-account read-only checks, 4 Nov 2026 (Windows laptop, this repository at branch cash-research-reset).
+Account data itself stays in git-ignored data/private; only pass/fail is recorded here.
+
+RUN  auth: official browser login by the user; redirect caught on 127.0.0.1:8766; account matched KITE_USER_ID
+RUN  collect: holdings, positions, trades, funds -> all returned (status COLLECTED, nothing unavailable)
+RUN  collect --instruments: NSE and BSE instrument dumps returned (NSE: 10,405 rows, 10,269 NSE equities)
+RUN  collect --symbols NSE:INFY NSE:RELIANCE: quotes returned (paid data entitlement present)
+RUN  history: INFY daily 2026-10-01..2026-11-04 -> 22 bars, metadata + audit written
+RUN  calendar cross-check: 22 of 22 real INFY sessions (1 Oct - 3 Nov 2026) equal MarketCalendar trading days
+RUN  summary: holdings/funds/positions/trades rendered in the terminal only
+NOT_RUN  any order placement, modification or cancellation (no such capability exists)

@@ -1,102 +1,82 @@
 # Kite and server setup
 
-This guide connects DATA only. No order endpoint exists in the application. Account authentication and a real cloud deployment have not been performed by the author of this reset.
+This guide connects DATA only. The application has no order, conversion, GTT or fund-transfer endpoint. Verified on 4 Nov 2026 on the user's Windows laptop, which is the "server" until the project is finished.
 
-## A. First run locally
+## A. Install (Windows, PowerShell, in the project folder)
 
-Follow README_FIRST.md to install, test and run the synthetic demo. Do this before paying for a server. Keep the project in your own Windows account folder, not a shared/cloud-public directory.
+    py -3.13 -m venv .venv
+    .\.venv\Scripts\python.exe -m pip install -e .
+    .\.venv\Scripts\python.exe -m pip install -r requirements-dev.lock
+    .\.venv\Scripts\python.exe -m pytest
 
-The active package has no third-party runtime dependency. The pinned requirements-dev.lock is for tests. Python 3.12 or newer is required.
+The runtime uses only the Python standard library. The lock file pins the test tools.
 
-## B. Create the Kite app
+## B. Kite developer app
 
-1. Open https://developers.kite.trade/ yourself and use the official registration flow.
-2. Choose the paid market/historical-data plan if you need quote/history access. The published price checked on 4 November 2026 is ₹500/month per API key. Personal/free does not include those data services [S01].
-3. Use your own Kite account with the app. Follow the console's current app/account fields.
-4. Set the redirect URL to http://127.0.0.1:8766/ (any path on that port works, e.g. /callback). During `auth` the program listens on 127.0.0.1:8766 only, catches the redirect, and shows "Kite login received" in the browser. If the port is busy or nothing arrives within 5 minutes, it falls back to asking you to paste the redirected URL (hidden input).
-5. Keep the API key and secret privately. Do not commit them, paste them into Claude/Fable/ChatGPT, put them in command arguments, or screenshot the resulting token URL.
+1. Create the app yourself at https://developers.kite.trade/. Quotes and historical candles need the paid Kite Connect plan (₹500/month per API key, checked 4 Nov 2026) [S01]. This account's app has that entitlement: quotes and history were verified.
+2. Set the app's redirect URL to `http://127.0.0.1:8766/`. Any path on that port works.
+3. Create `data/private/.env`. Both `data/private/` and `.env*` are git-ignored.
 
-Run in PowerShell from the project folder:
+       KITE_API_KEY=your_api_key
+       KITE_API_SECRET=your_api_secret
+       KITE_USER_ID=your_client_id
+
+   Never add your Zerodha password, PIN or TOTP seed. The program refuses to start if the file contains such a key. Restrict the folder to your Windows user (Properties → Security), or run:
+
+       icacls data\private /inheritance:r /grant:r "$env:USERNAME:(OI)(CI)F"
+       Get-ChildItem -Force data\private | ForEach-Object { icacls $_.FullName /reset }
+
+## C. Daily login
 
     .\.venv\Scripts\python.exe -m marketlab auth
 
-The program reads the API key from data/private/kite_app.json if present (`{"api_key": "...", "redirect_port": 8766}`; git-ignored, holds no secret), otherwise asks for it. It always asks for the API secret using hidden input and never saves it. It opens the official login page and captures the redirect as described above. Complete password/OTP entry yourself in Kite. Paste the redirect immediately; request tokens expire within minutes. It exchanges that token through the documented API, saves only the resulting key/access-token/expiry locally, and does not store your API secret.
+The program reads the key and secret from `.env`, opens Zerodha's official login page, and listens on 127.0.0.1:8766 for the redirect. You type your password and app code into Zerodha's page; the program never sees them. It exchanges the short-lived request token, checks that the account is `KITE_USER_ID`, and saves only the access token in `data/private/kite_session.json`.
 
-If the developer console rejects the local redirect URL or the login page behaves differently, stop and use its current supported redirect configuration; do not bypass authentication. The provider flow must be verified on your account.
+If the port is busy or nothing arrives within `--wait` seconds (default 300), it asks you to paste the redirected URL instead, in a hidden prompt.
 
-The session file is data/private/kite_session.json. Unix permissions are restricted. On Windows, store it under your private user directory and use the file's Security properties to restrict other local users; chmod is not a substitute for auditing Windows ACLs.
+Tokens expire at 06:00 the next day and can be invalidated earlier [S24], so log in once each collection day. Expired sessions stop collection with an explicit message. Logging in is never automated.
 
-## C. Test read-only collection
+## D. Read-only collection and summary
 
     .\.venv\Scripts\python.exe -m marketlab collect --instruments --symbols NSE:INFY
+    .\.venv\Scripts\python.exe -m marketlab summary
     .\.venv\Scripts\python.exe -m marketlab dashboard
 
-The example symbol is for data testing, not a recommendation. Review the private NSE/BSE master files to choose the current symbol and token. Quote collection and historical access require the paid data entitlement.
+Collection stores holdings, positions, today's trades, funds, optional quotes and the NSE/BSE instrument dumps as append-only evidence in `data/private/evidence.sqlite3`. If the Kite plan refuses an endpoint, it is recorded as unavailable (`COLLECTED_PARTIAL`) and the other reads continue.
 
-Collection records holdings, positions, today's trades and funds. This is not complete historical account reconciliation. Broker actions from Kite on the same account can appear in these reads; another broker/app requires an export and normalized import:
+`summary` prints the latest snapshot in the terminal only. The dashboard (127.0.0.1:8765) shows sanitized status, never holdings or identifiers.
+
+Activity from other Kite apps on the same account appears in these reads. Another broker requires a normalized CSV import:
 
     .\.venv\Scripts\python.exe -m marketlab import-trades path\to\your_normalized_trades.csv
 
-See data/examples/external_trades.csv for the columns. Real files stay out of Git. Imported observations do not automatically produce a reconciled cross-broker cash/holdings ledger.
+See `data/examples/external_trades.csv`. Imported rows are observations, not a reconciled ledger.
 
-## D. Download a bounded historical dataset
+## E. Historical candles
 
-Find the current token in data/private/instruments_NSE.json or instruments_BSE.json. Obtain the correct ISIN from an official security master or reconciled holding; the Kite instrument dump itself does not supply it.
+Find the token in `data/private/instruments_NSE.json`. Take the ISIN from the exchange master or a reconciled holding; the Kite dump does not supply it.
 
-Substitute your verified values into this ONE-LINE PowerShell command:
+    .\.venv\Scripts\python.exe -m marketlab history --token 408065 --exchange NSE --symbol INFY --isin INE009A01021 --interval day --start 2025-01-01T00:00:00+05:30 --end 2026-01-01T00:00:00+05:30 --output data/raw/infy_daily_v1.csv
+    .\.venv\Scripts\python.exe -m marketlab audit data/raw/infy_daily_v1.csv
 
-    .\.venv\Scripts\python.exe -m marketlab history --token YOUR_NUMERIC_TOKEN --exchange NSE --symbol YOUR_SYMBOL --isin YOUR_ISIN --interval day --start 2025-01-01T00:00:00+05:30 --end 2026-01-01T00:00:00+05:30 --output data/raw/your_symbol_daily_v1.csv
+The command checks that the token, symbol and exchange identify one current EQ listing. It downloads in bounded chunks, excludes incomplete candles and writes a metadata file listing unverified factors: corporate actions, historical universe, historical status and historical fees.
 
-The adapter verifies that token/symbol/exchange match one current EQ listing. ISIN is still an explicitly user-supplied mapping and must be reviewed. It downloads in bounded chunks and writes a metadata file listing unverified historical factors. It excludes incomplete candles. Daily bars are conservatively marked available at 23:59:59 IST, for next-session research.
+Daily bars are marked available at 23:59:59 IST, for next-session research. Whether Kite candles are corporate-action adjusted is **not yet verified** (ROADMAP §4).
 
-For intraday experiments choose 5minute or another documented interval and shorter ranges. The collection is REST-based; there is no WebSocket tick recorder yet.
+    .\.venv\Scripts\python.exe -m marketlab backtest data/raw/infy_daily_v1.csv --fixed-cost 6000
 
-    .\.venv\Scripts\python.exe -m marketlab audit data/raw/your_symbol_daily_v1.csv
-    .\.venv\Scripts\python.exe -m marketlab backtest data/raw/your_symbol_daily_v1.csv --fixed-cost 6000
+That is a one-instrument diagnostic. The ₹6,000 is twelve months of the Kite fee charged against the trend candidate. It is not a strategy result.
 
-The ₹6,000 example represents twelve months of the published Kite fee only; use the actual operating cost for the dataset period, including hosting and optional APIs. Cash/buy-hold benchmarks assume no recurring research service. The trend candidate bears the supplied service cost.
-
-These are EXPLORATORY baselines. Metadata flags, settlement approximations and missing corporate-action handling prevent strategy certification. Backtest reports get unique run folders; failed runs remain in the evidence database.
-
-## E. News
-
-For a saved XML file:
+## F. News
 
     .\.venv\Scripts\python.exe -m marketlab news --file data/examples/news.xml
-
-That supplied file is synthetic. For real feeds, use the official NSE RSS directory in SOURCE_PACK.md, copy the feed URL, and run:
-
     .\.venv\Scripts\python.exe -m marketlab news --url YOUR_OFFICIAL_HTTPS_FEED_URL
 
-Only listed official exchange hosts are accepted. If the website blocks access, use its supported browser export or licensed access; no cookie/anti-bot bypass is included. News remains unreviewed evidence. Feed polling is not part of the current watch command; add a bounded scheduler after verifying the chosen feed.
+Only listed official exchange hosts are accepted, with no anti-bot bypass. Items are stored as unreviewed evidence; there is no news-to-signal extraction yet.
 
-## F. Daily login is part of the workload
+## G. GitHub and a future server
 
-Kite's access token normally expires at 06:00 the following day and may be invalidated earlier [S24]. Run auth again each collection day. The collector detects expiry and records a failed/paused status; it does not store OTP seeds or automate login.
-
-A paid API does not make this system maintenance-free. This daily step matters to the user's part-time requirement.
-
-## G. Put the modified code on GitHub before cloning it to a server
-
-The delivered ZIP has not changed your GitHub main branch. Cloning main alone would retrieve the OLD project.
-
-The ZIP includes UPGRADE.patch against the reviewed upstream commit. Ask Claude to check a clean working tree and apply it on a new branch. Example commands in a FRESH clone:
-
-    git clone https://github.com/aamosm/NSE_BSE_Trading.git NSE_BSE_Trading_reset
-    cd NSE_BSE_Trading_reset
-    git switch -c cash-research-reset 19d12dcac7415b17d3a5192035517ad285f9b389
-    git status --short
-    git apply --check C:/path/to/extracted/UPGRADE.patch
-    git apply C:/path/to/extracted/UPGRADE.patch
-
-If the check fails, stop and have Claude reconcile the changes; do not force the patch or discard existing work.
-Run the tests and review git diff. Then, when satisfied:
-
-    git add .
-    git commit -m "Reset to cash-only research and read-only Kite data"
-    git push -u origin cash-research-reset
-
-Keep the ZIP's full source as an independent copy. UPGRADE.patch excludes itself and generated runtime/private files.
+The work is on the local branch `cash-research-reset`. GitHub `main` still holds the old phase-1 commit. When you are ready, push the branch (`git push -u origin cash-research-reset`) and merge it after review. A server should clone the reviewed branch. Recreate `data/private/.env` on the server by hand; never commit it.
 
 ## H. Optional Ubuntu server
 
@@ -114,7 +94,7 @@ On the server, as an administrator:
 
 The branch must exist first. If your repo is private, set up read-only Git access through your provider's supported flow; never embed a personal token in the clone URL or service unit.
 
-Authenticate over SSH using hidden input:
+First create /var/lib/marketlab/.env (owner marketlab, mode 600) with the same three KITE_ keys as on the laptop. Then authenticate over SSH. With --no-browser the redirect cannot reach the server, so you paste the redirected URL into the hidden prompt:
 
     sudo -u marketlab /opt/marketlab/.venv/bin/python -m marketlab --private-dir /var/lib/marketlab auth --no-browser
 

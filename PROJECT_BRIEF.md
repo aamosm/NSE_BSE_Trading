@@ -10,8 +10,9 @@ The final system is not built yet. This reset provides the data boundary, eviden
 - Remove MTF from the active product.
 - Connect Kite for data while keeping all real buys and sells disabled.
 - Research intraday opportunities and longer-horizon portfolios.
-- Use Claude for engineering, Fable for deeper quantitative work, then a separate testing/review pass.
-- Return the entire modified repository as a ZIP with research, prior review and instructions.
+- Claude is the implementation owner. GPT reviews, searches and plans. Fable is used for exactly two heavy-reasoning sessions: research design freeze, then evidence audit (docs/ROADMAP.md section 3).
+- This Windows laptop is the server until the project is complete; a paid server comes later.
+- Kite app credentials are stored privately on the laptop (data/private/.env). The broker password is never stored.
 
 ## Corrected objective
 

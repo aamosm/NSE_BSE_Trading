@@ -1,51 +1,63 @@
 # Start here
 
-**Research and data collection only. This application cannot place, modify or cancel broker orders.**
+**Research and data collection only. This application cannot place, modify or cancel broker orders, and cannot move funds.**
 
-The old project was a rules/accounting simulator, not a finished stock-selection system. This is a scoped cash-only reset from upstream commit 19d12dcac7415b17d3a5192035517ad285f9b389.
+This is a cash-only NSE/BSE research base with read-only Zerodha Kite data. It is not yet a stock-selection system. There is no trained model and no demonstrated edge. `docs/ROADMAP.md` explains what is left and in what order.
 
-## What works now
+## What works now (verified 4 Nov 2026 on Windows 11, Python 3.13.7)
 
-| Capability | Implemented behavior |
+| Capability | Behaviour |
 | --- | --- |
-| Kite REST adapter | Narrow read allowlist; login token exchange is the only POST |
-| Data collection | Holdings, positions, today's trades, funds, quotes and daily instrument-master snapshots |
-| Historical candles | Bounded requests, token/symbol/exchange verification, CSV export and explicit metadata gaps |
-| News | Official-host RSS download or saved XML import; timestamped unreviewed evidence |
-| Audit | Append-only SQLite evidence, content deduplication, revisions, quota, consistent backup |
-| External trades | Normalized CSV import as evidence; not yet a reconciled multi-broker ledger |
-| Backtests | Cash/buy-hold/trend comparisons and an intraday-reversal diagnostic; fees, slippage, cash constraints and decision logs |
-| Forecast interface | Distributions, calibration/evidence identifiers, expiry, sample count and validation gate |
-| Paper sizing | Whole shares, cash reserve, stock/sector/sleeve/risk/liquidity/cost constraints |
-| Status page | Mobile-friendly, loopback-only, deterministic wording, no order controls |
-| Exchange rules | Cash-only engine with sources: holiday, settlement and Budget-Sunday calendars; pre-open/CAS sessions; ticks; bands; T2T; surveillance stages; Kite order limits. Paper proposals abstain without a dated snapshot |
-| Metrics | Time-weighted return, XIRR, drawdowns, Sharpe (risk-free rate required), Sortino, PSR, DSR, PBO with midrank ties, trade and cost statistics |
-| Read-only summary | `python -m marketlab summary` prints the latest collected holdings, funds, positions and trades |
+| Kite login | Official browser login. The redirect is caught on 127.0.0.1:8766, the account is checked against `KITE_USER_ID`, and the access token is saved privately. No password is ever stored |
+| Data collection | Holdings, positions, today's trades, funds, quotes and NSE/BSE instrument dumps. Endpoints refused by the plan are recorded as unavailable |
+| Summary | `marketlab summary` prints holdings, funds, positions and today's trades in the terminal only |
+| Historical candles | Bounded, identity-checked downloads with a metadata file of unverified factors; dataset audit |
+| Exchange rules | Calendars (holidays, settlement holidays, Budget Sunday), pre-open and closing-auction sessions, tick sizes, price bands, T2T series, surveillance stages and Kite order limits, each with a cited source. Unknown inputs block |
+| Fees | One cited Zerodha schedule: STT, stamp, exchange, SEBI, GST, DP |
+| Paper gate | Forecast contract plus a one-entry, integer-share proposal. It must pass the rules engine, and abstains without a dated security snapshot |
+| Metrics | Time-weighted return, XIRR, drawdowns, Sharpe (risk-free rate required), Sortino, PSR, DSR, PBO, trade and cost statistics |
+| Evidence store | Append-only SQLite with publication/receipt times, deduplication, quota and backups. RSS news is stored as unreviewed evidence |
+| Backtest | One-instrument diagnostic baselines (cash, buy-and-hold, trend). Not a strategy |
+| Status page | Loopback-only and read-only. Order routes return 501 |
 
-Not implemented: production forecasts, full portfolio optimization/rebalancing, autonomous paper-trading loop, exchange-grade fill simulation, full corporate-action/settlement engine, news-to-signal extraction, historical point-in-time universe, WebSocket tick recorder, or live orders.
+**Not built yet:**
+- ISIN security master;
+- daily rule-input builder;
+- corporate actions;
+- forecasting models;
+- multi-stock allocator;
+- cash paper ledger and reconciliation;
+- engineering scenario harness;
+- real dashboard and Android app.
 
-## Run the offline demonstration on Windows
+## Daily use (PowerShell, in this folder)
 
-Extract into a NEW folder; do not overlay it blindly onto the old source tree.
-Open a VS Code terminal in this folder:
+```powershell
+.\.venv\Scripts\python.exe -m marketlab auth        # log in to Zerodha in the browser that opens (once a day)
+.\.venv\Scripts\python.exe -m marketlab collect --instruments
+.\.venv\Scripts\python.exe -m marketlab summary
+.\.venv\Scripts\python.exe -m marketlab dashboard   # http://127.0.0.1:8765
+```
 
-    py -3.12 -m venv .venv
-    .\.venv\Scripts\python.exe -m pip install -e .
-    .\.venv\Scripts\python.exe -m pip install -r requirements-dev.lock
-    .\.venv\Scripts\python.exe -m pytest
-    .\.venv\Scripts\python.exe -m marketlab demo
-    .\.venv\Scripts\python.exe -m marketlab dashboard
+First-time setup on a new machine: `py -3.13 -m venv .venv`, then `.\.venv\Scripts\python.exe -m pip install -e .` and `-r requirements-dev.lock`, then `.\.venv\Scripts\python.exe -m pytest` (282 tests). Put the Kite app credentials in `data/private/.env` (see `docs/KITE_AND_SERVER_SETUP.md`). Never put the broker password there; the program refuses it.
 
-Open http://127.0.0.1:8765. Compatible Python 3.13 is also acceptable; substitute its launcher selector. The delivered tests were run on Linux Python 3.12.14; Windows setup commands still need local execution.
+## Who does what next
 
-## Do these next, in order
+1. **Claude:** data milestones A–C and a data readiness report (`docs/ROADMAP.md` §2, `prompts/01_CLAUDE_ENGINEERING.txt`).
+2. **GPT:** reviews each milestone (`prompts/04_INDEPENDENT_REVIEW.txt`), handles source searches and planning. Briefing: `docs/GPT_SUMMARY.md`.
+3. **Fable, session 1:** research design freeze (`prompts/02_FABLE_SESSION_1_DESIGN.txt`).
+4. **Claude:** implements that design. **GPT:** validates it (`prompts/03_VALIDATION.txt`). Then paper observation.
+5. **Fable, session 2:** evidence audit (`prompts/05_FABLE_SESSION_2_AUDIT.txt`).
 
-1. Give Claude this whole folder and prompts/01_CLAUDE_ENGINEERING.txt. It should audit and finish the specified engineering gaps before quantitative work.
-2. Set up Kite read-only collection with docs/KITE_AND_SERVER_SETUP.md. Never paste keys into an AI conversation.
-3. Give Fable the updated repo, docs/RESEARCH_BRIEF.md, docs/FABLE_MATH_SPEC.md, docs/SOURCE_PACK.md and prompts/02_FABLE_QUANT.txt.
-4. After Fable returns code/model specifications, run prompts/03_VALIDATION.txt with a separate testing model, then prompts/04_INDEPENDENT_REVIEW.txt.
-5. Do not turn a passing test suite into permission to trade. This package has no live switch.
+A passing test suite is not permission to trade. There is no live switch.
 
-docs/reviews/PHASE_0_1_REVIEW.md preserves the previous independent review.
-docs/RESET_REVIEW.md explains which findings were removed from active scope and which controls replaced them.
-archive/phase_0_1 contains every original tracked upstream file, including the old MTF implementation and planned registries. It is not installed or included in active test discovery.
+## Where things are
+
+| Item | Location |
+| --- | --- |
+| Current state and commands | `docs/HANDOFF.md` |
+| Plan, remaining items and Fable usage | `docs/ROADMAP.md` |
+| Rules and sources | `docs/RULES_REGISTER.md` |
+| Previous review and how each finding was handled | `docs/reviews/PHASE_0_1_REVIEW.md`, `docs/RESET_REVIEW.md` |
+| Fresh validation output | `docs/validation/` |
+| Pre-reset project (history only, not imported) | `archive/phase_0_1` |

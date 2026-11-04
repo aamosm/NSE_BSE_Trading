@@ -150,7 +150,12 @@ class PlanLimitedKite:
             return [{"tradingsymbol": "TESTA", "exchange": "NSE", "quantity": 10, "t1_quantity": 2,
                      "average_price": 100.5, "last_price": 110}]
         if path == "/portfolio/positions":
-            return {"net": [], "day": []}
+            return {"net": [{"tradingsymbol": "TESTB", "product": "MIS", "quantity": 0, "buy_quantity": 5,
+                             "sell_quantity": 5, "average_price": 0, "last_price": 51, "pnl": -12.5}], "day": []}
+        if path == "/trades":
+            return [{"tradingsymbol": "TESTB", "transaction_type": "BUY", "product": "MIS", "quantity": 3,
+                     "average_price": 50}, {"tradingsymbol": "TESTB", "transaction_type": "BUY", "product": "MIS",
+                                            "quantity": 2, "average_price": 50.5}]
         if path == "/user/margins/equity":
             return {"net": 2500.75, "available": {"cash": 3000, "opening_balance": 3000, "live_balance": 2500.75},
                     "utilised": {"debits": 499.25}}
@@ -175,6 +180,8 @@ def test_collection_continues_past_plan_limited_endpoints_and_summary_reads_it(t
     # 12 shares: invested 12 x 100.50 = 1206.00, current 12 x 110 = 1320.00
     assert "TESTA" in text and "invested 1206.00" in text and "unrealised P&L 114.00" in text
     assert "cash 3000.00" in text and "used 499.25" in text
+    assert "Total position P&L -12.50" in text
+    assert "fills   2  qty      5  value       251.00" in text  # 3 x 50 + 2 x 50.50
     assert "TESTA" not in (tmp_path / "status.json").read_text()
 
 
@@ -186,3 +193,54 @@ def test_expired_session_stops_collection(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "client", lambda root: Expired())
     with pytest.raises(AuthenticationRequired):
         cli.collect_once(tmp_path, [])
+
+
+
+def _fake_login(monkeypatch, user_id="AB1234"):
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: None)
+
+    class FakeCatcher:
+        port = 8766
+
+        def __init__(self, port):
+            pass
+
+        def wait(self, timeout):
+            return "Ab12Cd34Ef56"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(cli, "CallbackCatcher", FakeCatcher)
+    seen = {}
+
+    def fake_exchange(self, token, secret):
+        seen.update(secret=secret, key=self.api_key)
+        return {"access_token": "access-xyz", "user_id": user_id}
+
+    monkeypatch.setattr(KiteReadOnly, "exchange_token", fake_exchange)
+    monkeypatch.setattr(cli.getpass, "getpass", lambda p: pytest.fail("must not prompt when the env file has values"))
+    return seen
+
+
+def test_auth_reads_private_env_and_checks_the_account(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("# private\nKITE_API_KEY=envkey\nKITE_API_SECRET='envsecret'\nKITE_USER_ID=AB1234\n")
+    seen = _fake_login(monkeypatch)
+    cli.auth(tmp_path)
+    assert seen == {"secret": "envsecret", "key": "envkey"}
+    assert "envsecret" not in (tmp_path / "kite_session.json").read_text()
+
+
+def test_auth_refuses_a_different_account(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("KITE_API_KEY=k\nKITE_API_SECRET=s\nKITE_USER_ID=AB1234\n")
+    _fake_login(monkeypatch, user_id="ZZ9999")
+    with pytest.raises(KiteError, match="not KITE_USER_ID"):
+        cli.auth(tmp_path)
+    assert not (tmp_path / "kite_session.json").exists()
+
+
+@pytest.mark.parametrize("line", ["KITE_PASSWORD=x", "kite_totp_secret=x", "ZERODHA_PIN=1"])
+def test_env_file_with_a_login_password_or_otp_is_refused(tmp_path, line):
+    (tmp_path / ".env").write_text("KITE_API_KEY=k\n" + line + "\n")
+    with pytest.raises(ValueError, match="must not be stored"):
+        cli.load_env(tmp_path)

@@ -1,6 +1,5 @@
-Local HTTP smoke check, same-process server on 127.0.0.1:18765:
-GET /health -> 200, service=up, live_orders=false
-GET / -> 200, HTML response
+Local HTTP smoke check, separate process on 127.0.0.1:18765:
+GET /health -> 200
+GET / -> 200
 GET /../../data/private/kite_session.json -> 404
-POST /orders -> 501 (no implementation)
-Browser screenshot check not run: installed Playwright had no browser executable.
+POST /orders -> 501

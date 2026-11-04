@@ -1,0 +1,37 @@
+FABLE SESSION 2 OF 2: evidence audit. Token budget is limited. Reason about the evidence; do not re-run or rewrite the system.
+
+In session 1 you froze a research design: definitions, at most 6 candidates, an evaluation protocol and a promotion rule. Claude implemented it. GPT validated the implementation. A period of prospective paper observation (no real orders) has been recorded.
+
+ATTACHED (read only these):
+- Your session 1 design document, exactly as frozen. Any deviation is listed in DEVIATIONS.md.
+- TRIAL_REGISTRY: every trial run, including failed, aborted and re-run trials, with config hashes, dataset hashes and dates.
+- RESULTS: for each candidate and baseline:
+  - walk-forward and holdout net Rs after all costs;
+  - drawdown and turnover;
+  - calibration tables and pinball/Brier scores;
+  - stress-test results;
+  - PBO and DSR inputs and outputs.
+- PAPER_LOG summary: proposals, abstentions with reason codes, simulated fills versus later market prices, costs.
+- GPT's VALIDATION_REPORT.md: leakage probes, reproduction, failures found.
+
+DELIVER:
+1. Validity:
+   - Is there any sign of look-ahead, survivorship, leakage between folds, selection bias or holdout reuse?
+   - Point to the specific artefact and number. Say which results that invalidates.
+2. Per candidate:
+   - PROMOTE to continued paper observation, or REJECT, strictly by the preregistered rule.
+   - Show the arithmetic: net edge versus costs, uncertainty, DSR/PBO, calibration.
+   - No retuning, and no new rule invented after seeing results.
+3. What the evidence supports and what it does not, in plain language a non-specialist owner can act on.
+   - Include whether the paper results are consistent with the backtest, given costs and fills.
+4. If everything is rejected:
+   - the single most promising next research question;
+   - the data it needs;
+   - a freshly preregistered design for it, at most 1 page.
+   - Keep the system as a research and monitoring tool meanwhile.
+5. Risk notes for any promoted candidate:
+   - capacity at this capital;
+   - the cost-share of gross P&L;
+   - which market regimes were absent from the test period.
+
+The strongest permitted conclusion is "ready for continued bounded paper observation". Nothing here authorises real orders.

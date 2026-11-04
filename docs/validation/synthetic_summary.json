@@ -6,20 +6,18 @@
     "cash": {
       "net_pnl_after_fixed_cost": "0.00",
       "fees": "0",
-      "fixed_operating_cost": "0.00",
       "max_drawdown_before_fixed_cost": 0.0
     },
     "buy_hold": {
       "net_pnl_after_fixed_cost": "223.82",
       "fees": "2.28",
-      "fixed_operating_cost": "0.00",
       "max_drawdown_before_fixed_cost": 0.024047198104984267
     },
     "trend": {
       "net_pnl_after_fixed_cost": "613.31",
       "fees": "79.39",
-      "fixed_operating_cost": "0.00",
       "max_drawdown_before_fixed_cost": 0.0071339944311465
     }
-  }
+  },
+  "profitability_proven": false
 }

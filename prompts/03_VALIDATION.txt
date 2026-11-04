@@ -1,6 +1,6 @@
-Act as the independent test executor AFTER Fable has returned its quantitative implementation. Use a capable testing model available to the user; do not assume that the requested Sonnet version is installed.
+Act as the independent test executor (GPT) AFTER Claude has implemented the design frozen in Fable session 1 (prompts/02_FABLE_SESSION_1_DESIGN.txt). Your report feeds Fable session 2 (prompts/05_FABLE_SESSION_2_AUDIT.txt).
 
-Read AGENTS.md, the current handoff, FABLE_REPORT.md, model cards and the preregistered evaluation plan. Do not redesign strategy weights to improve the test result.
+Read AGENTS.md, docs/HANDOFF.md, Fable's session 1 design document, DEVIATIONS.md (if any) and the trial registry. Do not redesign strategy weights to improve the test result.
 
 Check the actual dataset and information-availability lineage before running historical comparisons. Mark missing data explicitly. Obtain only data the user is authorized to access; no paywall/session bypass or invented candles.
 

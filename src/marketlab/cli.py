@@ -44,9 +44,32 @@ APP_FILE = "kite_app.json"  # API key and redirect port only; never the API secr
 REQUEST_TOKEN = re.compile(r"[A-Za-z0-9]{6,64}")
 
 
+ENV_FILE = ".env"  # private: KITE_API_KEY, KITE_API_SECRET, KITE_USER_ID. Never a password or OTP seed.
+FORBIDDEN_ENV = ("PASSWORD", "PASSWD", "PIN", "TOTP", "OTP")
+
+
 def load_app(root):
     path = root/APP_FILE
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+def load_env(root):
+    """Read KEY=VALUE lines from the private env file. Login passwords/OTP seeds are refused, not used."""
+    path = root/ENV_FILE
+    env = {}
+    if not path.exists():
+        return env
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip().upper()
+        if any(word in key for word in FORBIDDEN_ENV):
+            raise ValueError(f"{path.name} contains {key}; broker passwords/OTP seeds must not be stored. "
+                             "Remove it: Kite login is done by you in the browser")
+        env[key] = value.strip().strip('"').strip("'")
+    return env
 
 
 class CallbackCatcher:
@@ -94,9 +117,9 @@ class CallbackCatcher:
 
 
 def auth(root, no_browser=False, port=None, timeout=300.0):
-    app = load_app(root)
-    api_key = app.get("api_key") or getpass.getpass("Kite API key (hidden): ").strip()
-    secret = getpass.getpass("Kite API secret (hidden; not saved): ").strip()
+    app, env = load_app(root), load_env(root)
+    api_key = env.get("KITE_API_KEY") or app.get("api_key") or getpass.getpass("Kite API key (hidden): ").strip()
+    secret = env.get("KITE_API_SECRET") or getpass.getpass("Kite API secret (hidden; not saved): ").strip()
     login_url = "https://kite.zerodha.com/connect/login?" + urlencode({"v": 3, "api_key": api_key})
     catcher = None
     if not no_browser:
@@ -125,6 +148,9 @@ def auth(root, no_browser=False, port=None, timeout=300.0):
     access_token = session.get("access_token")
     if not isinstance(access_token, str) or not access_token:
         raise KiteError("Token response was missing the access token")
+    expected = env.get("KITE_USER_ID")
+    if expected and session.get("user_id") != expected:
+        raise KiteError("The account that logged in is not KITE_USER_ID from the private env file; session not saved")
     # Provider can invalidate a session earlier; 401/403 also stops collection.
     tomorrow = now().date() + timedelta(days=1)
     expires = datetime.combine(tomorrow, clock(6), IST)
@@ -234,11 +260,32 @@ def summary_text(root):
                    f"live balance {_num(av.get('live_balance'))}, used {_num(ut.get('debits'))}")
     p = latest["positions"]
     if p is not None and isinstance(p["payload"], dict):
-        out.append(f"\nPositions: {len(p['payload'].get('net') or [])} net, "
-                   f"{len(p['payload'].get('day') or [])} today")
+        net = [r for r in (p["payload"].get("net") or []) if isinstance(r, dict)]
+        out.append(f"\nPositions at {p['available_at']}: {len(net)} (net view)")
+        total = Decimal("0")
+        for r in sorted(net, key=lambda r: (str(r.get("tradingsymbol", "")), str(r.get("product", "")))):
+            pnl = _num(r.get("pnl"))
+            total += pnl
+            out.append(f"  {str(r.get('tradingsymbol', '?')):<14} {str(r.get('product', '')):<4} "
+                       f"qty {int(r.get('quantity') or 0):>6}  bought {int(r.get('buy_quantity') or 0):>6}  "
+                       f"sold {int(r.get('sell_quantity') or 0):>6}  avg {_num(r.get('average_price')):>10}  "
+                       f"last {_num(r.get('last_price')):>10}  P&L {pnl:>10}")
+        if net:
+            out.append(f"  Total position P&L {total} (broker-reported, before charges)")
     t = latest["trades"]
     if t is not None:
-        out.append(f"Today's executed trades: {len(t['payload']) if isinstance(t['payload'], list) else 0}")
+        trades = [r for r in t["payload"] if isinstance(r, dict)] if isinstance(t["payload"], list) else []
+        out.append(f"\nToday's executed trades: {len(trades)}")
+        groups = {}
+        for r in trades:
+            k = (str(r.get("tradingsymbol", "?")), str(r.get("transaction_type", "?")), str(r.get("product", "")))
+            qty = int(r.get("quantity") or 0)
+            g = groups.setdefault(k, [0, 0, Decimal("0")])
+            g[0] += 1
+            g[1] += qty
+            g[2] += _num(r.get("average_price")) * qty
+        for (sym, side, prod), (n, qty, value) in sorted(groups.items()):
+            out.append(f"  {sym:<14} {side:<4} {prod:<4} fills {n:>3}  qty {qty:>6}  value {value:>12}")
     return "\n".join(out)
 
 
@@ -351,6 +398,7 @@ def parser():
     p.add_argument("--private-dir", type=Path, default=Path("data/private"))
     sub = p.add_subparsers(dest="command", required=True)
     a = sub.add_parser("auth"); a.add_argument("--no-browser", action="store_true"); a.add_argument("--port", type=int)
+    a.add_argument("--wait", type=float, default=300.0, help="seconds to wait for the browser login redirect")
     sub.add_parser("summary")
     a = sub.add_parser("collect"); a.add_argument("--symbols", nargs="*", default=[]); a.add_argument("--instruments", action="store_true")
     a = sub.add_parser("watch"); a.add_argument("--symbols", nargs="*", default=[]); a.add_argument("--interval", type=int, default=300)
@@ -377,7 +425,7 @@ def main():
     root.mkdir(parents=True, exist_ok=True)
     try:
         if args.command == "auth":
-            auth(root, args.no_browser, args.port)
+            auth(root, args.no_browser, args.port, args.wait)
         elif args.command == "summary":
             print(summary_text(root))
         elif args.command == "collect":

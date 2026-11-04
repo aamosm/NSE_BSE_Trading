@@ -1,11 +1,10 @@
 usage: __main__.py [-h] [--private-dir PRIVATE_DIR]
-                   {auth,collect,watch,history,news,import-trades,backtest,demo,dashboard,backup,audit}
-                   ...
+                   {auth,summary,collect,watch,history,news,import-trades,backtest,demo,dashboard,backup,audit} ...
 
 NSE/BSE cash research. No live order commands exist.
 
 positional arguments:
-  {auth,collect,watch,history,news,import-trades,backtest,demo,dashboard,backup,audit}
+  {auth,summary,collect,watch,history,news,import-trades,backtest,demo,dashboard,backup,audit}
 
 options:
   -h, --help            show this help message and exit

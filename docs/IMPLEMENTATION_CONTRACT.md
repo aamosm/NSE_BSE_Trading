@@ -6,6 +6,8 @@ This replaces the archived contract. MTF is removed, and the authorized broker i
 
 The collector owns broker credentials and writes observations. Offline researchers read redacted/exported data. Future forecasting workers receive validated features, not tokens. A future paper coordinator may consume signed/versioned forecasts; no broker order gateway is provided.
 
+Kite app credentials live only in git-ignored data/private/.env (API key, API secret, client ID). The broker login password, PIN and TOTP seed are never stored, and the login is never automated; load_env refuses such keys. The daily access token is in data/private/kite_session.json.
+
 Kite API tokens may possess broader broker permissions. The read restriction here is enforced by the application's transport allowlist, not by claiming that Kite issued a read-only scope. Someone rewriting code or stealing the token is outside this application guard.
 
 ## Data
@@ -22,6 +24,8 @@ Kite API tokens may possess broader broker permissions. The read restriction her
 Return distributions must name the security, as-of time, expiry, horizon, model/calibration identifiers, sample count and evidence IDs. Use separate models and evaluation for intraday, swing and core horizons. Do not compare a one-day expected return to a one-year return without a common decision formulation.
 
 The current sizing function evaluates one new paper entry against caller-supplied existing exposures. It is not a joint portfolio optimizer and does not maintain a portfolio by itself. The coordinator must serialize proposals, update reservations and aggregate both exchanges by ISIN before allowing a second proposal. Missing calibration or validation means abstention.
+
+Every paper proposal must pass the exchange rules engine (rules.evaluate_order) using an InstrumentSnapshot dated for the submission day: calendars, sessions, ticks, bands, T2T series, surveillance and suspension. A missing snapshot or unknown required status means abstention.
 
 No pricing model may claim certainty of a maximum/minimum. Source verification confidence and forecast probability are different quantities. Explain decisions from recorded fields/reason codes.
 
