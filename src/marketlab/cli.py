@@ -355,6 +355,8 @@ def parser():
     a = sub.add_parser("audit"); a.add_argument("file", type=Path); a.add_argument("--output", type=Path, default=Path("data/runs/audit.json"))
     a = sub.add_parser("fetch-public", help="download official NSE/BSE daily files for one trading date")
     a.add_argument("--date", type=date.fromisoformat, required=True); a.add_argument("--sources", nargs="*")
+    a = sub.add_parser("verify-calendar", help="compare the engine's NSE calendar with NSE's holiday APIs")
+    a.add_argument("--year", type=int, default=2026)
     a = sub.add_parser("build-master", help="security master usable for one session")
     a.add_argument("--date", type=date.fromisoformat, required=True)
     a = sub.add_parser("snapshot", help="rules-engine input for one NSE symbol and session, with provenance")
@@ -435,6 +437,8 @@ def main():
         elif args.command == "fetch-public":
             for r in sources.collect(args.market_dir, args.date, args.sources):
                 print(f"{r['source']:<28} {r.get('key', ''):<11} {r['result']}")
+        elif args.command == "verify-calendar":
+            print(json.dumps(sources.verify_nse_calendar(args.market_dir, args.year), indent=1))
         elif args.command == "build-master":
             print(json.dumps(master.build_master(args.market_dir, args.date), indent=1, default=str))
         elif args.command == "snapshot":

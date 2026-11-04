@@ -120,6 +120,16 @@ REGISTER: tuple[SourceSpec, ...] = (
                False, ('"CM"',), "Current year's trading holidays by segment.", RIGHTS_UNVERIFIED,
                "2026 only on 5 Nov 2026 (20 CM entries incl. weekend dates).",
                "Website API; may require a browser session in future (record failures, do not bypass).", "WORKS"),
+    SourceSpec("nse_clearing_holidays", "calendar", "NSE", "https://www.nseindia.com/api/holiday-master?type=clearing",
+               "json", False, ('"CM"',), "Current year's settlement (clearing) holidays by segment.", RIGHTS_UNVERIFIED,
+               "2026 only on 5 Nov 2026 (20 CM dates).", "Website API; record failures, do not bypass.", "WORKS"),
+    SourceSpec("nse_indices_close", "context", "NSE",
+               "https://nsearchives.nseindia.com/content/indices/ind_close_all_{ddmmyyyy}.csv", "csv", True,
+               ("Index Name", "Index Date", "Open Index Value", "High Index Value", "Low Index Value",
+                "Closing Index Value", "P/E", "P/B", "Div Yield"),
+               "End of day; benchmark and sector index levels with P/E, P/B and dividend yield.", RIGHTS_UNVERIFIED,
+               "All NSE indices that day (archive reaches at least 2 Jan 2020).", "Price indices only; total-return "
+               "indices not in this file.", "WORKS"),
     SourceSpec("bse_bhavcopy", "prices", "BSE",
                "https://www.bseindia.com/download/BhavCopy/Equity/BhavCopy_BSE_CM_0_0_0_{yyyymmdd}_F_0000.CSV", "csv",
                True, ("TradDt", "FinInstrmId", "ISIN", "TckrSymb", "SctySrs", "ClsPric", "PrvsClsgPric", "TtlTradgVol"),
@@ -280,3 +290,30 @@ def latest_vintage(market: Path, spec_id: str, before: datetime, max_age_days=10
             return d, rec
         d -= timedelta(days=1)
     return None
+
+
+def verify_nse_calendar(market: Path, year: int, calendar=None) -> dict:
+    """Compare the engine's NSE calendar with NSE's own holiday APIs (latest stored vintages).
+
+    Weekend dates in the API list are ignored (the engine lists weekday closures only). Returns the
+    differences; an empty difference on both lists is independent agreement, not proof of completeness.
+    """
+    import json as _json
+    from .rules.calendar import MarketCalendar
+    from .rules.types import Exchange
+    cal = calendar or MarketCalendar()
+    y = cal.year(Exchange.NSE, date(year, 1, 1))
+    out = {}
+    for spec_id, ours in (("nse_holidays", y.trading_holidays), ("nse_clearing_holidays", y.settlement_holidays)):
+        found = latest_vintage(market, spec_id, now(), max_age_days=60)
+        if not found:
+            out[spec_id] = {"state": "NOT_STORED"}
+            continue
+        rows = _json.loads(read_raw(market, spec_id, found[0])).get("CM", [])
+        api = {datetime.strptime(r["tradingDate"], "%d-%b-%Y").date() for r in rows}
+        api_weekdays = {d for d in api if d.year == year and d.weekday() < 5}
+        out[spec_id] = {"vintage": found[0].isoformat(), "api_dates": len(api), "api_weekdays": len(api_weekdays),
+                        "missing_in_engine": sorted(d.isoformat() for d in api_weekdays - set(ours)),
+                        "extra_in_engine": sorted(d.isoformat() for d in set(ours) - api_weekdays)}
+        out[spec_id]["state"] = "AGREES" if not (out[spec_id]["missing_in_engine"] or out[spec_id]["extra_in_engine"])             else "DIFFERS"
+    return out

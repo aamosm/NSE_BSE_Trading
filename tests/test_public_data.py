@@ -150,3 +150,20 @@ def test_security_master_counts(market):
     out = master.build_master(market, D)
     assert out["nse"] == 3 and out["bse"] == 0 and out["isin_conflicts"] == 0
     assert out["nse_without_code"] == 1  # CCC lists on D; no previous-session code
+
+
+def test_calendar_verification_against_nse_holiday_apis(tmp_path):
+    import json as _json
+    from marketlab.rules.calendar import NSE_2026
+    trading = [{"tradingDate": d.strftime("%d-%b-%Y")} for d in sorted(NSE_2026.trading_holidays)]
+    trading.append({"tradingDate": "01-Nov-2026"})  # a Sunday festival: ignored (weekday closures only)
+    clearing = [{"tradingDate": d.strftime("%d-%b-%Y")} for d in sorted(NSE_2026.settlement_holidays)][:-1]
+
+    def fetch(url):
+        body = trading if "type=trading" in url else clearing
+        return 200, _json.dumps({"CM": body}).encode(), None
+    sources.collect(tmp_path, P, ["nse_holidays", "nse_clearing_holidays"], fetch=fetch, pause=0)
+    out = sources.verify_nse_calendar(tmp_path, 2026)
+    assert out["nse_holidays"]["state"] == "AGREES" and out["nse_holidays"]["api_weekdays"] == 16
+    assert out["nse_clearing_holidays"]["state"] == "DIFFERS"
+    assert out["nse_clearing_holidays"]["extra_in_engine"] == ["2026-12-25"]
