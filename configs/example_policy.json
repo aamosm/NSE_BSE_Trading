@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "status": "ILLUSTRATIVE_NOT_IMPLEMENTED",
+  "mode": "paper",
+  "currency": "INR",
+  "display_timezone": "Asia/Kolkata",
+  "initial_paper_equity_inr": "10000.00",
+  "markets": [
+    "NSE",
+    "BSE"
+  ],
+  "products_in_domain": [
+    "cash_delivery",
+    "MTF"
+  ],
+  "mtf_simulation_enabled": true,
+  "live_execution": {
+    "enabled": false,
+    "cash_enabled": false,
+    "mtf_enabled": false,
+    "broker_account": null,
+    "release_id": null
+  },
+  "limits_requiring_explicit_configuration": {
+    "max_position_exposure_inr": null,
+    "max_total_borrowed_principal_inr": null,
+    "max_portfolio_stress_loss_inr": null,
+    "max_daily_loss_inr": null,
+    "minimum_cash_buffer_inr": null,
+    "max_concentration_fraction": null,
+    "max_turnover_inr": null
+  },
+  "rules": {
+    "mtf_rate_schedule_version": null,
+    "margin_schedule_version": null,
+    "fee_schedule_version": null,
+    "settlement_calendar_version": null,
+    "unknown_required_rule_blocks_entry": true
+  },
+  "research": {
+    "worker_limit": 2,
+    "batch_wall_time_minutes": 60,
+    "full_grid_requires_ten_candidate_validation": true,
+    "runs_separate_from_execution_worker": true
+  },
+  "runtime_llm": {
+    "enabled": false,
+    "provider": null,
+    "model_id": null,
+    "monthly_budget_inr": null,
+    "max_cost_per_request_inr": null,
+    "credentials_in_config": false,
+    "broker_tools_allowed": false,
+    "policy_writes_allowed": false
+  },
+  "withdrawal": {
+    "automatic_transfer_enabled": false,
+    "fixed_weekly_amount_inr": "0.00",
+    "realized_profit_fraction": null,
+    "requires_settled_cash_and_margin_headroom": true
+  },
+  "notes": [
+    "This configuration does not implement any controls by itself.",
+    "Live activation must fail if required limits/rules are unset.",
+    "Paper fixtures may supply explicit test-only limits.",
+    "These values are not optimized investment parameters."
+  ]
+}

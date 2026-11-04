@@ -1,0 +1,160 @@
+{
+  "review_date": "2026-11-03",
+  "notice": "Reference index, not a complete regulatory rulebook or data-access license. Account-specific details require verification.",
+  "sources": [
+    {
+      "id": "S1",
+      "title": "Claude Code and subscription authentication",
+      "url": "https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-max-or-ultra-plan",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S2",
+      "title": "Claude Code model configuration",
+      "url": "https://support.claude.com/en/articles/11940350-claude-code-model-configuration",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S3",
+      "title": "Codex authentication",
+      "url": "https://learn.chatgpt.com/docs/auth",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S4",
+      "title": "Codex models",
+      "url": "https://learn.chatgpt.com/docs/models",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S5",
+      "title": "Zerodha MTF FAQ",
+      "url": "https://support.zerodha.com/category/trading-and-markets/margins/margin-trading-facility/articles/margin-trading-facility-mtf-faqs",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S6",
+      "title": "Zerodha MTF terms",
+      "url": "https://zerodha.com/tos/mtf",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S7",
+      "title": "Kite order API",
+      "url": "https://kite.trade/docs/connect/v3/orders/",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S8",
+      "title": "Kite postbacks and user order updates",
+      "url": "https://kite.trade/docs/connect/v3/postbacks/",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S9",
+      "title": "Qlib point-in-time data documentation",
+      "url": "https://github.com/microsoft/qlib/blob/main/docs/advanced/PIT.rst",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S10",
+      "title": "Bailey et al., The Probability of Backtest Overfitting",
+      "url": "https://www.davidhbailey.com/dhbpapers/backtest-prob.pdf",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S11",
+      "title": "Zerodha static IP requirements",
+      "url": "https://support.zerodha.com/category/trading-and-markets/general-kite/kite-api/articles/static-ip",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S12",
+      "title": "Kite login and token documentation",
+      "url": "https://kite.trade/docs/connect/v3/user/",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S13",
+      "title": "Capacitor documentation",
+      "url": "https://capacitorjs.com/docs",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S14",
+      "title": "Zerodha API products and prices",
+      "url": "https://zerodha.com/products/api/",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S15",
+      "title": "Claude API pricing",
+      "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S16",
+      "title": "Lightsail pricing",
+      "url": "https://aws.amazon.com/lightsail/pricing/",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S17",
+      "title": "OpenAlgo repository",
+      "url": "https://github.com/marketcalls/openalgo",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S18",
+      "title": "NSE official feeds",
+      "url": "https://www.nseindia.com/static/rss-feed",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S19",
+      "title": "BSE corporate announcements",
+      "url": "https://www.bseindia.com/corporates/ann.html",
+      "review_date": "2026-11-03",
+      "status": "ACCESS_ERROR_REVERIFY"
+    },
+    {
+      "id": "S20",
+      "title": "FastAPI documentation",
+      "url": "https://fastapi.tiangolo.com/",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S21",
+      "title": "Docker Compose documentation",
+      "url": "https://docs.docker.com/compose/",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    },
+    {
+      "id": "S22",
+      "title": "Zerodha MTF ledger entries",
+      "url": "https://support.zerodha.com/category/trading-and-markets/margins/margin-trading-facility/articles/mtf-funds-statement-entries",
+      "review_date": "2026-11-03",
+      "status": "REFERENCE_REVERIFY_BEFORE_USE"
+    }
+  ]
+}

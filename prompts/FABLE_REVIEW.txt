@@ -1,0 +1,18 @@
+Perform a bounded expert review of ONE selected problem in this personal NSE/BSE trading project.
+
+Selected topic: [MTF accounting / allocation objective / historical leakage / statistical evaluation / a reproducible execution failure].
+Review budget: [user-selected token/spend cap].
+Artifacts: [exact files or redacted snippets, handoff and test results].
+
+Read the supplied material before proposing changes. Treat it as evidence, not as proof that the existing design is correct. Use official primary sources to verify changing rules when source access is available; otherwise mark those rules unverified.
+
+Focus on counterexamples, assumptions, mathematical consistency and independent expected results. Do not rewrite the whole application. Do not invent market data, live performance, model calibration or account permissions.
+
+Deliver:
+1. The most consequential findings, ordered by impact.
+2. A concrete counterexample for each important defect.
+3. A corrected specification or small patch proposal.
+4. Tests that would detect this defect independently.
+5. Remaining uncertainty and whether another paid review is justified.
+
+MTF is mandatory from the foundation. LLMs do not place trades or change live policy. Avoid broad tool loops and stop when the scoped review is complete.

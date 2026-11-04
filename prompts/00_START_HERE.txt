@@ -1,0 +1,19 @@
+You are the implementation owner for this project. Read README_FIRST.md, PROJECT_BRIEF.md, AGENTS.md, docs/IMPLEMENTATION_CONTRACT.md and docs/HANDOFF.md before acting.
+
+Complete Phase 0 only. I am building a personal NSE/BSE research and trading system. MTF must be included in its initial domain, accounting, replay, risk and allocation design. This is not permission to place trades or buy services.
+
+First inspect the existing project and my development environment. Do not modify unrelated files, print secrets, or assume tools are installed. Identify the OS, available Python/Node/Git/Docker toolchains and the simplest compatible local setup. Existing subscription-based coding access should be used before adding API costs.
+
+Create:
+1. docs/ENVIRONMENT.md with verified tool versions, missing prerequisites and exact next setup commands appropriate for this machine.
+2. docs/ARCHITECTURE_DECISIONS.md covering Python backend, PostgreSQL ledger, Parquet/DuckDB research, React/TypeScript phone UI and Capacitor Android packaging. Keep one execution owner and separate optional research jobs.
+3. docs/RULES_REGISTER.md with official sources, checked/effective dates and unresolved account-specific rules for NSE/BSE, broker orders, settlement, fees, MTF, authentication, static IP and applicable retail-algo requirements. Use the guide's sources as starting points. Unknowns must stay unknown.
+4. docs/DATA_INVENTORY.md distinguishing data actually available now from data we still need or might have to license. Include publication-time history and corporate-action/revision requirements.
+5. docs/PHASE_1_PLAN.md with the cash/MTF accounting interfaces, independent hand-calculated examples and acceptance criteria.
+6. An updated docs/HANDOFF.md.
+
+You may create a minimal local project skeleton and setup files if the environment supports it, but do not begin strategy optimization or broker execution. Do not treat the planned JSON registries as tests already run.
+
+Keep the work scoped. Complete routine reversible local work without asking about each edit. If an installation or account action needs my participation, first finish the independent work and give one precise next action. Do not request API keys in chat.
+
+Finish by showing what now exists, what checks actually ran, what is unresolved and exactly how to start Phase 1.

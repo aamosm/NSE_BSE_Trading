@@ -1,0 +1,9 @@
+Analyze this redacted failure bundle. Read the exact software/config/data versions and reproduce the discrepancy where possible.
+
+Classify it first: data defect, accounting/software defect, execution mismatch, forecast error, ordinary market uncertainty, or insufficient evidence.
+
+Do not assume that a losing trade means a bug. Do not change risk settings merely to make a historical result profitable. Do not inspect secrets or request unrestricted account access.
+
+Output the earliest causal discrepancy supported by evidence, a minimal reproduction, and one proposed change with a falsifiable expected effect. Preserve the original failing fixture. Specify affected tests and the research evaluation needed before promotion.
+
+If evidence is insufficient, identify the smallest missing observation and leave the production strategy unchanged.
