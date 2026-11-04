@@ -3,14 +3,12 @@ FABLE SESSION 1 OF 2: research design freeze. Token budget is limited. Spend it 
 You are the quantitative designer for a cash-only NSE/BSE research system. Claude implements; GPT reviews. You will see this project once more, at the end, to audit evidence. Anything you leave vague now will be guessed by someone else later, so be exact.
 
 ATTACHED (read only these; do not request the whole repository):
-- FABLE_HANDOFF.md: actual schemas, available datasets, coverage per field/year, licensing gaps.
-- DATA_READINESS.md: what can and cannot be modelled with the data that exists today.
+- docs/FABLE_HANDOFF.md: actual schemas, cost specification with computed round trips, data expected after backfill, and the questions that need your reasoning.
+- docs/DATA_READINESS.md: per-field and per-horizon coverage and blockers (what can and cannot be modelled today).
 - docs/FABLE_MATH_SPEC.md and docs/RESEARCH_BRIEF.md: requirements and constraints (treat as requirements, not results).
-- Cost model facts:
-  - Zerodha delivery: STT 0.1% each side; stamp 0.015% on buys; exchange 0.00307% (NSE); SEBI fee; GST 18% on brokerage + exchange + SEBI; DP charge Rs 15.34 per stock per sell day.
-  - Intraday: 0.03% or Rs 20 brokerage, STT 0.025% on sells, no DP.
-  - Break-even rises: Rs 1,000 delivery +1.76%; Rs 10,000 delivery +0.38%.
-- src/marketlab/research.py (Forecast contract, one-entry paper gate). The exchange rules engine already blocks illegal or unknown-status entries.
+- Cost facts are in FABLE_HANDOFF.md section 3 (STT per security-day rounded to the rupee; DP Rs 15.34 per ISIN per delivery sell day; round trips Rs 1,000 delivery 1.76%, Rs 2,000 0.99%, Rs 10,000 0.38%; intraday Rs 10,000 0.11% before spread). The contract-note basis is not yet reconciled.
+- Research families (interfaces, not a commitment to fund all four): established companies (longer horizons), company events (earnings/guidance), new listings, intraday. One allocator and one shared cash book.
+- The exchange rules engine already blocks illegal or unknown-status entries; the Forecast contract is listed in FABLE_HANDOFF.md section 2.
 
 HARD CONSTRAINTS:
 - Long-only cash. Integer shares. About Rs 10,000 of capital. No MTF, shorting, derivatives or live orders.
@@ -27,10 +25,10 @@ DELIVER, in this order. Stop early rather than pad:
    - label formula, entry/exit price rule, label end time for purging;
    - corporate-action treatment;
    - universe rule (historical, survivorship-aware).
-3. Preregistered candidates: at most 6 in total, including the baselines (cash, Nifty ETF buy-and-hold, equal weight).
+3. Preregistered candidates: at most 6 in total for the first cycle, including the controls (cash, a buy-and-hold benchmark, equal weight).
    - For each: features with exact formulas and lookbacks; fitted parameters and where they are fitted; the parameter grid (small); ablations.
    - Count the trials this implies, for DSR/PBO.
-4. Evaluation protocol:
+4. Evaluation protocol (dependence-aware: overlapping labels, cross-sectional correlation and regimes reduce the effective number of observations):
    - walk-forward windows (dates or rules); purging and embargo per horizon; inner validation; untouched final holdout;
    - metrics: net Rs after all costs, calibration (Brier/pinball), drawdown, turnover;
    - the PROMOTION RULE, written before any result exists;
@@ -45,4 +43,4 @@ DELIVER, in this order. Stop early rather than pad:
    - the list of artefacts the runner must save for your session 2 audit.
 7. SEARCH_REQUESTS: facts you need that are not in the bundle. For each, the affected definition and what you assumed meanwhile.
 
-Do not write production code, model cards or results. Do not claim any edge exists. If the data cannot support a horizon, the correct output is a reasoned "not testable yet" plus the data that would make it testable.
+Do not write production code, model cards or results. Do not claim any edge exists. INSUFFICIENT DATA is an allowed answer for any horizon or family: give the reason and the data that would make it testable.

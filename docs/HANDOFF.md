@@ -1,71 +1,113 @@
 # Handoff
 
-Updated 4 November 2026 by Claude (implementation owner). Branch `cash-research-reset`, local only. GitHub `main` is still the old phase-1 commit 19d12dc. No account identifiers, tokens or balances appear in this file.
+Updated 5 November 2026 by Claude (implementation owner).
+- **Milestone:** 1 of the consolidated handoff: foundation corrections, data collection, deployment preparation, phone dashboard and login.
+- **Branch:** `cash-research-reset`, on top of `3513d33` (GPT's last review). Pushing to GitHub is the owner's call.
+- **Privacy:** no account identifiers, tokens or balances appear in this file.
 
 ## Scope
 
-Cash-only NSE/BSE research with read-only Kite data. MTF, borrowing, derivatives, short selling and order placement are out of scope, and no code path for them exists. The laptop is the "server" until the project is finished.
+- Cash-only NSE/BSE research and paper decisions. Read-only Kite; simulated execution only.
+- Private server plus phone PWA over Tailscale.
+- No MTF, borrowing, shorting, derivatives, orders or live switch.
 
-## Commits on this branch
+## Commits
 
 | Commit | What |
 | --- | --- |
-| `422a66c` | Reset to the v0.2.0 cash research base (UPGRADE.patch on 19d12dc). Verified file-for-file against the delivered folder; the archive matches upstream 61/61. Restored the dropped `.gitignore` exclusions |
-| `452d70c` | Kite login usability: redirect caught on 127.0.0.1:8766; Kite error types classified (TokenException / PermissionException / InputException); collection continues past plan-limited endpoints; `summary` command |
-| `8379b46` | Cash-only rules engine and metrics ported from the archive. Review fixes R02, R09, R10. Paper proposals gated on the rules engine. One fee implementation |
-| (latest) | Credentials from private env file, account check on login, detailed summary, validation regenerated on Windows, docs cleaned, ROADMAP and GPT summary, two Fable session prompts |
+| `2d53906` | Snapshot chronology: latest receipt + completed batch decide the current state; per-section states; unknown is not zero; trade book attributed to a session only after it opens |
+| `e4544e1` | Login: single-use hashed expiring state, exact callback path, mandatory account check, enumerated error labels, 90 s read deadline, env allowlist, fix of the 00:00–06:00 expiry bug |
+| `1472281` | Costs and decision time: day-level STT rounded to the rupee, stamp UNRESOLVED, DP from the funds statement, submission revalidation, BSE fee group from listing data |
+| `e605514` | Muhurat 8 Nov 2026 session and settlement tables (NSE/CMTR/76941, NCL/CMPT/77037) |
+| `f431de9` | Corporate actions: provider / exchange / derived price series, action effects, provider reconciliation |
+| `0f8c972` | Public data: source register, polite collector, security master, daily `InstrumentSnapshot` builder |
+| `bc4aeda` | Scheduler `run`: calendar-driven jobs, health states, breakers, pause, heartbeat and alerts |
+| `b0f478c` | Phone app: private PWA and the official Kite login callback; actual and simulated accounts separate |
+| `88dd10b` | Deployment kit: systemd units, provisioning, pinned release/rollback, encrypted backups, `DEPLOYMENT.md` |
+| `8a06ae7` | Web unit: writable data directory (SQLite WAL readers need it) |
+| `d7383b4` | Sources: NSE index closes and clearing holidays; `verify-calendar` |
+| `d939cb0` | Login catcher threaded (idle browser connections could delay the redirect) |
+| docs commit | This handoff, `DATA_READINESS.md`, `SOURCE_STATUS.md`, `FABLE_HANDOFF.md`; scope updates to AGENTS, CLAUDE, README, ROADMAP, GPT_SUMMARY, RULES_REGISTER, RESET_REVIEW, ARCHITECTURE, setup guide and Fable prompts |
 
 ## Verified on this laptop (Windows 11, Python 3.13.7)
 
-- **Tests:** 282 passed, 0 failed, 0 skipped. Output in `docs/validation/tests.txt`.
-- **Synthetic checks:**
-  - demo;
-  - news fixture import;
-  - dataset audit;
-  - HTTP smoke: `/` and `/health` return 200, a path-traversal attempt returns 404, `POST /orders` returns 501;
-  - `compileall`.
-- **Real account, read-only** (`docs/validation/real_account_readonly.txt`):
-  - official browser login, with the account matched to `KITE_USER_ID`;
-  - holdings, positions, trades and funds all returned;
-  - NSE and BSE instrument dumps returned;
-  - quotes returned, so the paid data entitlement is present;
-  - INFY daily history: 22 bars, with metadata and audit;
-  - **calendar cross-check: 22 of 22 real sessions (1 Oct–3 Nov 2026) match `MarketCalendar`.**
-- **Not run:** any order action. None exists.
+**Targeted tests, run with each change:**
+- `test_snapshot_chronology`, `test_login_flow`, `test_kite_login`;
+- `test_costs_and_decision_time`, `test_research`, `test_boundaries`, `test_charges_broker`, `test_properties_provenance`, `test_metrics`;
+- `test_muhurat_2026`, `test_calendar_sessions`, `test_engine`;
+- `test_corporate_actions`, `test_integration`;
+- `test_public_data`, `test_service`, `test_webapp`.
 
-## Credentials (policy)
+All passed in their final runs. 148 tests are new (8 files); 435 are collected in total. The unchanged suite was not re-run just for a count. One timing-dependent failure was found and fixed (`d939cb0`).
 
-- `data/private/.env` holds `KITE_API_KEY`, `KITE_API_SECRET` and `KITE_USER_ID`. It is git-ignored, and the folder ACL is restricted to the Windows user.
-- `auth` reads it and never saves the secret elsewhere. `load_env` **refuses** any `*PASSWORD*`, `*PIN*` or `*OTP*`/`*TOTP*` key.
-- The broker login password is never stored. Login is always done by the user in the browser, about once a day, because tokens expire at 06:00.
-- `data/private/kite_session.json` holds the daily access token.
+**Real data (read-only):**
+- `fetch-public` stored 15 official sources (4 Nov dated files, 5 Nov vintages, 30 Oct bhavcopy).
+- Security master for 5 Nov: 2,627 NSE / 5,044 BSE listings, 2,434 ISINs on both, 0 ISIN conflicts.
+- Snapshots built for INFY, 21STCENMGM, BLUECHIP and MILTON, including two real series changes. Through the engine, the GSM-2 stock's fresh buy was blocked and the ESM-1 BE stock was accepted for delivery with a warning.
+- `verify-calendar 2026`: trading holidays (16) and settlement holidays (20) AGREE with NSE's APIs.
+- Archive depth spot-checked: bhavcopy to 2016, sec_list to 2022, REG1_IND to Jan 2025, index closes to 2020.
+- One Kite collection **batch** completed. Holdings, positions and funds OK; the 01:xx trade book is labelled SESSION_UNKNOWN.
+- `run --once`: RUNNING; the public_eod job OK.
+- App on loopback: status, shell, manifest, icons and worker served.
+- Backup restore: SQLite backup → tar → restore → `integrity_check` ok for the evidence and catalog databases.
 
-## Commands
+**Not run:**
+- any server step;
+- phone login through Tailscale;
+- `age` encryption (not installed here);
+- contract-note and funds-statement reconciliation;
+- corporate-action reconciliation (no official history yet);
+- any order action (none exists).
+
+## Remaining blockers
+
+1. **Server not provisioned.** Everything for it is prepared (`DEPLOYMENT.md`). The phone login is the end-to-end check of the redirect.
+2. **No historical backfill**, so no horizon is testable yet (`DATA_READINESS.md`). The old-format bhavcopy parser is not written.
+3. **No official corporate-action history.** Kite history is provider-adjusted; base prices on ex-dates are set to unknown.
+4. **Cost basis unreconciled:** STT aggregation (ASSUMPTION), stamp allocation (UNRESOLVED), DP amount per account.
+5. **Rule-input assumptions:** REG1_IND `Status` → suspended and `ICA` → call auction; sec_list/REG1_IND describe the next session (observed, not documented).
+6. **Unloaded:**
+   - BSE calendar, bands and surveillance;
+   - 2027 NSE calendar;
+   - historical F&O membership;
+   - broker MIS list;
+   - Zerodha's Muhurat MIS square-off time.
+7. **Not built:** model, allocator, simulated cash ledger, replay harness, financial filings, earnings-event path.
+8. **Exchange website terms of use** not reviewed.
+9. **Legacy account evidence.** Collections before 5 Nov have no batch, so the account view starts from the 5 Nov batch.
+
+## One-time actions for the owner
+
+1. **Change the Zerodha password.** It was typed into an earlier chat. Optionally regenerate the Kite API secret, then update `data/private/.env`.
+2. **Push the branch** when you want GPT to review it: `git push origin cash-research-reset`.
+3. **Rent the server and follow `docs/DEPLOYMENT.md` §3 in order:**
+   - SSH key, then a DigitalOcean Ubuntu 24.04 2 GiB droplet in BLR1, then `provision.sh`;
+   - Tailscale on the server and the phone (enable MagicDNS + HTTPS);
+   - `install_release.sh <reviewed SHA>`;
+   - type `.env` on the server;
+   - `tailscale serve --bg --https=443 http://127.0.0.1:8765`.
+4. **Change the Kite app's redirect URL** to `https://marketlab.<tailnet>.ts.net/kite/callback` and set the same `KITE_REDIRECT_URL`. After this, the laptop's `marketlab auth` no longer works; log in from the app.
+5. **Install the app** on the phone (Chrome → Install app) and complete one login. This verifies the redirect over the private connection.
+6. **Alerts:** a healthchecks.io free check (5 min period, 15 min grace) → `MARKETLAB_HEARTBEAT_URL`. Optional: an ntfy topic → `MARKETLAB_ALERT_URL`.
+7. **Backups:**
+   - `age-keygen` on the laptop, keeping the key off the server;
+   - a B2 bucket and a key limited to it;
+   - `rclone config` as user `marketlab`;
+   - one restore drill with `restore_check.sh`.
+8. **Optional:** reconcile one contract note and the matching funds statement locally against `rules.charges.day_charges`. Report only matches and mismatches; never commit the documents.
+9. **Daily:** log in from the phone each trading morning, before about 08:30.
+
+## Commands (laptop)
 
 ```powershell
-.\.venv\Scripts\python.exe -m marketlab auth          # opens Zerodha login; you log in; session saved
-.\.venv\Scripts\python.exe -m marketlab collect --instruments --symbols NSE:INFY
-.\.venv\Scripts\python.exe -m marketlab summary       # holdings, funds, positions, today's trades
-.\.venv\Scripts\python.exe -m marketlab dashboard     # http://127.0.0.1:8765, read-only status page
-.\.venv\Scripts\python.exe -m pytest                  # 282 tests
+.\.venv\Scripts\python.exe -m marketlab auth
+.\.venv\Scripts\python.exe -m marketlab run --symbols NSE:INFY NSE:TCS
+.\.venv\Scripts\python.exe -m marketlab dashboard
+.\.venv\Scripts\python.exe -m marketlab fetch-public --date 2026-11-04
+.\.venv\Scripts\python.exe -m marketlab snapshot --date 2026-11-05 --symbol INFY
+.\.venv\Scripts\python.exe -m marketlab verify-calendar --year 2026
 ```
-
-## Review findings R01–R10
-
-See `docs/RESET_REVIEW.md`.
-- Fixed: R02, R09, R10.
-- Fixed by design: R01.
-- Not applicable after MTF removal: R04, R05, R08.
-- Open for future milestones: R03 and R06 (cash paper ledger, milestone F), R07 (corporate actions, milestone C).
-
-## Known limitations
-
-- **Calendars:** only NSE 2026 is loaded. BSE dates and any 2027 date are refused (fail-closed). Muhurat (8 Nov 2026) is blocked because its timings are unknown.
-- **Diagnostic backtest:** single-instrument. It approximates settlement as the next session in the data rather than using `MarketCalendar.settlement_date`.
-- **Daily rules inputs:** `InstrumentSnapshot` must currently be built by hand. There is no daily builder yet for series, price bands, surveillance lists or F&O membership (milestone B data side).
-- **Kite history:** whether candles are corporate-action adjusted has not been verified (see ROADMAP §4).
-- **Account data:** symbols such as RCOM vs RCOM-BE differ between trades and positions. Joins must be keyed by ISIN (milestone A).
 
 ## Next task
 
-See `docs/ROADMAP.md` §2. Claude builds milestones A, B (data side) and C, then a real dataset readiness report. Then **Fable session 1** (`prompts/02_FABLE_SESSION_1_DESIGN.txt`). GPT reviews each milestone with `prompts/04_INDEPENDENT_REVIEW.txt`; `docs/GPT_SUMMARY.md` is its briefing.
+`docs/ROADMAP.md` §2, step 2: the historical backfill, then corporate actions. No Fable session until `DATA_READINESS.md` is refreshed after the backfill.

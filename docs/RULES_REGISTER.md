@@ -3,7 +3,7 @@
 > **Active scope (4 Nov 2026):** NSE/BSE cash equities only, with read-only Kite data. MTF, borrowing and derivatives are removed, and the engine has no MTF product. Every paper proposal must pass this engine (`research.paper_proposal`). Without a dated security snapshot it abstains with `EXCHANGE_RULES_NOT_CHECKED`.
 
 
-Checked: 4 November 2026. Code: `src/marketlab/rules/`. Tests: `tests/`.
+Checked: 4 November 2026; Muhurat, STT basis, DP and corporate-action sources added 5 November 2026. Code: `src/marketlab/rules/`. Tests: `tests/`.
 
 Every rule below is encoded in the rules engine with a source ID and a status. The engine (`evaluate_order`) runs all checks and returns every PASS/WARN/BLOCK with its reason code, so a rejection can always be explained from recorded values.
 
@@ -46,7 +46,7 @@ What price itself changes:
 | 2026 trading holidays | 26 Jan, 3 Mar, 26 Mar, 31 Mar, 3 Apr, 14 Apr, 1 May, 28 May, 26 Jun, 14 Sep, 2 Oct, 20 Oct, 10 Nov, 24 Nov, 25 Dec | 2026 | PRIMARY | NSE/CMTR/73927 §2.1 | `MARKET_HOLIDAY` |
 | Ad hoc closure | 15 Jan 2026 (trading and settlement holiday) | 2026 | SECONDARY | NSE circular title via mirror | Loaded; read NSE original |
 | 2026 settlement-only holidays (exchange open) | 19 Feb, 19 Mar, 1 Apr, 26 Aug | 2026 | PRIMARY | NCL/CMPT/71904 | BTST blocked on these days |
-| Muhurat session | Sunday 8 Nov 2026; timings "to be notified" | 2026 | PRIMARY (date) / UNKNOWN (times) | NSE/CMTR/73927 | `SESSION_UNKNOWN` until the timetable is loaded |
+| Muhurat session | Sunday 8 Nov 2026: pre-open 14:05–14:10 limit+market, 14:10–14:15 limit only (random close in the last 2 min), matching/buffer to 14:20; normal market 14:20–15:30 (15:15 for CAS stocks); CAS 15:15–15:35; post-close 15:50–16:00. Trading day with settlement obligations; settles 9 Nov (M 2026211); 8 Nov stays a settlement holiday | 2026 | PRIMARY | NSE/CMTR/76941, NCL/CMPT/77037 | Own timetable (`SPECIAL_TIMETABLES`); MIS blocked (`MIS_CUTOFF_UNKNOWN`) until Zerodha's square-off time is loaded; excluded from the 246 regular sessions used for annualisation |
 | Years outside 2026; the BSE calendar | Not loaded | — | UNKNOWN | — | Every check on those dates blocks (`SESSION_UNKNOWN`) |
 
 Replay over history needs the historical holiday and settlement calendars loaded first. The engine refuses to guess them.
@@ -71,7 +71,7 @@ Other session rules:
 
 - **CAS price band.** ±3% of the CAS reference price (the VWAP from 15:00 to 15:15, or the LTP, or the previous close). The engine intersects this with the day's band.
 - **CAS order carry-over.** Unexecuted continuous-session limit orders carry into CAS. SL orders, icebergs and orders outside the CAS band do not.
-- **Excluded sessions.** Special pre-open (IPO or relisting day), periodic call auctions for illiquid stocks, T+0 series, block windows and Muhurat are outside scope. The engine blocks them.
+- **Excluded sessions.** Special pre-open (IPO or relisting day), periodic call auctions for illiquid stocks, T+0 series and block windows are outside scope; the engine blocks them. Muhurat 2026 uses its own loaded table; any other special session without a table raises `RuleUnknown`.
 - **Policy: no market orders in auctions.** Market orders are not allowed in pre-open or CAS (`POLICY_LIMIT_ONLY_IN_AUCTION`). There is no same-day LTP to base market protection on.
 
 ## 3. Series and groups (settlement type)
@@ -173,16 +173,18 @@ Out of scope. The user removed MTF on 4 Nov 2026. The previous MTF rules and the
 | Component | Delivery (CNC) | Intraday (MIS) | Status |
 | --- | --- | --- | --- |
 | Brokerage | ₹0 | 0.03% or ₹20 per executed order, whichever is lower | BROKER_OFFICIAL |
-| STT | 0.1% on buy and sell | 0.025% on sell | BROKER_OFFICIAL |
+| STT | 0.1% on buy and sell | 0.025% on sell | BROKER_OFFICIAL (rates); basis ASSUMPTION, below |
 | Exchange transaction | NSE 0.00307%. BSE 0.00375% (A, B and others); **0.1% for X, XT, Z, ZP**; 1% for SS, ST; 0.00275% for M, MT, TS, MS | same | BROKER_OFFICIAL |
 | SEBI fee | ₹10 per crore | same | BROKER_OFFICIAL |
 | Stamp duty (buy side only) | 0.015% | 0.003% | BROKER_OFFICIAL |
 | NSE IPFT | ₹0.01 per crore + GST | same | BROKER_OFFICIAL |
 | GST | 18% of (brokerage + exchange transaction + SEBI fee + IPFT) | same | BROKER_OFFICIAL |
-| DP charge | ₹15.34 incl. GST per scrip on sell (once per ISIN per day) | none | BROKER_OFFICIAL (per-day: ASSUMPTION) |
+| DP charge | ₹15.34 incl. GST (male primary holder; ₹15.05 female) once per scrip per sell day, irrespective of quantity; posted to the **funds statement**, not the contract note | none | BROKER_OFFICIAL (ZERODHA/DP-CHARGES) |
 | Debit-balance surcharge | +₹20 per executed order | | UNKNOWN |
 
-Rounding (ASSUMPTION): each component is rounded to the paisa, half-up. GST is computed on the unrounded base. This must be reconciled with real contract notes.
+**STT basis (ASSUMPTION until reconciled with a real contract note).** STT is computed per exchange, ISIN, trade date, trade kind and side: aggregate value ÷ quantity rounded to the paisa, STT on that, rounded to the nearest rupee (50 paise and above up). Zerodha documents the rupee rounding (ZERODHA/STT-ROUNDING) and its three worked examples (₹53, ₹50, ₹13) are reproduced in tests; the aggregation level comes from the 2004 draft STT rules (STT-RULES-2004-DRAFT, third-party copy); NSE/INSP/45900 shows contract-note STT is an integer field. Implemented in `rules.charges.day_charges`; a single-order estimate (`costs.charges`) treats the order as the only fill of its scrip-day.
+
+**Other rounding (ASSUMPTION).** Brokerage, exchange, SEBI, IPFT and GST per executed order, rounded to the paisa half-up, GST on the unrounded base. **Stamp-duty allocation is UNRESOLVED** (per-order paisa assumed). DP is reconciled against the funds statement (`reconcile_dp`), never inferred from contract notes. Break-even percentages computed before 5 Nov 2026 used per-order paisa STT and remain estimates.
 
 The schedule has no published effective dates. Using it for past dates sets `counterfactual=True`.
 
@@ -207,14 +209,14 @@ Worked examples tested in `tests/test_charges_broker.py`:
 
 ## 10. Open items (unknown, conflicting or account-specific)
 
-1. **Unloaded calendars.** BSE 2026 and all 2027 holiday and settlement calendars. Historical calendars for replay. The Muhurat timetable for 8 Nov 2026.
+1. **Unloaded calendars.** BSE 2026 and all 2027 holiday and settlement calendars; historical calendars for replay. (Muhurat 8 Nov 2026 loaded on 5 Nov 2026.) Zerodha's MIS square-off time for Muhurat.
 2. **15 Jan 2026 holiday.** Read the NSE original; currently seen only through a mirror's circular title.
 3. **T2T next-day sale before demat credit.** Zerodha articles conflict. Verify on the account.
 4. **ASM stage margins.** Read the NSE ASM framework annexure itself; we have only mirror summaries.
 5. **BSE group definitions** (A, B, X, Z, ZP, P) and BSE price-band and tick rules. Read BSE's own notices.
 6. **MIS cut-off before 3 Aug 2026** (15:20 or 15:25), needed for any intraday replay.
 7. *(MTF interest items: no longer applicable; MTF removed.)*
-8. **Contract-note rounding** of STT, stamp duty and GST, and whether DP is charged per day or per transaction.
+8. **Contract-note reconciliation** of the STT aggregation basis, stamp-duty allocation and GST rounding against one real contract note; DP against the funds statement (DP basis itself is now BROKER_OFFICIAL: once per scrip per sell day).
 9. **Debit-balance ₹20 surcharge** (applies if the account goes into a debit balance).
 10. **Static IP start date conflict** (2025 vs 2026). Moot today, but recorded.
 11. **Kite's "auto" protection band** (−1). Undocumented, so our policy forbids it.
@@ -225,8 +227,8 @@ Worked examples tested in `tests/test_charges_broker.py`:
 
 ## 11. Source documents read
 
-Primary: NSE/CMTR/73927 (consolidated, 28 Apr 2026), NSE/CMTR/67133, NSE/SURV/71526, NSE ESM FAQ v1.1, NSE/SURV/75652, NSE/CMTR/68802, SEBI CAS circular (16 Jan 2026, via NSE/CMTR/72394), NSE/CMTR/73362, NSE/CMTR/74969, NCL/CMPT/71904.
+Primary: NSE/CMTR/73927 (consolidated, 28 Apr 2026), NSE/CMTR/67133, NSE/SURV/71526, NSE ESM FAQ v1.1, NSE/SURV/75652, NSE/CMTR/68802, SEBI CAS circular (16 Jan 2026, via NSE/CMTR/72394), NSE/CMTR/73362, NSE/CMTR/74969, NCL/CMPT/71904, NSE/CMTR/76941 (Muhurat 2026), NCL/CMPT/77037 (Muhurat settlement), NSE/INSP/45900 (contract-note fields).
 
-Broker official: Zerodha charges, MTF FAQ, MTF funds statement entries, CAS article, MIS-blocks article, surveillance-indicators article, GSM stage-2 article, T2T article, RMS XT article, short-delivery article, static-IP article, Kite API FAQ, Kite orders docs, Kite rate-limit docs.
+Broker official: Zerodha STT and DP articles, Kite corporate-action adjustment article and forum answer (5 Nov 2026), Kite exceptions page, Zerodha charges, MTF FAQ, MTF funds statement entries, CAS article, MIS-blocks article, surveillance-indicators article, GSM stage-2 article, T2T article, RMS XT article, short-delivery article, static-IP article, Kite API FAQ, Kite orders docs, Kite rate-limit docs.
 
 The full registry, with URLs and check dates, is in `src/marketlab/rules/provenance.py`. Downloaded originals were used only as read-only reference and are not stored in the repository.

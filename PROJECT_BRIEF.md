@@ -2,7 +2,7 @@
 
 The goal is a part-time, evidence-driven research and eventual paper portfolio system. It should study prices, financial statements, company events and relevant news; propose integer-share allocations across distinct horizons; retain the reasons for every proposal; and explain recorded numbers in plain language without a runtime LLM.
 
-The final system is not built yet. This reset provides the data boundary, evidence store, diagnostic backtests, forecast contract, conservative paper sizing and local status page on which to build it.
+The final system is not built yet. Milestone 1 (5 Nov 2026) provides the data boundary, evidence store, official exchange-file collection, daily rule inputs, a calendar-driven scheduler, a private phone app with the official Kite login, deployment files, diagnostic backtests, a forecast contract and conservative paper sizing.
 
 ## Decisions made by the user
 
@@ -11,8 +11,9 @@ The final system is not built yet. This reset provides the data boundary, eviden
 - Connect Kite for data while keeping all real buys and sells disabled.
 - Research intraday opportunities and longer-horizon portfolios.
 - Claude is the implementation owner. GPT reviews, searches and plans. Fable is used for exactly two heavy-reasoning sessions: research design freeze, then evidence audit (docs/ROADMAP.md section 3).
-- This Windows laptop is the server until the project is complete; a paid server comes later.
-- Kite app credentials are stored privately on the laptop (data/private/.env). The broker password is never stored.
+- Revised 4 Nov 2026: run on one small private Linux server (about US$12/month) with an installable private phone app over Tailscale; the laptop is used until the server exists. Kite (₹500/month) is already paid; new recurring services need a stated purpose and budget.
+- Initial simulated capital ₹10,000. Execution is simulated only; no live-mode toggle. A future live system would need its own explicit project decision.
+- Kite app credentials are stored privately on the machine that uses them (`.env`, user-only). The broker password, PIN and TOTP seed are never stored, and the daily Zerodha login is always done by the owner.
 
 ## Corrected objective
 

@@ -28,9 +28,20 @@ The cash-only rules engine and metrics library were ported back into the active 
 | R03 netted receipts spendable | Diagnostic simulator keeps receipts pending. The ledger is not active, so this remains open for the future cash paper account (milestone F) | — |
 | R04, R05, R08 | Not applicable (MTF removed) | — |
 | R06 same-day CNC round trip | Diagnostic simulator blocks it (`SAME_DAY_DELIVERY_NETTING_UNSUPPORTED`); the engine warns `INTRADAY_REVERSAL_OF_DELIVERY`. Intraday reclassification is open for milestone F | existing tests |
-| R07 partial split mutation | Ledger not active; no split path exists. Must be atomic when corporate actions are built (milestone C) | — |
+| R07 partial split mutation | Ledger not active. Since 5 Nov 2026 `corporate_actions.py` derives adjusted series and position effects as pure functions (no mutation, double application refused). Atomic application in the paper ledger remains milestone F | `test_corporate_actions.py` |
 | R09 PBO tie optimism | **Fixed**: midranks for out-of-sample ties | `test_r09_pbo_midranks_ties_instead_of_ranking_them_as_wins` (review's example → PBO 0.5) |
 | R10 Budget Sunday | **Fixed**: 1 Feb 2026 is a weekend trading day at standard timings, T+1 settlement on 2 Feb (NSE/CMTR/72349, NCL/CMPT/72384); NSE 2026 = 246 sessions | `test_r10_*` (3 tests) |
+
+## Review of 3513d33 (GPT, 4 Nov 2026): section 3 of the consolidated handoff
+
+| Finding | Status (5 Nov 2026) | Commit | Evidence |
+| --- | --- | --- | --- |
+| 1. Snapshot chronology: dedup decided the latest state; yesterday's trades shown as today's; missing became zero | **Fixed.** Latest eligible receipt + completed batch decide the state; first-known time kept separate; per-section OK/STALE/UNAVAILABLE/MALFORMED/MISSING; trade book attributed to a session only after its open; unknown numbers stay unknown | `2d53906` | `test_snapshot_chronology.py` (A→B→A, missing kind, incomplete batch, no-trade day, pre-open book, legacy migration) |
+| 2. Time and fee inputs: incoherent decision/submission time; caller-supplied BSE fee group | **Fixed.** Inputs known by decision time, freshness re-checked at submission, >120 s → REVALIDATION_REQUIRED; BSE group from the snapshot series; backtest group only from dataset metadata | `1472281` | `test_costs_and_decision_time.py` |
+| 3. Authentication/errors | **Fixed.** Single-use, hashed, 10-minute state through `redirect_params`; exact callback path; finite read deadline (90 s total) and 5 s idle connection timeout; mandatory account check; enumerated error labels; env allowlist with accurate refusal wording; next-06:00 expiry fix; research layer imports no broker client | `e4544e1`, `b0f478c` | `test_login_flow.py`, `test_kite_login.py`, `test_webapp.py` |
+| 4. Corporate actions: Kite history already adjusted | **Foundation built, history missing.** Provider/exchange/derived series separated with vintages; double adjustment refused; quantity, entitlement and dividend-payment timing modelled; provider-vs-exchange reconciliation function. Representative real cases not reconciled yet (no official action history collected) | `f431de9` | `test_corporate_actions.py` |
+| 5. Costs: STT rounding, stamp, DP | **Basis implemented, reconciliation pending.** Day-level STT per security/side rounded to the rupee (Zerodha examples reproduced); stamp allocation explicitly UNRESOLVED; DP reconciled from the funds statement. Needs one real contract note and funds statement | `1472281` | `test_costs_and_decision_time.py` |
+| Calendars: Muhurat and settlement circulars | **Fixed.** CMTR76941 session table and CMPT77037 settlement encoded; NSE 2026 trading and settlement holidays agree with NSE's APIs | `e605514`, `d7383b4` | `test_muhurat_2026.py`, `test_public_data.py` |
 
 ## What changed
 
@@ -51,6 +62,6 @@ There is no trained model or autonomous trading strategy. A simple baseline is k
 
 ## Still not independently demonstrated
 
-Real Kite authentication and response compatibility on this user's account; Windows ACL/setup behavior; live official feed accessibility; a deployed VPS; real historical strategy performance; full Indian-market calendars/restrictions/corporate actions; complete account reconciliation; multi-asset coordination; statistical forecasting or calibrated alpha.
+A deployed VPS and the phone login through Tailscale (prepared, not run); reconciliation with a real contract note; official corporate-action history; real historical strategy performance; full Indian-market calendars/restrictions/corporate actions; complete account reconciliation; multi-asset coordination; statistical forecasting or calibrated alpha.
 
 The test report in HANDOFF.md applies to the active reset only. The old 211 tests remain in the archive for historical reference and are not silently counted as tests of this new package.

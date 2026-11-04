@@ -1,0 +1,24 @@
+Milestone 1 validation record, 5 Nov 2026, Windows 11, Python 3.13.7. Pass/fail only; no account data.
+
+Targeted test files run after the change they cover (final runs all PASSED):
+  test_snapshot_chronology, test_login_flow, test_kite_login, test_costs_and_decision_time, test_research,
+  test_boundaries, test_charges_broker, test_properties_provenance, test_metrics, test_muhurat_2026,
+  test_calendar_sessions, test_engine, test_corporate_actions, test_integration, test_public_data,
+  test_service, test_webapp
+New tests: 148 in 8 files. Collected in total: 435. Unchanged suites were not re-run for a count.
+Found and fixed: timing-dependent test_idle_connection_does_not_block_the_catcher (commit d939cb0).
+
+Real data, read-only:
+  fetch-public 2026-11-04 (13 sources) + 2026-10-30 bhavcopy + clearing holidays + index closes ... PASS (all STORED, schema OK)
+  build-master 2026-11-05 ... PASS (2,627 NSE / 5,044 BSE listings; 0 ISIN conflicts)
+  snapshot 2026-11-05 INFY / 21STCENMGM / BLUECHIP / MILTON ... PASS (series changes picked up; 1 unknown symbol blocked)
+  engine on real snapshots ... PASS (GSM-2 fresh buy blocked; ESM-1 BE delivery accepted with warning)
+  verify-calendar 2026 ... PASS (trading 16/16, settlement 20/20 agree with NSE APIs)
+  Kite collect (one batch) ... PASS (COLLECTED; holdings/positions/funds OK; pre-open trade book SESSION_UNKNOWN)
+  run --once ... PASS (state RUNNING)
+  app on 127.0.0.1 (status, shell, manifest, icons, worker) ... PASS
+  SQLite backup -> tar -> restore -> integrity_check (evidence, catalog) ... PASS
+  deploy/*.sh sh -n ... PASS
+
+NOT RUN: server provisioning, Tailscale/phone login, age encryption, contract-note reconciliation,
+corporate-action reconciliation, any order action (none exists).

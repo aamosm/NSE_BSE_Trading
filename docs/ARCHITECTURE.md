@@ -2,20 +2,30 @@
 
 The runtime is deliberately small enough to audit. Most of the complexity belongs in data correctness, model validation and risk-aware allocation, not a large service fleet.
 
-    src/marketlab/kite.py         fixed-host, read-only transport
-    src/marketlab/store.py        original observations, receipts, as-of queries, backup
-    src/marketlab/news.py         bounded RSS/Atom evidence ingestion
-    src/marketlab/cli.py          login, collection, exports and offline commands
-    src/marketlab/audit.py        dataset provenance/missingness checks
-    src/marketlab/costs.py        explicit cash-equity cost estimates
-    src/marketlab/backtest.py     diagnostic controls and chronological fold ranges
-    src/marketlab/experiments.py  started/completed/failed research records
-    src/marketlab/research.py     forecast contract, one-entry paper sizing and wording
-    src/marketlab/dashboard.py    local read-only status display
-    src/marketlab/rules/          cash-equity exchange/broker rules engine (calendars, sessions, ticks, bands,
-                                  T2T series, surveillance, Kite order constraints, cited fee schedule); every
-                                  paper proposal passes it (research.exchange_rules_decision)
-    src/marketlab/metrics/        returns, risk, PSR/DSR/PBO selection statistics, trade and cost metrics
+    src/marketlab/kite.py             fixed-host, read-only transport (GET allowlist + token exchange)
+    src/marketlab/login.py            official Kite login: state, callback checks, account check, session
+    src/marketlab/store.py            append-only evidence: first-known time, every receipt, batches
+    src/marketlab/account.py          actual-account view from one completed batch; unknowns explicit
+    src/marketlab/sources.py          official exchange source register and polite collector
+    src/marketlab/master.py           security master and daily InstrumentSnapshot builder with provenance
+    src/marketlab/corporate_actions.py provider / exchange / derived price series; action effects
+    src/marketlab/service.py          calendar-driven scheduler, health states, breakers, alerts
+    src/marketlab/webapp.py           private phone app server and login callback (loopback only)
+    src/marketlab/webassets.py        PWA shell, worker, manifest, icons (no third-party code)
+    src/marketlab/news.py             bounded RSS/Atom evidence ingestion
+    src/marketlab/cli.py              commands
+    src/marketlab/audit.py            dataset provenance/missingness checks
+    src/marketlab/costs.py            single-order cost estimate over rules.charges
+    src/marketlab/backtest.py         diagnostic controls and chronological fold ranges
+    src/marketlab/experiments.py      started/completed/failed research records
+    src/marketlab/research.py         forecast contract, one-entry paper sizing and wording
+    src/marketlab/rules/              cash-equity exchange/broker rules engine (calendars incl. special sessions,
+                                      sessions, ticks, bands, T2T series, surveillance, Kite order constraints,
+                                      cited fee schedule with day-level STT); every paper proposal passes it
+    src/marketlab/metrics/            returns, risk, PSR/DSR/PBO selection statistics, trade and cost metrics
+    deploy/                           systemd units, provisioning, pinned release install/rollback, backups
+
+Processes on the server: `marketlab-scheduler` (collection and daily inputs) and `marketlab-web` (phone app), both as user `marketlab`, both bound to loopback or outbound only. The phone reaches the app through Tailscale Serve. Bulk exchange files (`market/raw`) and their catalog are kept apart from private account evidence (`private/evidence.sqlite3`).
 
 ## What owns each decision
 
