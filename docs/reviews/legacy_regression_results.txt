@@ -1,0 +1,95 @@
+FFFFFFFFFF                                                               [100%]
+=================================== FAILURES ===================================
+__________ test_r01_replay_preserves_and_rejects_stale_snapshot_date ___________
+../test_review_regressions.py:58: in test_r01_replay_preserves_and_rejects_stale_snapshot_date
+    assert result.records[-1].outcome == "REJECTED", result.records[-1]
+E   AssertionError: ReplayRecord(event_id='stale', kind='order', outcome='APPLIED', codes=(), explanation='ACCEPTED (session: CONTINUOUS)
+E       Effective limit price: 500.00')
+E   assert 'APPLIED' == 'REJECTED'
+E     
+E     - REJECTED
+E     + APPLIED
+_____________ test_r02_missing_security_status_is_unknown_not_safe _____________
+../test_review_regressions.py:67: in test_r02_missing_security_status_is_unknown_not_safe
+    assert result.records[-1].outcome == "REJECTED", result.records[-1]
+E   AssertionError: ReplayRecord(event_id='unknown', kind='order', outcome='APPLIED', codes=(), explanation='ACCEPTED (session: CONTINUOUS)
+E       Effective limit price: 500.00')
+E   assert 'APPLIED' == 'REJECTED'
+E     
+E     - REJECTED
+E     + APPLIED
+________ test_r03_mtf_sale_receipt_cannot_fund_second_same_day_purchase ________
+../test_review_regressions.py:81: in test_r03_mtf_sale_receipt_cannot_fund_second_same_day_purchase
+    assert result.records[-1].outcome == "REJECTED", (
+E   AssertionError: (ReplayRecord(event_id='cash_buy_2', kind='order', outcome='APPLIED', codes=(), explanation='ACCEPTED (session: CONTINUOUS)
+E       Effective limit price: 400.00'), Decimal('449.19'), Decimal('449.19'), Decimal('1134.11'))
+E   assert 'APPLIED' == 'REJECTED'
+E     
+E     - REJECTED
+E     + APPLIED
+_____ test_r04_unresolved_margin_shortfall_blocks_new_entry_after_deposit ______
+../test_review_regressions.py:98: in test_r04_unresolved_margin_shortfall_blocks_new_entry_after_deposit
+    assert result.records[-1].outcome == "REJECTED", result.records[-1]
+E   AssertionError: ReplayRecord(event_id='new_entry', kind='order', outcome='APPLIED', codes=(), explanation='ACCEPTED (session: CONTINUOUS)
+E       Effective limit price: 400.00')
+E   assert 'APPLIED' == 'REJECTED'
+E     
+E     - REJECTED
+E     + APPLIED
+___________ test_r05_mtf_unpledge_fee_counts_distinct_purchase_days ____________
+../test_review_regressions.py:106: in test_r05_mtf_unpledge_fee_counts_distinct_purchase_days
+    assert b.expenses()["unpledge"] == D("30.00"), b.expenses()
+E   AssertionError: {'brokerage': Decimal('12.00'), 'dp': Decimal('15.34'), 'exchange_txn': Decimal('0.12'), 'gst': Decimal('10.29'), ...}
+E   assert Decimal('15.00') == Decimal('30.00')
+E    +  where Decimal('30.00') = D('30.00')
+______ test_r06_same_day_cnc_round_trip_is_blocked_or_charged_as_intraday ______
+../test_review_regressions.py:119: in test_r06_same_day_cnc_round_trip_is_blocked_or_charged_as_intraday
+    assert expenses.get("brokerage", D("0")) == D("0.60"), expenses
+E   AssertionError: {'dp': Decimal('15.34'), 'exchange_txn': Decimal('0.06'), 'gst': Decimal('0.02'), 'stamp': Decimal('0.15'), ...}
+E   assert Decimal('0') == Decimal('0.60')
+E    +  where Decimal('0') = <built-in method get of dict object at 0x7f7a27a182c0>('brokerage', Decimal('0'))
+E    +    where <built-in method get of dict object at 0x7f7a27a182c0> = {'dp': Decimal('15.34'), 'exchange_txn': Decimal('0.06'), 'gst': Decimal('0.02'), 'stamp': Decimal('0.15'), ...}.get
+E    +    and   Decimal('0') = D('0')
+E    +  and   Decimal('0.60') = D('0.60')
+_______ test_r07_rejected_fractional_split_does_not_mutate_earlier_lots ________
+../test_review_regressions.py:131: in test_r07_rejected_fractional_split_does_not_mutate_earlier_lots
+    assert b.all_lots() == before, [(x.lot_id, x.qty) for x in b.all_lots()]
+E   AssertionError: [('L0001', 1), ('L0002', 3)]
+E   assert [Lot(lot_id='...e_group=None)] == [Lot(lot_id='...e_group=None)]
+E     
+E     At index 0 diff: Lot(lot_id='L0001', isin='INE000R00010', product=<Product.CNC: 'CNC'>, exchange=<Exchange.NSE: 'NSE'>, trade_date=datetime.date(2026, 11, 4), settle_date=datetime.date(2026, 11, 5), qty=1, orig_qty=1, cost=Decimal('200.00'), buy_charges=Decimal('0.24'), funded=Decimal('0'), initial_margin=Decimal('0'), interest=Decimal('0'), margin_pct=None, pledge=<PledgeState.NOT_APPLICABLE: 'NOT_APPLICABLE'>, status=<LotStatus.OPEN: 'OPEN'>, bse_group=None) != Lot(lot_id='L0001', isin='INE000R00010', product=<Product.CNC: 'CNC'>, exchange=<Exchange.NSE: 'NSE'>, trade...
+E     
+E     ...Full output truncated, use '-vv' to show
+________________ test_r08_conversion_fee_is_in_closed_trade_pnl ________________
+../test_review_regressions.py:142: in test_r08_conversion_fee_is_in_closed_trade_pnl
+    assert closed_trade_pnl == actual_account_pnl, (closed_trade_pnl, actual_account_pnl)
+E   AssertionError: (Decimal('-84.0600'), Decimal('-101.76'))
+E   assert Decimal('-84.0600') == Decimal('-101.76')
+__________ test_r09_pbo_tied_oos_winners_are_not_ranked_above_median ___________
+../test_review_regressions.py:150: in test_r09_pbo_tied_oos_winners_are_not_ranked_above_median
+    assert result.pbo == .5, result
+E   AssertionError: PBOResult(pbo=0.0, logits=(1.0986122886681098, 1.0986122886681098), n_splits=2, n_trials=3)
+E   assert 0.0 == 0.5
+E    +  where 0.0 = PBOResult(pbo=0.0, logits=(1.0986122886681098, 1.0986122886681098), n_splits=2, n_trials=3).pbo
+__________________ test_r10_budget_sunday_is_a_known_session ___________________
+../test_review_regressions.py:156: in test_r10_budget_sunday_is_a_known_session
+    assert cal.is_trading_day(Exchange.NSE, day) or cal.is_special_session(Exchange.NSE, day)
+E   AssertionError: assert (False or False)
+E    +  where False = is_trading_day(<Exchange.NSE: 'NSE'>, datetime.date(2026, 2, 1))
+E    +    where is_trading_day = <marketlab.rules.calendar.MarketCalendar object at 0x7f7a27ba9580>.is_trading_day
+E    +    and   <Exchange.NSE: 'NSE'> = Exchange.NSE
+E    +  and   False = is_special_session(<Exchange.NSE: 'NSE'>, datetime.date(2026, 2, 1))
+E    +    where is_special_session = <marketlab.rules.calendar.MarketCalendar object at 0x7f7a27ba9580>.is_special_session
+E    +    and   <Exchange.NSE: 'NSE'> = Exchange.NSE
+=========================== short test summary info ============================
+FAILED ../test_review_regressions.py::test_r01_replay_preserves_and_rejects_stale_snapshot_date
+FAILED ../test_review_regressions.py::test_r02_missing_security_status_is_unknown_not_safe
+FAILED ../test_review_regressions.py::test_r03_mtf_sale_receipt_cannot_fund_second_same_day_purchase
+FAILED ../test_review_regressions.py::test_r04_unresolved_margin_shortfall_blocks_new_entry_after_deposit
+FAILED ../test_review_regressions.py::test_r05_mtf_unpledge_fee_counts_distinct_purchase_days
+FAILED ../test_review_regressions.py::test_r06_same_day_cnc_round_trip_is_blocked_or_charged_as_intraday
+FAILED ../test_review_regressions.py::test_r07_rejected_fractional_split_does_not_mutate_earlier_lots
+FAILED ../test_review_regressions.py::test_r08_conversion_fee_is_in_closed_trade_pnl
+FAILED ../test_review_regressions.py::test_r09_pbo_tied_oos_winners_are_not_ranked_above_median
+FAILED ../test_review_regressions.py::test_r10_budget_sunday_is_a_known_session
+10 failed in 0.19s

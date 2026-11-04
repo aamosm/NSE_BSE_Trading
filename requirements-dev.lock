@@ -1,5 +1,5 @@
-# Exact dev/test dependency set verified on 2026-11-04 (Python 3.13.7, Windows 11).
-# Runtime package marketlab has no third-party dependencies yet.
+# Inherited upstream pins; reset suite verified on 2026-11-04 with Linux Python 3.12.14.
+# Active runtime package marketlab has no third-party dependencies.
 colorama==0.4.6
 hypothesis==6.170.14
 iniconfig==2.3.1

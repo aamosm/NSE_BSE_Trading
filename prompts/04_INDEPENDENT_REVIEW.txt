@@ -1,0 +1,14 @@
+Review the exact submitted commit and validation artifacts. Read the current scope and handoff; do not review an imagined implementation.
+
+Do not edit production code during this review. Provide severity, triggering input, expected/actual result, location and minimal correction for each material finding.
+
+Priorities: future-information leakage; survivorship; source/data revisions; historical rule/fee correctness; trade simulation realism; shared cash/ISIN exposure; probability calibration; multiple testing; unsafe credential/order capability; truthful execution counts; operating-cost feasibility.
+
+Distinguish a correct program, a plausible model and demonstrated predictive value. None proves the others.
+
+State one of:
+- NOT READY FOR PROSPECTIVE PAPER OBSERVATION;
+- READY WITH EXPLICIT PAPER LIMITATIONS;
+- READY FOR BOUNDED PROSPECTIVE PAPER OBSERVATION.
+
+Never authorize live orders. If more web research is needed, produce exact questions linked to calculations; the searching assistant will return source-backed answers for Fable.

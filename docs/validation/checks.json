@@ -1,0 +1,41 @@
+{
+  "python": "3.12.14",
+  "platform": "Linux",
+  "results": [
+    {
+      "check": "tests",
+      "exit_code": 0,
+      "output": "tests.txt"
+    },
+    {
+      "check": "compile",
+      "exit_code": 0,
+      "output": "compile.txt"
+    },
+    {
+      "check": "demo",
+      "exit_code": 0,
+      "output": "demo.txt"
+    },
+    {
+      "check": "news_fixture",
+      "exit_code": 0,
+      "output": "news_fixture.txt"
+    },
+    {
+      "check": "cli_help",
+      "exit_code": 0,
+      "output": "cli_help.txt"
+    },
+    {
+      "check": "audit_demo",
+      "exit_code": 0,
+      "output": "audit_demo.txt"
+    }
+  ],
+  "real_kite_authentication": "NOT_RUN",
+  "real_market_strategy_backtests": "NOT_RUN",
+  "windows_setup": "NOT_RUN",
+  "vps_deployment": "NOT_RUN",
+  "visual_browser_check": "NOT_RUN - browser binary absent; local HTTP checks passed separately"
+}

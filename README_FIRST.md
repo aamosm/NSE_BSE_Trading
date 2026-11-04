@@ -1,30 +1,48 @@
 # Start here
 
-This kit is a build specification, phased instructions and planned test registries. It is not an executable trading app. No broker is connected, no funds are committed, no simulations have run and no performance is claimed.
+**Research and data collection only. This application cannot place, modify or cancel broker orders.**
 
-1. Read NSE_BSE_Build_Guide.md.
-2. Open this extracted folder in VS Code.
-3. Sign in to the official Claude Code extension using your existing subscription.
-4. Paste prompts/00_START_HERE.txt into the coding conversation.
-5. Complete Phase 0 only, then have GPT review the handoff using prompts/REVIEW.txt.
-6. Continue one phase at a time using prompts/PHASE_PROMPTS.md.
+The old project was a rules/accounting simulator, not a finished stock-selection system. This is a scoped cash-only reset from upstream commit 19d12dcac7415b17d3a5192035517ad285f9b389.
 
-Use one implementation owner at a time. Default owner: Claude Code. Default reviewer: GPT. Use a paid Fable review only for a bounded problem that warrants it.
+## What works now
 
-## Contents
+| Capability | Implemented behavior |
+| --- | --- |
+| Kite REST adapter | Narrow read allowlist; login token exchange is the only POST |
+| Data collection | Holdings, positions, today's trades, funds, quotes and daily instrument-master snapshots |
+| Historical candles | Bounded requests, token/symbol/exchange verification, CSV export and explicit metadata gaps |
+| News | Official-host RSS download or saved XML import; timestamped unreviewed evidence |
+| Audit | Append-only SQLite evidence, content deduplication, revisions, quota, consistent backup |
+| External trades | Normalized CSV import as evidence; not yet a reconciled multi-broker ledger |
+| Backtests | Cash/buy-hold/trend comparisons and an intraday-reversal diagnostic; fees, slippage, cash constraints and decision logs |
+| Forecast interface | Distributions, calibration/evidence identifiers, expiry, sample count and validation gate |
+| Paper sizing | Whole shares, cash reserve, stock/sector/sleeve/risk/liquidity/cost constraints |
+| Status page | Mobile-friendly, loopback-only, deterministic wording, no order controls |
 
-- PROJECT_BRIEF.md: the product scope and decisions.
-- AGENTS.md and CLAUDE.md: instructions for coding tools.
-- NSE_BSE_Build_Guide.md: the complete guide, costs and dated primary sources.
-- docs/IMPLEMENTATION_CONTRACT.md: accounting, data, research and execution contracts.
-- docs/VALIDATION_PLAN.md: what the two experiment registries mean.
-- docs/TASK_BOARD.md: ordered milestones.
-- docs/HANDOFF.md: the handoff template.
-- configs/example_policy.json: illustrative paper-only configuration, not implemented controls.
-- experiments/coverage_matrix_1200.json: 1,200 planned functional scenario combinations.
-- experiments/research_trials_1000.json: 1,000 proposed research configurations.
-- prompts/: kickoff, phase, reviewer and failure-analysis prompts.
+Not implemented: production forecasts, full portfolio optimization/rebalancing, autonomous paper-trading loop, exchange-grade fill simulation, full corporate-action/settlement engine, news-to-signal extraction, historical point-in-time universe, WebSocket tick recorder, or live orders.
 
-The registries must be turned into actual fixtures/runs. The kit's packaging checks verify their counts and uniqueness, not trading correctness or investment performance.
+## Run the offline demonstration on Windows
 
-All fees, product terms and model prices are a dated snapshot from 3 November 2026. Verify them before implementation and before activation.
+Extract into a NEW folder; do not overlay it blindly onto the old source tree.
+Open a VS Code terminal in this folder:
+
+    py -3.12 -m venv .venv
+    .\.venv\Scripts\python.exe -m pip install -e .
+    .\.venv\Scripts\python.exe -m pip install -r requirements-dev.lock
+    .\.venv\Scripts\python.exe -m pytest
+    .\.venv\Scripts\python.exe -m marketlab demo
+    .\.venv\Scripts\python.exe -m marketlab dashboard
+
+Open http://127.0.0.1:8765. Compatible Python 3.13 is also acceptable; substitute its launcher selector. The delivered tests were run on Linux Python 3.12.14; Windows setup commands still need local execution.
+
+## Do these next, in order
+
+1. Give Claude this whole folder and prompts/01_CLAUDE_ENGINEERING.txt. It should audit and finish the specified engineering gaps before quantitative work.
+2. Set up Kite read-only collection with docs/KITE_AND_SERVER_SETUP.md. Never paste keys into an AI conversation.
+3. Give Fable the updated repo, docs/RESEARCH_BRIEF.md, docs/FABLE_MATH_SPEC.md, docs/SOURCE_PACK.md and prompts/02_FABLE_QUANT.txt.
+4. After Fable returns code/model specifications, run prompts/03_VALIDATION.txt with a separate testing model, then prompts/04_INDEPENDENT_REVIEW.txt.
+5. Do not turn a passing test suite into permission to trade. This package has no live switch.
+
+docs/reviews/PHASE_0_1_REVIEW.md preserves the previous independent review.
+docs/RESET_REVIEW.md explains which findings were removed from active scope and which controls replaced them.
+archive/phase_0_1 contains every original tracked upstream file, including the old MTF implementation and planned registries. It is not installed or included in active test discovery.

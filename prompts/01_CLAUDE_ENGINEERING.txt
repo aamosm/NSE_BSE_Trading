@@ -1,0 +1,43 @@
+Act as the engineering implementation owner for this cash-only NSE/BSE project. Use the strongest available Claude coding model; the user's requested “Opus 5” is a model preference, not evidence about a particular capability or version.
+
+Read, in order:
+1. AGENTS.md and README_FIRST.md.
+2. PROJECT_BRIEF.md and docs/IMPLEMENTATION_CONTRACT.md.
+3. docs/HANDOFF.md and docs/RESET_REVIEW.md.
+4. docs/RESEARCH_BRIEF.md, docs/SOURCE_PACK.md and docs/FABLE_MATH_SPEC.md.
+5. docs/reviews/PHASE_0_1_REVIEW.md for the mistakes this reset must not repeat.
+
+The user explicitly removed MTF. Do not restore it. The old code and phase guides under archive/phase_0_1 are historical reference, not active instructions.
+
+First run the active tests and synthetic demo yourself. Audit the new code, especially:
+- HTTP allowlist at every transport entry and secret-safe failures;
+- token expiry, bounded history jobs and token/symbol/ISIN mapping;
+- timestamps, revisions, duplicate receipts and failed-experiment retention;
+- single-instrument diagnostic limitations and actual fee assumptions;
+- the forecast gate, integer sizing, caller-provided exposure inputs and missing validation;
+- safe local/dashboard/server instructions.
+
+Preserve and fix every genuine counterexample. Do not merely restate the prior author's test count.
+
+Then implement the next engineering milestone in small reviewable commits:
+A. Versioned security master keyed by ISIN with NSE/BSE listing history, lot sizes and explicit unknown eligibility.
+B. Official trading AND settlement calendar ingestion. Special sessions are separate from weekdays. Add effective-dated security restrictions; unknown required status blocks paper proposals.
+C. Dataset audit and raw/adjusted price separation with explicit corporate actions and original publication timestamps. Do not pretend current membership or current news are historical.
+D. A bounded ingestion job for verified official feeds, with error/staleness status, retries/backoff within rate budgets and original source hashes. The RSS content remains untrusted evidence.
+E. A typed document/extraction interface for financials/events. Offline LLM extraction is optional and has no broker tools; facts need units, period and source spans.
+F. Reconciled cash-only paper account and normalized external-trade imports, with idempotent identity, corrections, opening balances and reservations. Keep broker snapshots separate from reconstructed books.
+G. Integration contracts for Fable's forecasts and a serialized multi-asset paper coordinator. Until validated models exist, remain in observation/abstention mode.
+
+Do not implement an elaborate predictor based on arbitrary news weights. Fable receives the quantitative assignment next. Do not turn the diagnostic moving-average baseline into “the final algorithm.”
+
+Do not purchase services or submit real orders. Let the user perform Kite login; never request their secret in chat, read it for a review bundle, store their password/OTP or automate authentication. Read-only provider connection testing is allowed when the user has locally authenticated.
+
+Before claiming the milestone complete, give:
+- Exact commit and diff summary.
+- Actual tests and commands, passed/failed/skipped counts.
+- Counterexamples found and fixes.
+- Source/data coverage, missing data and licensing limits.
+- Real-data/real-account checks explicitly marked RUN or NOT_RUN.
+- Updated docs/HANDOFF.md and FABLE_HANDOFF.md, including machine-readable schemas and representative synthetic fixtures.
+
+If data or official access is missing, complete independent work and name the exact missing field/source. Do not fabricate data or hide a blocker behind a large passing test count.

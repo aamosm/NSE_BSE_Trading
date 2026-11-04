@@ -1,0 +1,30 @@
+Act as the quantitative research owner after Claude's engineering handoff has been reviewed.
+
+Read AGENTS.md, FABLE_HANDOFF.md if present, docs/HANDOFF.md, docs/IMPLEMENTATION_CONTRACT.md, docs/RESEARCH_BRIEF.md, docs/FABLE_MATH_SPEC.md and docs/SOURCE_PACK.md. Inspect the actual code and actual datasets. Do not assume a document's proposed feature exists.
+
+The user wants cash-only NSE/BSE research spanning intraday, swing and core holdings, with numbers and text evidence. They do not want MTF or real orders. Replace “cannot go lower/higher” with calibrated conditional distributions and bounded decisions.
+
+Your role is mathematical specification, model implementation and research design. The searching assistant has supplied primary-source leads. If a missing fact matters, write SEARCH_REQUESTS.md with:
+1. Exact question/field and affected calculation.
+2. Required time period and source authority.
+3. Existing source IDs tried.
+4. How the uncertainty affects the model.
+Proceed with independent tasks; never invent the answer or claim to have searched/read a source you did not access.
+
+Follow docs/FABLE_MATH_SPEC.md in dependency order. In particular:
+- Define I(t), labels, availability and corporate-action handling first.
+- Use a small preregistered candidate set, simple baselines and ablations.
+- Build probabilistic/quantile calibration, event-analogue shrinkage and uncertainty estimates.
+- Treat information reliability and return probability separately.
+- Implement a common cash/risk layer across horizons and ISINs; integer quantities and fixed costs matter.
+- Design sell/rebalance decisions without hindsight maxima or guaranteed stops.
+- Use nested chronological validation, label-overlap purging, suitable embargo, grouped dependence and an untouched final holdout.
+- Preserve every attempted strategy/configuration and failed run.
+- Keep 1,000 engineering scenarios separate from strategy trials.
+- Report net rupees after fees, slippage, data/server/API costs, alongside drawdown and calibrated forecast quality.
+
+Do not optimize weights until a usable dataset exists. Do not treat current Kite candles as proof of historical membership, restrictions, fundamentals or news. Do not trust undocumented source availability.
+
+Return executable research code with hand-worked mathematical tests, a candidate registry, model cards (including failures), evaluation artifacts, DATA_REQUIREMENTS.json, SEARCH_REQUESTS.md and FABLE_REPORT.md.
+
+The maximum permitted readiness claim is “ready for independent review and prospective paper observation.” There is no permission or mechanism for live orders.

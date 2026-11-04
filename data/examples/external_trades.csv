@@ -1,0 +1,2 @@
+broker,trade_id,executed_at,isin,exchange,side,quantity,price,fees
+SYNTHETIC,SAMPLE_001,2026-11-04T10:00:00+05:30,INE000A00001,NSE,BUY,2,100,1

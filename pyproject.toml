@@ -4,13 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "marketlab"
-version = "0.0.1"
-description = "Personal NSE/BSE research, replay and paper-trading system. Phase 0: market and broker rules engine."
+version = "0.2.0"
+description = "Cash-only NSE/BSE research and read-only Kite data collection"
 requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest==9.2.0", "hypothesis==6.170.14"]
+
+[project.scripts]
+marketlab = "marketlab.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

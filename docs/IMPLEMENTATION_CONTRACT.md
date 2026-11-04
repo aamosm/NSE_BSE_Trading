@@ -1,76 +1,52 @@
-# Implementation contract
+# Active implementation contract
 
-These are required behaviors and proposed interfaces. Exact database names may change through a documented design decision.
+This replaces the archived contract. MTF is removed, and the authorized broker integration is read-only.
 
-## Instrument and time
+## Separation of responsibilities
 
-Security identity is ISIN where applicable; an exchange listing has its own exchange, trading symbol, token and effective dates. Preserve delisted and renamed instruments. Historical membership, trading sessions, restrictions and corporate actions are versioned.
+The collector owns broker credentials and writes observations. Offline researchers read redacted/exported data. Future forecasting workers receive validated features, not tokens. A future paper coordinator may consume signed/versioned forecasts; no broker order gateway is provided.
 
-Each observation has event time, publisher availability time where known, ingestion time, effective interval and revision/source identifiers. Feature queries use an explicit as-of cutoff. Unknown publication times cannot be silently replaced with midnight.
+Kite API tokens may possess broader broker permissions. The read restriction here is enforced by the application's transport allowlist, not by claiming that Kite issued a read-only scope. Someone rewriting code or stealing the token is outside this application guard.
 
-## Cash and financing ledger
+## Data
 
-Use auditable journal entries that balance. Model broker cash, settled/unsettled receivables and payables, holdings at cost, financing liability, accrued interest, fees, realized results, deposits and withdrawals. Keep valuation marks distinct from cash flows. Reconcile tax lots and quantity separately from valuation.
+- Identity: company/security ISIN, with exchange, symbol, token and effective dates on each listing. Kite instrument dumps do not replace the ISIN mapping.
+- Evidence: source, original payload/hash, publication time if known, receipt time, availability time, revision and verification state.
+- Prospective news availability is max(publication, receipt). An old article downloaded today is not evidence the system possessed yesterday.
+- Historical candle exports declare their end-of-bar availability assumption and lack of original-vintage data. Corporate actions, universes, restrictions and historical fees remain unverified until documented.
+- Preserve raw observations. Derived features and labels are versioned artifacts. Reject stale, missing, future or contradictory required inputs.
+- External-trade imports are observations, not proof of portfolio reconciliation. Multi-broker deduplication, corporate actions and opening balances must precede any allocator using those positions.
 
-Report:
+## Forecasts and decisions
 
-- Net liquidation estimate: cash and valued assets minus liabilities, accrued costs and estimated exit costs, clearly labeled.
-- Available cash, reserved cash and broker-reported usable margin separately.
-- Realized/unrealized return; contributions/withdrawals excluded from trading profit.
-- MTF principal and accrued interest per relevant lot/rule.
+Return distributions must name the security, as-of time, expiry, horizon, model/calibration identifiers, sample count and evidence IDs. Use separate models and evaluation for intraday, swing and core horizons. Do not compare a one-day expected return to a one-year return without a common decision formulation.
 
-Define lot matching, rounding, charge aggregation, effective fee dates and corporate-action treatments before implementing. Compare fixtures against primary broker examples and later against actual statements. A balancing journal can still be economically wrong, so independent expected values are required.
+The current sizing function evaluates one new paper entry against caller-supplied existing exposures. It is not a joint portfolio optimizer and does not maintain a portfolio by itself. The coordinator must serialize proposals, update reservations and aggregate both exchanges by ISIN before allowing a second proposal. Missing calibration or validation means abstention.
 
-## MTF lifecycle
+No pricing model may claim certainty of a maximum/minimum. Source verification confidence and forecast probability are different quantities. Explain decisions from recorded fields/reason codes.
 
-Proposed states: proposed, eligibility_checked, order_pending, partially_filled, funded, pledge_pending, pledged, margin_shortfall, exit_pending, partially_closed, converted_to_cash, closed, broker_liquidated and reconciliation_required.
+## Money and research fills
 
-Do not imply every state transition is universal; adapt to the verified broker/account workflow. Preserve transitions and timestamps. A pledge instruction does not prove completion. Missing authorisation or eligibility must be visible.
+Only fully funded, long-only cash-equity research. Intraday cash use is capped at full notional even where a broker might offer more exposure. No overnight short positions or implicit margin.
 
-Required inputs: rate schedule, funded amounts, interest day-count/cutoff rules, account product eligibility, security margin/haircut schedule, cash requirements, pledge rules, fee schedule, settlement calendar and corporate actions. Unknown required live inputs fail the entry check.
+Broker-reported usable margin is not automatically settled cash. A future coordinator must reconcile and distinguish them. Existing financed or derivative positions in a broker snapshot must be surfaced as unsupported exposure, not silently dropped to make the cash-only portfolio appear safe.
 
-Interest fixture expectations must be calculated independently. Include weekends, holidays, multiple buys, partial sales, sale day cutoff, cash conversion, rate changes and small-value rounding. Do not assume historical current MTF availability: tag a current-rule replay of older markets as counterfactual.
+The diagnostic simulator handles one instrument, whole fills, current-fee estimates, adverse slippage and conservative receipt availability. It does not certify historical broker settlement. Unsupported same-day delivery netting is blocked; intraday positions must exit during supplied data or the run fails. No invented final-bar delivery sale.
 
-Maintenance-margin tests include changing security requirements, cash depletion by fees, adverse gaps, unavailable exits and forced broker action. Stop orders are not guaranteed loss limits.
+Before performance certification, replace/extend these assumptions with effective-dated calendars, official security restrictions, corporate-action accounting, matching, rejected/unfilled/partial orders and realistic execution. Netting receivables must never increase spendable cash early.
 
-## Evidence schema
+## Logging and operating limits
 
-Evidence includes source URL/identifier, source type, document hash, publication/ingestion times, subject ISIN, event type, extracted fields, units, source spans, revision link, contradictions and verification status.
+Evidence uses append-only SQLite with WAL and a 256 MiB soft quota checked before inserts. Back up using SQLite backup, not by copying a live database alone. The quota is for one database, not a full-disk guarantee; monitor free disk space externally.
 
-Separate extraction confidence from prediction. Numeric facts require units and period. Missing fields stay null. Financial amounts from PDF tables need checks for consolidated/standalone, quarter/year, sign, currency and magnitude.
+Each backtest records a STARTED event, dataset/code hashes and parameters, followed by COMPLETED or FAILED. A crash leaves STARTED for reconciliation. Result files cannot overwrite existing backtest outputs.
 
-Only schema-valid approved evidence reaches features. New text never grants a capability or changes the instructions of the service.
+Raw broker data and credentials remain private. The dashboard reads only sanitized status/report data and serves on loopback. No API credential entry through the dashboard.
 
-## Forecast and allocation
+The default collector polls every five minutes on weekdays 08:30–16:15 IST. This is a collection window, not a verified trading-session calendar; holiday and special-weekend collection must be scheduled explicitly. No trade relies on this window.
 
-Forecast interface: as-of time, ISIN, horizon, estimated return distribution or clearly labeled score, calibration identifier, sample size, uncertainty, required evidence, expiry, strategy and feature versions.
+## Evaluation
 
-Order proposal: quantity, side, exchange, financing mode, horizon, limit/price conditions, planned review/exit conditions, costs, maximum intended exposure, reason codes and policy version.
+Do not use the archive's planned 1,000/1,200 rows as executed evidence. Separate engineering scenarios from statistical trials. Preserve all failures, compare with cash and implementable passive baselines, use chronological untouched tests, account for selection, and report both absolute rupees and returns after recurring costs.
 
-Risk checks include integer share quantities, available cash, unsettled obligations, concentration, correlated exposures, total borrowed principal, financing costs, expected shortfall/scenario loss, turnover, spread/depth, event risks and freshness. Threshold values come from an explicit configuration; example defaults are not optimized facts.
-
-A no-trade decision is a first-class outcome. Overrides cannot bypass invalid credentials, stale critical inputs, reconciliation errors or unavailable broker permissions. A user-approved risk exception must be bounded, expire and be rechecked.
-
-## Execution and recovery
-
-Use a durable intent identifier and transactionally persisted state before submission. Do not assume the broker supports a guaranteed idempotency key. Correlate tags/IDs where supported, reconcile unknown outcomes and avoid blind retries.
-
-Track requested, acknowledged, partially filled, filled, cancelled, rejected and uncertain states. Broker/exchange updates may duplicate, arrive late or out of order. Fill IDs and cumulative quantities must prevent duplicate accounting.
-
-One active writer submits orders. Use a lease/fencing design and test split-brain/restart behavior. A restarted process reconciles broker state before new orders. Persist cancellation attempts separately from confirmed cancellations.
-
-Read-only broker integration must technically block order methods, not just hide buttons. Separate replay, paper, read-only and live credentials/configurations. No secrets in the phone package.
-
-## Audit and explanatory interface
-
-Every decision links input snapshot IDs, feature values, forecast version, proposed allocation, cost estimate, risk-check outputs, final decision, order/fill IDs and ledger entries. Preserve competing proposals and rejection reason codes.
-
-Provide a deterministic renderer for every reason code with unit-aware values and explicit unknowns. Never present a score as a probability without a calibration record.
-
-Separate immutable business events from rotating diagnostic logs. Include redaction tests, backup restoration tests and storage quotas. A failure review bundle contains a minimal synthetic/redacted replay, expected/actual behavior, versions and relevant logs.
-
-## Operations
-
-Run optional research with a worker/time/memory budget separate from operational risk processing. At an AI spending limit stop new optional requests, not broker reconciliation. Alert for stale data, expired auth, margin headroom, unknown orders, ledger disagreement, worker failure and backup failure.
-
-Emergency controls are distinct: pause new entries; request cancellation of pending entries; manage existing exposure through reviewed policy; open the broker's own app. Never describe a kill switch as guaranteed immediate liquidation.
+Real-data strategy validation, authentication against the user's account, server deployment and prospective paper observation are NOT performed by this reset.

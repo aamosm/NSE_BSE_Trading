@@ -1,0 +1,95 @@
+# Current handoff
+
+Status: Phase 0 deliverables are complete. Phase 1 (cash and MTF accounting) is implemented and was run on synthetic data. Neither phase has had the external GPT review yet. Phase 1 was started before that review because the user asked to "run a system". The review should cover both.
+
+Do not place tokens, account identifiers or raw private statements in this handoff.
+
+- **Phase and scope:**
+  - The user asked to get the rules right before Zerodha integration, then to "get all metrics down, run a system, clone and study trading bots, follow the guide".
+  - Delivered:
+    - the Phase 0 documents;
+    - a preregistered metrics register and library;
+    - a review of 20 reference projects;
+    - the Phase 1 ledger with a replay that runs orders through the rules engine.
+  - No broker connection exists.
+- **Implementation owner:** Claude Code.
+- **Commits:** `97049ca` (rules engine), `5f4c1a4` (metrics, reference review, Phase 0 docs), plus the Phase 1 commit that contains this handoff. Branch `main`, local, no remote.
+- **Files changed and why:**
+  - `src/marketlab/metrics/`: return, risk, selection-bias (PSR, DSR, MinTRL, CSCV PBO), trade and cost metrics, and Zerodha round-trip break-even.
+  - `src/marketlab/ledger/`:
+    - `journal.py`: append-only double entry, paisa-exact.
+    - `book.py`: CNC/MTF lots, T+1 settlement with holidays, itemised charges, DP, pledge and unpledge, MTF funding, interest under two day-count conventions, margin block/release/shortfall, forced exit, conversion, split, dividend, NLV and the P&L identity.
+    - `replay.py`: event log → rules engine → funds check → book. Duplicate event IDs are ignored; logs save and load as JSON.
+    - `demo.py`.
+  - `rules/provenance.py`: added the ZERODHA/MTF-LEDGER source.
+  - Tests: `test_metrics.py`, `test_ledger_fixtures.py`, `test_ledger_replay.py`; `test_properties_provenance.py` now also checks the ledger's cites.
+  - Docs: `METRICS.md`, `REFERENCE_REVIEW.md`, `ARCHITECTURE_DECISIONS.md`, `DATA_INVENTORY.md`, `PHASE_1_PLAN.md`; updates to `RULES_REGISTER.md` (MTF interest rows, open item 7), `ENVIRONMENT.md` and `TASK_BOARD.md`.
+  - `.gitattributes` (LF), plus `*.egg-info/` in `.gitignore`.
+- **Commands actually run:**
+  - `git init -b main`, then two commits before this one.
+  - Shallow `git clone --depth 1` of 20 public repositories into `../../reference_bots/`. Nothing was installed or executed from them.
+  - `.venv\Scripts\python -m pytest` → **211 passed, 0 failed, 0 skipped**.
+  - `python -m marketlab.rules.demo` and `python -m marketlab.ledger.demo`, both run successfully.
+  - A ledger mutation check in a scratch copy:
+    - First run: only **4 of 8** deliberate rule errors were caught.
+    - Missed: interest start on the trade date, DP per order, full funded repayment on a partial sale, receivables counted as available cash.
+    - Fixtures G and H and two more tests were added. Second run: **8 of 8** caught.
+- **Test results:** 211 executed, 211 passed, 0 failed, 0 skipped.
+  - Rules: 159.
+  - Metrics: 26, all hand-worked values.
+  - Ledger: 20 fixture tests (A–H plus guards); 5 replay tests; 1 Hypothesis property test (150 random event programs × 2 interest conventions).
+  - The 1,200-scenario and 1,000-trial registries remain **PLANNED** (0 implemented, 0 executed).
+- **Demo outcome (synthetic):**
+  - 8 orders: 5 applied, 3 rejected, each with reason codes:
+    - MIS on a T2T stock;
+    - a market order without protection;
+    - same-day sale of T2T shares.
+  - One duplicated event was ignored.
+  - Restart from the saved log produced an identical journal.
+  - Trial balance 0.00; P&L identity gap 0.00.
+  - The final cash figure, ₹9,031.52, is independently derived from fixtures A and B.
+- **Assumptions and primary sources:**
+  - New broker facts were read on 4 Nov 2026 from the Zerodha MTF FAQ and the MTF funds statement entries page:
+    - funded = value − initial margin;
+    - BTST interest is charged on the T+1 opening balance, so the sale day counts;
+    - conversion pays the original funded amount;
+    - MTM is collected on losing positions against the buy price;
+    - square-off costs ₹50 + GST;
+    - MTF sale proceeds are usable after T+1.
+  - Assumptions are labelled in `ledger/book.py` `LEDGER_CITES` and in PHASE_1_PLAN §3–4:
+    - interest starts at settlement;
+    - interest is debited at close-out and month start;
+    - funding is repaid pro-rata;
+    - margin = margin% × buy value + MTM loss;
+    - each fill is one order;
+    - fee timing.
+- **MTF and accounting implications:**
+  - Whether weekend and holiday days accrue interest is still **UNKNOWN**. Both conventions are implemented. The difference is ₹7.20 on ₹6,000 over one weekend plus a holiday.
+  - Charge rounding remains an ASSUMPTION.
+  - Unsettled sale proceeds are excluded from available cash. This is conservative: Zerodha allows CNC proceeds for same-day buys.
+  - TDS on dividends, tax lots for bonus shares, cash-in-lieu, short delivery and partial fills of one order are not modelled.
+- **Data and look-ahead implications:**
+  - Fills are inputs, not simulated (Phase 3).
+  - The replay requires same-day snapshots.
+  - DATA_INVENTORY lists every daily input the rules engine needs. The biggest gap is historical surveillance and MTF lists.
+- **Reference review findings that changed our design (REFERENCE_REVIEW §2):**
+  - **Flat-percentage costs are badly wrong at ₹10,000.** A ₹1,000 delivery round trip needs +1.76% to break even.
+  - **Lean's Zerodha fee model uses intraday rates.**
+  - **Default annualisation and risk-free settings inflate Sharpe.** 365 days instead of 245 inflates it about 1.22×; a zero risk-free rate inflates it further.
+  - **freqtrade submits before persisting.** A crash between the two leaves an unknown order.
+  - **jugaad-trader's cookie login is banned here.**
+  - **exchange_calendars XBOM 2026 holidays match ours exactly.** This is independent corroboration.
+- **Known defects and blockers:**
+  - Only the NSE 2026 calendar is loaded, so BSE and 2027 dates block.
+  - MIS is not accounted for.
+  - Reserved cash, cost drag and MTF carry metrics are not built.
+  - `Book.estimated_exit_costs` uses the current schedule.
+- **Reviewer findings:** none yet. Ask GPT to review with `prompts/REVIEW.txt`. Focus on:
+  - PHASE_1_PLAN §3–5 and `ledger/book.py`: the MTF repayment and interest logic, and the margin requirement definition;
+  - METRICS.md §1, §6;
+  - REFERENCE_REVIEW claims, which give file and line evidence.
+- **Budget used:** none. No API keys, purchases or broker connections.
+- **Exact next task:**
+  1. Run the GPT review of Phase 0 and Phase 1 together and fix material findings.
+  2. User action, when convenient: download one Zerodha MTF statement and one contract note into `data/private/` (git-ignored), to settle the interest day-count and charge rounding.
+  3. Then Phase 2 (point-in-time data) per `prompts/PHASE_PROMPTS.md`. Zerodha read-only integration stays in Phase 7.

@@ -1,0 +1,20 @@
+Act as the independent test executor AFTER Fable has returned its quantitative implementation. Use a capable testing model available to the user; do not assume that the requested Sonnet version is installed.
+
+Read AGENTS.md, the current handoff, FABLE_REPORT.md, model cards and the preregistered evaluation plan. Do not redesign strategy weights to improve the test result.
+
+Check the actual dataset and information-availability lineage before running historical comparisons. Mark missing data explicitly. Obtain only data the user is authorized to access; no paywall/session bypass or invented candles.
+
+Run:
+1. Engineering tests, including at least 1,000 executed generated scenarios with recorded seeds and coverage categories.
+2. Independent hand-calculated fees, cash reservations, corporate actions, quantity matching, P&L attribution and allocation examples.
+3. Leakage probes: shift timestamps, replace future values, delay publication, permute securities/events and change the end of the dataset. Earlier decisions must remain unchanged.
+4. Chronological untouched-period strategy comparisons against cash and realistic passive/simple baselines.
+5. Ablations, adverse costs/latency/fills, regime/sector breakdowns and dependence-aware uncertainty.
+6. Reproduction from an empty run directory using the same dataset/config/source hashes.
+7. Read-only Kite collection and restart/expiry tests only if local authentication is available. No real order tests.
+
+Compare predictions to realized market outcomes at the exact stated horizon; do not grade against the hindsight best entry/exit except as a clearly impossible oracle bound.
+
+Report planned / implemented / executed / passed / failed / skipped separately. Engineering pass rates are not trading accuracy or profitability.
+
+Preserve failures and counterexamples. Return VALIDATION_REPORT.md plus immutable prediction/result artifacts and an updated handoff. Do not silently change the model or consume a final holdout repeatedly.

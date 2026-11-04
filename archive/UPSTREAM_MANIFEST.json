@@ -1,0 +1,249 @@
+{
+  "commit": "19d12dcac7415b17d3a5192035517ad285f9b389",
+  "files": [
+    {
+      "path": ".gitattributes",
+      "sha": "56ce8818e4121217b01478f2231cb5deb922658b"
+    },
+    {
+      "path": ".gitignore",
+      "sha": "659d48add2229c7b2f8c4801c6acd1d56215c51f"
+    },
+    {
+      "path": "AGENTS.md",
+      "sha": "d682f02daa75b1231f1e34b4aff8d322a50c17fb"
+    },
+    {
+      "path": "CLAUDE.md",
+      "sha": "a9c8f44e04f35d8cc490cc25109d76a9cbfa23d6"
+    },
+    {
+      "path": "NSE_BSE_Build_Guide.md",
+      "sha": "5c109787acef22d49d0ca497906d7abe603d6a45"
+    },
+    {
+      "path": "PROJECT_BRIEF.md",
+      "sha": "2aae75ef6760faea39517dcab35dfc7c0cb808f0"
+    },
+    {
+      "path": "README_FIRST.md",
+      "sha": "3b91cfbe9bcce8f7a9e412f6ef9a4955449c2821"
+    },
+    {
+      "path": "configs/example_policy.json",
+      "sha": "1a3ae69c50f77be3b4b4c16fe81a666461c17b63"
+    },
+    {
+      "path": "docs/ARCHITECTURE_DECISIONS.md",
+      "sha": "22ef7c4887f9ee617c3dc53ea990849998662ce1"
+    },
+    {
+      "path": "docs/DATA_INVENTORY.md",
+      "sha": "4ac44402e58e9696ca13c1aebc4e8e64e8ff349d"
+    },
+    {
+      "path": "docs/ENVIRONMENT.md",
+      "sha": "eaa039093701a568da0e6991ff9de11769e8ce3b"
+    },
+    {
+      "path": "docs/HANDOFF.md",
+      "sha": "6a419799dd3f2077688196587ca8973162119569"
+    },
+    {
+      "path": "docs/IMPLEMENTATION_CONTRACT.md",
+      "sha": "60eab5caf066299f6d567678a808c11a69439cb6"
+    },
+    {
+      "path": "docs/METRICS.md",
+      "sha": "0187068a468f8563c05fdbf9899d6ea0b6ff2b2d"
+    },
+    {
+      "path": "docs/PHASE_1_PLAN.md",
+      "sha": "8484be5d5a65dffc9a0375af4e108e7e93dd20b9"
+    },
+    {
+      "path": "docs/REFERENCE_REVIEW.md",
+      "sha": "41331c3e09b6d7462f705fecbdcccfbe33c379b6"
+    },
+    {
+      "path": "docs/RULES_REGISTER.md",
+      "sha": "afd8e1df73e31acdba3634acbb404570df9b0f36"
+    },
+    {
+      "path": "docs/TASK_BOARD.md",
+      "sha": "aa946ae4c0407b28c0f24e7007bea14de23b9a33"
+    },
+    {
+      "path": "docs/VALIDATION_PLAN.md",
+      "sha": "c41a6f5e0831c9807ccf94799eb4581b846b8881"
+    },
+    {
+      "path": "experiments/coverage_matrix_1200.json",
+      "sha": "159624f0d9b01ce7da41b2015ff349600cf9d108"
+    },
+    {
+      "path": "experiments/research_trials_1000.json",
+      "sha": "37c6ce810b6bcbcc6ca25861e4123b6bf628044f"
+    },
+    {
+      "path": "prompts/00_START_HERE.txt",
+      "sha": "c81046079aabe311b9b7b3e16145128877c88cf8"
+    },
+    {
+      "path": "prompts/FABLE_REVIEW.txt",
+      "sha": "5be69e5caf6446fb737b218fdc91862fc94260ab"
+    },
+    {
+      "path": "prompts/FAILURE_REVIEW.txt",
+      "sha": "8a247dbf9853a3a027c8264d9d7a3d13bbe7892a"
+    },
+    {
+      "path": "prompts/PHASE_PROMPTS.md",
+      "sha": "294dfbe9192f2dc54c68395de55b9e97f45514b8"
+    },
+    {
+      "path": "prompts/REVIEW.txt",
+      "sha": "e15d36dc79d7d734ba07dfbfe7dadca0918091d6"
+    },
+    {
+      "path": "pyproject.toml",
+      "sha": "086bcdafecd8d74323da0a7eff40551fc34fa7e8"
+    },
+    {
+      "path": "requirements-dev.lock",
+      "sha": "8b9b08a39008a328fcf62321b3e19a50d76a4373"
+    },
+    {
+      "path": "sources.json",
+      "sha": "cfe20745786ef6a06be1d1202f0dfc696b6fb195"
+    },
+    {
+      "path": "src/marketlab/__init__.py",
+      "sha": "eca59151f591a99ff6b87a2c4aa562c0b93c2524"
+    },
+    {
+      "path": "src/marketlab/ledger/__init__.py",
+      "sha": "31f68885e248617fcaf6415c95b60a669e8ce7b7"
+    },
+    {
+      "path": "src/marketlab/ledger/book.py",
+      "sha": "7e91c7e25a7446f2f0bcd00ed806c9ac81ee878f"
+    },
+    {
+      "path": "src/marketlab/ledger/demo.py",
+      "sha": "d9d1ecedaa4b27962c938c144d54aeeff2cd3b44"
+    },
+    {
+      "path": "src/marketlab/ledger/journal.py",
+      "sha": "ab87057d9bb2425f2be223efbf9e3d092eedfa79"
+    },
+    {
+      "path": "src/marketlab/ledger/replay.py",
+      "sha": "c8fe2940d2afdfddf1630264e9c345397af032ed"
+    },
+    {
+      "path": "src/marketlab/metrics/__init__.py",
+      "sha": "77ef30283e39ce6c3cb0ec5ed266217676f75385"
+    },
+    {
+      "path": "src/marketlab/metrics/performance.py",
+      "sha": "3f004cbf9a073b466e4158a1857329ef790ef943"
+    },
+    {
+      "path": "src/marketlab/metrics/selection.py",
+      "sha": "1efe618a4a8863ac6cf838a7d4bcbd70280b3272"
+    },
+    {
+      "path": "src/marketlab/metrics/trading.py",
+      "sha": "80391bcc4473dc88bad7912fd3c4abdd91613362"
+    },
+    {
+      "path": "src/marketlab/rules/__init__.py",
+      "sha": "d4387dc8c7c70233a05102e703344d9e49ab3306"
+    },
+    {
+      "path": "src/marketlab/rules/bands.py",
+      "sha": "6547388713fa712f1d036758b1fafcc57f73c1c4"
+    },
+    {
+      "path": "src/marketlab/rules/broker.py",
+      "sha": "f5660cbebd52bc17a6f703361220cf3e208ece09"
+    },
+    {
+      "path": "src/marketlab/rules/calendar.py",
+      "sha": "bc6b52ec4ac54680e1393a528f13c02f5e9d543c"
+    },
+    {
+      "path": "src/marketlab/rules/charges.py",
+      "sha": "f3eceae13c6a005df48fecc6dfe20cd90333ef47"
+    },
+    {
+      "path": "src/marketlab/rules/demo.py",
+      "sha": "9bdd3842eaeb0311f571ed1a87c85fb7084ca6a0"
+    },
+    {
+      "path": "src/marketlab/rules/engine.py",
+      "sha": "2a1ba56edef584224bd65aacbe8e73fa44878450"
+    },
+    {
+      "path": "src/marketlab/rules/instruments.py",
+      "sha": "3f405900cc11d743eb898ae2bbf487c32a928c8c"
+    },
+    {
+      "path": "src/marketlab/rules/mtf.py",
+      "sha": "94770b58240dbec5500ff7e418a73ca11cb754ff"
+    },
+    {
+      "path": "src/marketlab/rules/provenance.py",
+      "sha": "746d1a02c2a176b81cf7e73cb5a6631fae1f77d2"
+    },
+    {
+      "path": "src/marketlab/rules/sessions.py",
+      "sha": "d61a23978bc0fc332a1d7d566ad086bb6d90f3c6"
+    },
+    {
+      "path": "src/marketlab/rules/ticks.py",
+      "sha": "5b993cb65cf789c42f43b6cd1d9fdf73da3b541d"
+    },
+    {
+      "path": "src/marketlab/rules/types.py",
+      "sha": "5186d9df9f451a59464de3c484157b29c0cdd94e"
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha": "151fc868c6cb7f701a666b0fa24f186cbdc7bc1d"
+    },
+    {
+      "path": "tests/test_calendar_sessions.py",
+      "sha": "4be1d53a19d25866f2ef10b3a451d5b19790c4b4"
+    },
+    {
+      "path": "tests/test_charges_mtf_broker.py",
+      "sha": "ccfb2009f1cf585458de803ed8b51fbde1ee6402"
+    },
+    {
+      "path": "tests/test_engine.py",
+      "sha": "70e93f2e1a737288aa1468c069cabf4af2a6437d"
+    },
+    {
+      "path": "tests/test_ledger_fixtures.py",
+      "sha": "b93d1416fba7e88e4dd096961d670961570ea6d0"
+    },
+    {
+      "path": "tests/test_ledger_replay.py",
+      "sha": "307ba8f25ddfece295746151b3f61d487eb3ad6d"
+    },
+    {
+      "path": "tests/test_metrics.py",
+      "sha": "d019e7e589389455e0adc5b83a0716755e29159d"
+    },
+    {
+      "path": "tests/test_prices.py",
+      "sha": "e43ad2e3870ce7479fcc3249d4d7a7b02eda69de"
+    },
+    {
+      "path": "tests/test_properties_provenance.py",
+      "sha": "fd64474600dad00e00ca413ea4e3774cd5cc927c"
+    }
+  ]
+}
