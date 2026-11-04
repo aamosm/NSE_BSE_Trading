@@ -51,6 +51,9 @@ class SourceSpec:
     missingness: str
     status: str  # WORKS | NOT_ATTEMPTED | BLOCKED  (as of the check date below)
     checked: date = date(2026, 11, 5)
+    # "session": the file is named after the session it was published after (most end-of-day files).
+    # "next_session": the file is named after the session it takes effect in (published the evening before).
+    url_date: str = "session"
 
 
 REGISTER: tuple[SourceSpec, ...] = (
@@ -70,8 +73,11 @@ REGISTER: tuple[SourceSpec, ...] = (
                "Not published on non-trading days (404).", "WORKS"),
     SourceSpec("nse_band_changes", "rules", "NSE",
                "https://nsearchives.nseindia.com/content/equities/eq_band_changes_{ddmmyyyy}.csv", "csv", True,
-               ("Symbol", "Series", "From", "To"), "Published after close; effective date not stated in the file.",
-               RIGHTS_UNVERIFIED, "Band revisions only.", "Not published on non-trading days.", "WORKS"),
+               ("Symbol", "Series", "From", "To"),
+               "Named after the session the changes take EFFECT in and published the evening before (file dated "
+               "5 Nov 2026 had Last-Modified 4 Nov 18:00 IST; all 6 changes already appear in sec_list dated 4 Nov).",
+               RIGHTS_UNVERIFIED, "Band revisions only.", "Not published on non-trading days.", "WORKS",
+               url_date="next_session"),
     SourceSpec("nse_reg_indicators", "rules", "NSE", "https://nsearchives.nseindia.com/content/cm/REG1_IND{ddmmyy}.csv",
                "csv", True, ("Symbol", "Status", "Series", "GSM", "ESM", "ICA",
                              "Long_Term_Additional_Surveillance_Measure (Long Term ASM)",
@@ -230,12 +236,22 @@ def collect(market: Path, day: date, ids=None, *, fetch=http_fetch, pause=PAUSE_
             if (ids and spec.id not in ids) or spec.status != "WORKS":
                 continue
             received = timestamp(at) if at else now()
-            key = day if spec.dated else received.date()
+            file_day = day
+            if spec.dated and spec.url_date == "next_session":
+                from .rules.calendar import MarketCalendar
+                from .rules.types import Exchange, RuleUnknown
+                try:
+                    file_day = MarketCalendar().next_trading_day(Exchange.NSE, day)
+                except RuleUnknown:
+                    results.append({"source": spec.id, "key": day.isoformat(), "result": "FAILED",
+                                    "failure": "CALENDAR_UNKNOWN_FOR_NEXT_SESSION"})
+                    continue
+            key = file_day if spec.dated else received.date()
             path = raw_path(market, spec, key)
             if path.exists():
                 results.append({"source": spec.id, "key": key.isoformat(), "result": "ALREADY_STORED"})
                 continue
-            url = url_for(spec, day)
+            url = url_for(spec, file_day)
             try:
                 status, body, modified = fetch(url)
             except (URLError, TimeoutError, OSError, ValueError) as e:

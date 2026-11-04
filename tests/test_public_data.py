@@ -167,3 +167,14 @@ def test_calendar_verification_against_nse_holiday_apis(tmp_path):
     assert out["nse_holidays"]["state"] == "AGREES" and out["nse_holidays"]["api_weekdays"] == 16
     assert out["nse_clearing_holidays"]["state"] == "DIFFERS"
     assert out["nse_clearing_holidays"]["extra_in_engine"] == ["2026-12-25"]
+
+
+def test_band_changes_are_fetched_for_the_session_they_take_effect_in(tmp_path):
+    seen = []
+
+    def fetch(url):
+        seen.append(url.rsplit("/", 1)[-1])
+        return 200, b"Sr. No,Symbol,Series,Security Name,From,To\n", None
+    out = sources.collect(tmp_path, date(2026, 11, 6), ["nse_band_changes"], fetch=fetch, pause=0, at=EVENING)
+    # Published after Friday 6 Nov; effective in the next session, the Sunday 8 Nov Muhurat session.
+    assert seen == ["eq_band_changes_08112026.csv"] and out[0]["key"] == "2026-11-08"
