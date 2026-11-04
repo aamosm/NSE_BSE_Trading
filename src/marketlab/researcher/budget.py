@@ -22,19 +22,11 @@ from pathlib import Path
 from ..common import now, timestamp
 
 D = Decimal
-PRICES_CHECKED = "2026-11-05"
-PRICE_SOURCES = ("https://docs.perplexity.ai/docs/getting-started/pricing",
-                 "https://docs.perplexity.ai/docs/agent-api/models")
-# USD per 1M tokens (input, output), lowest context tier, as listed on 5 Nov 2026.
-MODEL_PRICES = {
-    "openai/gpt-6-luna": (D("0.10"), D("0.50")),  # <= 272k context
-    "openai/gpt-5.6-luna": (D("0.20"), D("1.20")),  # <= 272k context
-    "anthropic/claude-haiku-5-5": (D("0.10"), D("0.50")),  # <= 100k context; requires max_output_tokens
-    "perplexity/sonar": (D("0.25"), D("2.50")),
-}
-# USD per invocation, separate from token costs.
-TOOL_PRICES = {"web_search": D("0.0025"), "web_search_fast": D("0.001"), "fetch_url": D("0.0005"),
-               "finance_search": D("0.005")}
+# USD per 1M tokens (input, output). Empty by design: a provider is enabled only after its price is verified
+# against the provider's published list and recorded here with the source and date (spec: no invented capabilities).
+MODEL_PRICES: dict[str, tuple[Decimal, Decimal]] = {}
+# USD per tool invocation, likewise recorded with their source when a provider is enabled.
+TOOL_PRICES: dict[str, Decimal] = {"web_search": D("0.0025"), "web_search_fast": D("0.001")}
 HARD_MONTHLY_CEILING = D("10.00")  # owner's stated range is $5-10/month; config can never exceed this
 
 
@@ -63,7 +55,7 @@ class Limits:
             raise ValueError("Unsupported search type or limits beyond the research policy")
 
 
-def worst_case_usd(model: str, limits: Limits) -> Decimal:
+def worst_case_usd(model: str, limits: Limits, prices: dict | None = None) -> Decimal:
     """Pre-call reservation: an upper bound, not an estimate.
 
     Assumes at most one tool call per step (the provider documents "max steps 40 (at most 40 tool calls)"
@@ -71,9 +63,10 @@ def worst_case_usd(model: str, limits: Limits) -> Decimal:
     prompt plus all search context and output produced so far (quadratic in steps). fetch_url is not
     offered by default because fetched page size is not bounded by a documented parameter.
     """
-    if model not in MODEL_PRICES:
+    prices = MODEL_PRICES if prices is None else prices
+    if model not in prices:
         raise ValueError(f"No verified price for {model}; add it with its source before use")
-    p_in, p_out = MODEL_PRICES[model]
+    p_in, p_out = prices[model]
     s = limits.max_steps
     added_per_step = limits.search_max_tokens + limits.max_output_tokens
     input_tokens = s * limits.prompt_tokens + added_per_step * s * (s + 1) // 2

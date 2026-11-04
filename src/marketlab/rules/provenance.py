@@ -107,6 +107,11 @@ _SOURCES: tuple[Source, ...] = (
     Source("NCL/CMPT/77037", "Timings on Muhurat Trading session (settlement schedule)", "NSE Clearing",
            SourceKind.CLEARING, "https://nsearchives.nseindia.com/content/circulars/CMPT77037.pdf",
            date(2026, 10, 21), CHECKED_2, "8 Nov trades: settlement M 2026211, settlement date 9 Nov 2026."),
+    Source("NSE/HOLIDAY-API", "NSE holiday master, trading segment CM (JSON)", "NSE", SourceKind.EXCHANGE,
+           "https://www.nseindia.com/api/holiday-master?type=trading", None, CHECKED_2,
+           "Current-year list; special sessions marked with an asterisk; stored vintages in data/market."),
+    Source("NSE/CLEARING-HOLIDAY-API", "NSE holiday master, clearing segment CM (JSON)", "NSE", SourceKind.CLEARING,
+           "https://www.nseindia.com/api/holiday-master?type=clearing", None, CHECKED_2, "Settlement holidays."),
     Source("NSE/INSP/45900", "Modifications in the STP messaging formats on account of implementation of the "
            "Stamp Duty", "NSE", SourceKind.EXCHANGE, "https://nsearchives.nseindia.com/content/circulars/INSP45900.pdf",
            date(2020, 9, 30), CHECKED_2, "Contract-note STT field (COUN) allows integer values only."),

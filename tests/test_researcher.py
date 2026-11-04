@@ -3,12 +3,9 @@
 Offline: the provider is faked with responses in the documented Agent API shape. Every expected number
 is worked by hand in the comment.
 """
-import io
 import json
 from datetime import datetime, timedelta
 from decimal import Decimal as D
-from email.message import Message
-from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -16,11 +13,19 @@ from marketlab.common import IST
 from marketlab.researcher import evidence, jobs, templates
 from marketlab.researcher.budget import BudgetExceeded, Ledger, Limits, Policy, worst_case_usd
 from marketlab.researcher.provider import (
-    ArchivedProvider, PerplexityAgent, ProviderError, ProviderRequest, parse_response,
+    ArchivedProvider, NullProvider, ProviderError, ProviderRequest, http_error_label, parse_response,
 )
 
 T = datetime(2026, 11, 5, 7, 0, tzinfo=IST)
-MODEL = "openai/gpt-6-luna"
+MODEL = "example/model"
+PRICES = {MODEL: (D("0.10"), D("0.50"))}  # a sample price table; real tables are recorded with their source
+
+
+@pytest.fixture(autouse=True)
+def _sample_prices(monkeypatch):
+    """The runner reserves from budget.MODEL_PRICES, which is empty until a provider is enabled."""
+    from marketlab.researcher import budget
+    monkeypatch.setitem(budget.MODEL_PRICES, MODEL, PRICES[MODEL])
 
 
 # ---- budget ------------------------------------------------------------------------------------------
@@ -35,13 +40,13 @@ MODEL = "openai/gpt-6-luna"
     (Limits(2000, 8, 4000, 4000, 10, "web"), D("0.0528")),
 ])
 def test_worst_case_reservation_is_hand_computable(limits, expected):
-    assert worst_case_usd(MODEL, limits) == expected
+    assert worst_case_usd(MODEL, limits, PRICES) == expected
 
 
-def test_every_job_kind_fits_its_cap():
+def test_every_job_kind_fits_its_cap_at_the_sample_prices():
     pol = Policy()
     for kind, kp in jobs.KINDS.items():
-        assert worst_case_usd(jobs.DEFAULT_MODEL, kp.limits) <= pol.per_job_usd[kind], kind
+        assert worst_case_usd(MODEL, kp.limits, PRICES) <= pol.per_job_usd[kind], kind
 
 
 def test_unknown_model_price_is_refused():
@@ -153,66 +158,16 @@ def test_parse_response_reads_message_parts_search_results_and_cost():
     assert r.tool_calls == {"search_web": {"invocation": 1}} and len(r.raw_sha256) == 64
 
 
-class _Resp(io.BytesIO):
-    headers = {}
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
+def test_http_error_labels_are_fixed():
+    assert http_error_label(401).label == "AUTH" and http_error_label(429, retry_after=3).retry_after == 3.0
+    assert http_error_label(429, "overloaded").label == "OVERLOADED" and http_error_label(400).label == "BAD_REQUEST"
+    assert http_error_label(503, retry_after=5).label == "OVERLOADED" and http_error_label(500).label == "SERVER"
 
 
-class _Opener:
-    def __init__(self, out):
-        self.out, self.requests = out, []
-
-    def open(self, req, timeout):
-        self.requests.append(req)
-        if isinstance(self.out, Exception):
-            raise self.out
-        return _Resp(self.out)
-
-
-def _http(code, retry=None, body=b"{}"):
-    h = Message()
-    if retry:
-        h["Retry-After"] = str(retry)
-    return HTTPError("https://api.perplexity.ai/v1/agent", code, "e", h, io.BytesIO(body))
-
-
-def test_agent_sends_bearer_json_and_never_puts_the_key_in_the_body():
-    op = _Opener(raw_response("OK"))
-    r = PerplexityAgent("pplx-test-key", opener=op).run(
-        ProviderRequest(model=MODEL, instructions="i", input="x", max_output_tokens=5, max_steps=1))
-    req = op.requests[0]
-    assert req.full_url == "https://api.perplexity.ai/v1/agent" and req.get_method() == "POST"
-    assert req.get_header("Authorization") == "Bearer pplx-test-key" and b"pplx-test-key" not in req.data
-    assert r.text == "OK"
-
-
-@pytest.mark.parametrize("err, label, retry", [
-    (_http(401), "AUTH", None), (_http(429, 3), "RATE_LIMITED", 3.0),
-    (_http(429, body=b'{"error": {"type": "overloaded"}}'), "OVERLOADED", 1.0), (_http(400), "BAD_REQUEST", None),
-    (_http(503, 5), "OVERLOADED", 5.0), (_http(500), "SERVER", None), (URLError("down"), "TIMEOUT", None),
-])
-def test_errors_have_fixed_labels(err, label, retry):
+def test_null_provider_sends_nothing():
     with pytest.raises(ProviderError) as e:
-        PerplexityAgent("k", opener=_Opener(err)).run(
-            ProviderRequest(model=MODEL, instructions="i", input="x", max_output_tokens=5, max_steps=1))
-    assert e.value.label == label and e.value.retry_after == retry
-
-
-def test_incomplete_response_carries_billed_usage():
-    with pytest.raises(ProviderError) as e:
-        PerplexityAgent("k", opener=_Opener(raw_response("", status="incomplete", cost="0.002"))).run(
-            ProviderRequest(model=MODEL, instructions="i", input="x", max_output_tokens=5, max_steps=1))
-    assert e.value.label == "NOT_COMPLETED" and e.value.result.cost_usd == D("0.002")
-
-
-def test_missing_key_is_refused():
-    with pytest.raises(ValueError, match="PERPLEXITY_API_KEY"):
-        PerplexityAgent("  ")
+        NullProvider().run(ProviderRequest(model=MODEL, instructions="i", input="x", max_output_tokens=5, max_steps=1))
+    assert e.value.label == "NOT_CONFIGURED"
 
 
 # ---- evidence validation -------------------------------------------------------------------------------
@@ -405,8 +360,9 @@ def test_runner_success_stores_facts_available_only_from_completion(tmp_path, mo
     q.submit(job, T)
     done_at = datetime(2026, 11, 5, 7, 5, tzinfo=IST)
     monkeypatch.setattr(jobs, "now", lambda: done_at)
-    out = jobs.run_one(q, FakeProvider([good_result(job.job_id)]), lg, ar, at=T)
+    out = jobs.run_one(q, FakeProvider([good_result(job.job_id)]), lg, ar, at=T, model=MODEL)
     assert out["result"] == "DONE" and out["accepted"] == 1 and out["cost_usd"] == "0.0041"
+    assert jobs.run_one(q, NullProvider(), lg, ar, at=T)["result"] == "NO_PROVIDER_CONFIGURED"
     assert ar.facts_as_of(ISIN, done_at - timedelta(seconds=1)) == []  # not usable before validation finished
     facts = ar.facts_as_of(ISIN, done_at)
     assert facts[0]["status"] == "ACCEPTED" and facts[0]["fact"]["fact_key"]
@@ -420,11 +376,11 @@ def test_rate_limit_is_released_and_retried_auth_is_final(tmp_path):
     job = make_job()
     q.submit(job, T)
     prov = FakeProvider([ProviderError("RATE_LIMITED", retry_after=1), good_result(job.job_id)])
-    out = jobs.run_one(q, prov, lg, ar, at=T, sleep=lambda s: None)
+    out = jobs.run_one(q, prov, lg, ar, at=T, sleep=lambda s: None, model=MODEL)
     assert out["result"] == "DONE" and prov.calls == 2
     job2 = make_job(requested_fields=("REVENUE",))
     q.submit(job2, T)
-    out = jobs.run_one(q, FakeProvider([ProviderError("AUTH", http_status=401)]), lg, ar, at=T)
+    out = jobs.run_one(q, FakeProvider([ProviderError("AUTH", http_status=401)]), lg, ar, at=T, model=MODEL)
     assert out == {"result": "FAILED", "job_id": job2.job_id, "error": "AUTH"}
     for x in (q, lg, ar):
         x.close()
@@ -437,13 +393,13 @@ def test_budget_exhaustion_defers_and_private_data_is_never_sent(tmp_path):
     job = make_job()
     q.submit(job, T)
     prov = FakeProvider([])
-    assert jobs.run_one(q, prov, lg, ar, at=T)["reason"] == "DAILY_CAP" and prov.calls == 0
+    assert jobs.run_one(q, prov, lg, ar, at=T, model=MODEL)["reason"] == "DAILY_CAP" and prov.calls == 0
     assert q.state(job.job_id)[0] == "DEFERRED" and q.pending(T + timedelta(minutes=30)) == []
     leaked = make_job(requested_fields=("REVENUE",), known_facts=({"fact_id": "k", "event_type": "OTHER_MATERIAL",
                                                                    "url": "secret-client-AB1234"},))
     q2 = jobs.Queue(base / "q2.sqlite3")
     q2.submit(leaked, T)
-    out = jobs.run_one(q2, prov, Ledger(base / "l2.sqlite3"), ar, private_values=["secret-client-AB1234"], at=T)
+    out = jobs.run_one(q2, prov, Ledger(base / "l2.sqlite3"), ar, private_values=["secret-client-AB1234"], at=T, model=MODEL)
     assert out["error"] == "PRIVATE_DATA_BLOCKED" and prov.calls == 0
     for x in (q, q2, lg, ar):
         x.close()
@@ -453,7 +409,7 @@ def test_deep_research_waits_for_off_hours(tmp_path):
     q, lg, ar = setup(tmp_path)
     q.submit(make_job("bounded_company_research"), T)
     in_session = datetime(2026, 11, 5, 11, 0, tzinfo=IST)
-    assert jobs.run_one(q, FakeProvider([]), lg, ar, at=in_session) == {"result": "IDLE"}
+    assert jobs.run_one(q, FakeProvider([]), lg, ar, at=in_session, model=MODEL) == {"result": "IDLE"}
     for x in (q, lg, ar):
         x.close()
 
@@ -463,7 +419,7 @@ def test_validation_failure_is_recorded_not_stored(tmp_path):
     job = make_job()
     q.submit(job, T)
     bad = parse_response(raw_response("not json", [(URL, "t", PASSAGE)]), want_json=True)
-    out = jobs.run_one(q, FakeProvider([bad]), lg, ar, at=T)
+    out = jobs.run_one(q, FakeProvider([bad]), lg, ar, at=T, model=MODEL)
     assert out["result"] == "FAILED_VALIDATION" and out["errors"] == ["SCHEMA_PARSE_FAILED"]
     assert ar.facts_as_of(ISIN, datetime(2027, 1, 1, tzinfo=IST)) == []
     for x in (q, lg, ar):
@@ -479,41 +435,13 @@ def test_stale_running_job_fails_and_replay_never_calls_the_network(tmp_path, mo
     job2 = make_job(requested_fields=("REVENUE",))
     q.submit(job2, T)
     monkeypatch.setattr(jobs, "now", lambda: T)
-    jobs.run_one(q, FakeProvider([good_result(job2.job_id)]), lg, ar, at=T)
-    req, _ = jobs.build_request(job2)
+    jobs.run_one(q, FakeProvider([good_result(job2.job_id)]), lg, ar, at=T, model=MODEL)
+    req, _ = jobs.build_request(job2, MODEL)
     replay = ArchivedProvider(ar.lookup)
     assert replay.run(req).parsed["task_id"] == job2.job_id
-    other, _ = jobs.build_request(make_job(requested_fields=("NET_PROFIT",)))
+    other, _ = jobs.build_request(make_job(requested_fields=("NET_PROFIT",)), MODEL)
     with pytest.raises(ProviderError) as e:
         replay.run(other)
     assert e.value.label == "NOT_ARCHIVED"
     for x in (q, lg, ar):
         x.close()
-
-
-# ---- Search API adapter -------------------------------------------------------------------------------
-
-from marketlab.researcher.provider import PerplexitySearch, SearchRequest  # noqa: E402
-
-
-def test_search_request_body_and_documented_price():
-    r = SearchRequest(queries=("a", "b"), max_results=5, domains=("nseindia.com",), after="11/01/2026")
-    assert r.body() == {"query": ["a", "b"], "max_results": 5, "max_tokens_per_page": 1024, "search_type": "fast",
-                        "country": "IN", "search_domain_filter": ["nseindia.com"],
-                        "search_after_date_filter": "11/01/2026"}
-    assert r.price_usd == D("0.001") and SearchRequest(("a",), search_type="web").price_usd == D("0.005")
-    with pytest.raises(ValueError):
-        SearchRequest(tuple("abcdef")).body()  # more than five queries
-
-
-def test_search_parses_results_and_maps_errors():
-    raw = json.dumps({"id": "s1", "results": [{"title": "t", "url": "https://nsearchives.nseindia.com/x.pdf",
-                                               "snippet": "s", "date": "2026-10-19", "last_updated": None}]}).encode()
-    res = PerplexitySearch("k", opener=_Opener(raw)).run(SearchRequest(("q",)))
-    assert res.search_id == "s1" and res.results[0]["url"].endswith("x.pdf") and len(res.raw_sha256) == 64
-    with pytest.raises(ProviderError) as e:
-        PerplexitySearch("k", opener=_Opener(_http(403))).run(SearchRequest(("q",)))
-    assert e.value.label == "AUTH"
-    with pytest.raises(ProviderError) as e:
-        PerplexitySearch("k", opener=_Opener(b'{"unexpected": 1}')).run(SearchRequest(("q",)))
-    assert e.value.label == "MALFORMED"

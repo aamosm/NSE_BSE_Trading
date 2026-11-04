@@ -27,7 +27,7 @@ from . import evidence, templates
 from .budget import BudgetExceeded, Ledger, Limits, Policy, worst_case_usd
 from .provider import ProviderError, ProviderRequest
 
-DEFAULT_MODEL = "openai/gpt-6-luna"  # $0.10 / $0.50 per 1M tokens (5 Nov 2026); compatibility verified by smoke test
+DEFAULT_MODEL = None  # set when a provider adapter and its verified price exist (researcher/budget.py)
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +243,8 @@ def market_hours(at: datetime) -> bool:
 
 
 def build_request(job: ResearchJob, model=DEFAULT_MODEL) -> tuple[ProviderRequest, str]:
+    if not model:
+        raise ValueError("A provider model with a verified price is required to build a request")
     policy = KINDS[job.kind]
     instructions, text = templates.render(job)
     lim = policy.limits
@@ -261,6 +263,9 @@ def run_one(queue: Queue, provider, ledger: Ledger, archive: Archive, *, private
             sleep=time.sleep, max_attempts=3, model=DEFAULT_MODEL) -> dict:
     """Process at most one job. Returns an outcome summary (no provider text)."""
     at = timestamp(at or now())
+    if getattr(provider, "name", "") == "none" or model is None:
+        pending = len(queue.pending(at))
+        return {"result": "NO_PROVIDER_CONFIGURED", "pending": pending}
     for job in queue.pending(at):
         if KINDS[job.kind].off_hours_only and market_hours(at):
             continue

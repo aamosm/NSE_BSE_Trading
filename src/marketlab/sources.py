@@ -333,3 +333,36 @@ def verify_nse_calendar(market: Path, year: int, calendar=None) -> dict:
                         "extra_in_engine": sorted(d.isoformat() for d in set(ours) - api_weekdays)}
         out[spec_id]["state"] = "AGREES" if not (out[spec_id]["missing_in_engine"] or out[spec_id]["extra_in_engine"])             else "DIFFERS"
     return out
+
+
+def load_calendar(market: Path, fallback=None) -> tuple:
+    """(MarketCalendar, report): years built from the latest stored NSE holiday-API vintages, with circular-sourced
+    overrides; circular-based years are the fallback and the cross-check (differences are reported, API wins)."""
+    import json as _json
+    from .rules.calendar import DEFAULT_YEARS, MarketCalendar, compare_years, year_from_holiday_api
+    from .rules.types import Exchange
+    fallback = DEFAULT_YEARS if fallback is None else fallback
+    report = {"source": "CIRCULAR", "years": sorted(y.year for y in fallback), "discrepancies": {}}
+    t = latest_vintage(market, "nse_holidays", now(), max_age_days=400) if (market / "catalog.sqlite3").exists() else None
+    c = latest_vintage(market, "nse_clearing_holidays", now(), max_age_days=400) if t else None
+    if not t or not c:
+        return MarketCalendar(fallback), report
+    try:
+        trading = _json.loads(read_raw(market, "nse_holidays", t[0])).get("CM", [])
+        clearing = _json.loads(read_raw(market, "nse_clearing_holidays", c[0])).get("CM", [])
+    except (ValueError, AttributeError):
+        return MarketCalendar(fallback), report | {"error": "HOLIDAY_FILE_UNREADABLE"}
+    years = sorted({int(str(e.get("tradingDate", ""))[-4:]) for e in trading if str(e.get("tradingDate", ""))[-4:].isdigit()})
+    built = []
+    for y in years:
+        cy = year_from_holiday_api(Exchange.NSE, y, trading, clearing)
+        circ = next((f for f in fallback if f.exchange is Exchange.NSE and f.year == y), None)
+        if circ:
+            diff = compare_years(circ, cy)
+            if diff:
+                report["discrepancies"][y] = diff
+        built.append(cy)
+    if not built:
+        return MarketCalendar(fallback), report
+    report.update(source="NSE_API", years=years, trading_vintage=t[0].isoformat(), clearing_vintage=c[0].isoformat())
+    return MarketCalendar(tuple(built)), report

@@ -174,3 +174,56 @@ def test_weekend_trading_days_are_validated():
     bad = replace(NSE_2026, weekend_trading_days=frozenset({date(2026, 2, 2)}))  # a Monday
     with pytest.raises(ValueError):
         MarketCalendar((bad,))
+
+
+# ---- calendar years built from the NSE holiday APIs ---------------------------------------------------------
+
+def _api(dates_with_desc):
+    return [{"tradingDate": d, "weekDay": "", "description": desc, "morning_session": None, "evening_session": None}
+            for d, desc in dates_with_desc]
+
+
+def test_year_from_holiday_api_matches_the_circular_year_for_2026():
+    from marketlab.rules.calendar import NSE_2026, compare_years, year_from_holiday_api
+    trading = _api([(d.strftime("%d-%b-%Y"), "x") for d in sorted(NSE_2026.trading_holidays)]
+                   + [("15-Feb-2026", "Mahashivratri"), ("08-Nov-2026", "Diwali Laxmi Pujan*")])
+    clearing = _api([(d.strftime("%d-%b-%Y"), "x") for d in sorted(NSE_2026.settlement_holidays)])
+    y = year_from_holiday_api(Exchange.NSE, 2026, trading, clearing)
+    assert compare_years(NSE_2026, y) == {}
+    assert y.special_timetable_opens == ((date(2026, 11, 8), __import__("datetime").time(14, 5)),)
+    assert date(2026, 2, 1) in y.weekend_trading_days  # circular-sourced override
+    cal = __import__("marketlab.rules", fromlist=["MarketCalendar"]).MarketCalendar((y,))
+    assert cal.is_trading_day(Exchange.NSE, date(2026, 11, 8)) and not cal.is_trading_day(Exchange.NSE, date(2026, 11, 10))
+
+
+def test_special_session_without_a_loaded_timetable_stays_blocked_and_discrepancies_are_reported():
+    from marketlab.rules.calendar import NSE_2026, compare_years, year_from_holiday_api
+    from marketlab.rules import MarketCalendar
+    trading = _api([("26-Jan-2027", "Republic Day"), ("29-Oct-2027", "Diwali*"), ("25-Dec-2027", "Christmas")])
+    y = year_from_holiday_api(Exchange.NSE, 2027, trading, _api([("26-Jan-2027", "x")]))
+    # a weekday special session without a loaded table closes the regular session AND stays a blocked special session
+    assert y.trading_holidays == frozenset({date(2027, 1, 26), date(2027, 10, 29)})
+    assert y.special_sessions == frozenset({date(2027, 10, 29)})
+    cal = MarketCalendar((y,))
+    with pytest.raises(RuleUnknown):
+        cal.session_open(Exchange.NSE, date(2027, 10, 29))
+    changed = year_from_holiday_api(Exchange.NSE, 2026, _api([("26-Jan-2026", "x")]), _api([]))
+    diff = compare_years(NSE_2026, changed)
+    assert "2026-03-03" in diff["trading_holidays"]["only_in_first"]
+
+
+def test_load_calendar_uses_stored_api_vintages_and_falls_back_to_circulars(tmp_path):
+    import json
+    from marketlab import sources
+    from marketlab.rules.calendar import NSE_2026
+    cal, rep = sources.load_calendar(tmp_path)
+    assert rep["source"] == "CIRCULAR" and cal.is_trading_day(Exchange.NSE, date(2026, 11, 4))
+    trading = _api([(d.strftime("%d-%b-%Y"), "x") for d in sorted(NSE_2026.trading_holidays)] + [("08-Nov-2026", "Diwali*")])
+    clearing = _api([(d.strftime("%d-%b-%Y"), "x") for d in sorted(NSE_2026.settlement_holidays)])
+
+    def fetch(url):
+        return 200, json.dumps({"CM": trading if "trading" in url else clearing}).encode(), None
+    sources.collect(tmp_path, date(2026, 11, 4), ["nse_holidays", "nse_clearing_holidays"], fetch=fetch, pause=0)
+    cal, rep = sources.load_calendar(tmp_path)
+    assert rep["source"] == "NSE_API" and rep["years"] == [2026] and rep["discrepancies"] == {}
+    assert cal.settlement_date(Exchange.NSE, date(2026, 11, 8)) == date(2026, 11, 9)

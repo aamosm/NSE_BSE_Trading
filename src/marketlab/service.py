@@ -254,7 +254,12 @@ def record_decision(ctx, day, action, reasons, symbols=(), late_start=False):
 class Context:
     def __init__(self, root: Path, market: Path, symbols=(), calendar=None, backups: Path | None = None, pause=1.5):
         self.root, self.market, self.symbols = root, market, list(symbols)
-        self.cal = calendar or MarketCalendar()
+        if calendar is None:
+            from . import sources
+            calendar, self.calendar_report = sources.load_calendar(market)
+        else:
+            self.calendar_report = {"source": "SUPPLIED"}
+        self.cal = calendar
         self.backups = backups or root.parent / "backups"
         self.pause = pause
         self.state = read_json(root / STATE_FILE, {})
@@ -323,6 +328,7 @@ def tick(ctx: Context, at=None, jobs=None) -> dict:
     st["session"] = {k: v for k, v in session.items() if k != "login_at"} | ({"invalidated": True}
                                                                            if st.get("auth_invalid") else {})
     st["updated_at"] = at.isoformat()
+    st["calendar"] = ctx.calendar_report
     st["live_orders"] = False
     if previous != st["state"]:
         alert(ctx, st["state"] if st["state"] != "RUNNING" else ("RECOVERED" if previous else None))

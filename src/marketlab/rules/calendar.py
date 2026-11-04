@@ -8,7 +8,7 @@ loudly instead of silently treating every weekday as a trading day.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 from .provenance import Cite, Status
 from .types import Exchange, RuleUnknown
@@ -74,6 +74,61 @@ NSE_2026 = CalendarYear(
 )
 
 DEFAULT_YEARS: tuple[CalendarYear, ...] = (NSE_2026,)
+
+# Circular-sourced facts the holiday APIs cannot carry: extra weekend sessions and special-session timetables.
+# Keyed by date; applied to API-built years of the same year. Each carries its citation.
+WEEKEND_TRADING_DAYS: dict[date, Cite] = {
+    date(2026, 2, 1): Cite(("NSE/CMTR/72349", "NCL/CMPT/72384"), Status.PRIMARY,
+                           "Union Budget live session, Sunday 1 Feb 2026, standard timings; settled 2 Feb 2026."),
+}
+SPECIAL_TIMETABLE_OPENS: dict[date, tuple[time, Cite]] = {
+    date(2026, 11, 8): (time(14, 5), Cite(("NSE/CMTR/76941", "NCL/CMPT/77037"), Status.PRIMARY,
+                                          "Muhurat 8 Nov 2026: pre-open 14:05; settles 9 Nov 2026 (M 2026211).")),
+}
+API_DATE = "%d-%b-%Y"
+
+
+def _api_dates(entries) -> dict[date, str]:
+    out = {}
+    for e in entries:
+        try:
+            out[datetime.strptime(str(e.get("tradingDate", "")).strip(), API_DATE).date()] = str(e.get("description") or "")
+        except ValueError:
+            continue
+    return out
+
+
+def year_from_holiday_api(exchange: Exchange, year: int, trading_entries, clearing_entries) -> CalendarYear:
+    """Build a calendar year from NSE's holiday-master JSON (``CM`` lists of the trading and clearing endpoints).
+
+    Weekday entries are closures. An entry whose description carries ``*`` marks a special session (Muhurat); it
+    becomes a trading day with its own timetable when one is loaded above, otherwise a blocked special session.
+    Weekend festival entries are informational and ignored.
+    """
+    trading = {d: desc for d, desc in _api_dates(trading_entries).items() if d.year == year}
+    clearing = {d for d in _api_dates(clearing_entries) if d.year == year and d.weekday() < 5}
+    special = {d for d, desc in trading.items() if "*" in desc}
+    opens = tuple(sorted((d, SPECIAL_TIMETABLE_OPENS[d][0]) for d in special if d in SPECIAL_TIMETABLE_OPENS))
+    with_table = {d for d, _ in opens}
+    holidays = frozenset(d for d in trading if d.weekday() < 5 and d not in with_table)
+    weekend = frozenset(d for d in WEEKEND_TRADING_DAYS if d.year == year)
+    cites = [Cite(("NSE/HOLIDAY-API",), Status.PRIMARY, f"{len(holidays)} weekday trading holidays for {year} from the NSE holiday master."),
+             Cite(("NSE/CLEARING-HOLIDAY-API",), Status.PRIMARY, f"{len(clearing)} weekday settlement holidays for {year}.")]
+    cites += [WEEKEND_TRADING_DAYS[d] for d in weekend] + [SPECIAL_TIMETABLE_OPENS[d][1] for d in with_table]
+    return CalendarYear(exchange, year, holidays, frozenset(clearing), frozenset(special - with_table), weekend, opens, tuple(cites))
+
+
+def compare_years(a: CalendarYear, b: CalendarYear) -> dict:
+    """Differences between two calendar years (e.g. circular-based versus API-based); empty when they agree."""
+    out = {}
+    for name in ("trading_holidays", "settlement_holidays", "special_sessions", "weekend_trading_days"):
+        x, y = getattr(a, name), getattr(b, name)
+        if x != y:
+            out[name] = {"only_in_first": sorted(d.isoformat() for d in x - y), "only_in_second": sorted(d.isoformat() for d in y - x)}
+    if dict(a.special_timetable_opens) != dict(b.special_timetable_opens):
+        out["special_timetable_opens"] = {"first": {d.isoformat(): t.isoformat() for d, t in a.special_timetable_opens},
+                                          "second": {d.isoformat(): t.isoformat() for d, t in b.special_timetable_opens}}
+    return out
 
 
 class MarketCalendar:
