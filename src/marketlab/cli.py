@@ -363,9 +363,6 @@ def parser():
     a.add_argument("--date", type=date.fromisoformat, required=True)
     a = sub.add_parser("snapshot", help="rules-engine input for one NSE symbol and session, with provenance")
     a.add_argument("--date", type=date.fromisoformat, required=True); a.add_argument("--symbol", required=True)
-    a = sub.add_parser("research-smoke", help="minimal real research-provider call (budgeted; never prints the key)")
-    a.add_argument("--tools", action="store_true", help="also verify web_search + JSON schema + domain filter")
-    a.add_argument("--search", action="store_true", help="one Search API request restricted to nseindia.com")
     sub.add_parser("research-usage", help="research spend this IST day and month against the caps")
     a = sub.add_parser("research-submit", help="queue one research job for an NSE symbol")
     a.add_argument("--kind", required=True, choices=sorted(__import__("marketlab.researcher.jobs", fromlist=["KINDS"]).KINDS))
@@ -373,6 +370,15 @@ def parser():
     a.add_argument("--ir-domain", nargs="*", default=[]); a.add_argument("--alias", nargs="*", default=[])
     a = sub.add_parser("research-run", help="process research jobs (separate process from the scheduler)")
     a.add_argument("--loop", action="store_true"); a.add_argument("--interval", type=int, default=30)
+    sub.add_parser("panel-build", help="build the daily price panel from stored bhavcopies and index files")
+    a = sub.add_parser("screen", help="dated universe screen (spec 3.1)"); a.add_argument("--date", type=date.fromisoformat, required=True)
+    a = sub.add_parser("evaluate", help="purged walk-forward for one registered trial (spec 8)")
+    a.add_argument("--candidate", default="A"); a.add_argument("--h", type=int, default=20)
+    a.add_argument("--ablate", nargs="*", default=[]); a.add_argument("--holdout", action="store_true", help="evaluate the locked holdout (once)")
+    a.add_argument("--capital", type=float, default=10000.0); a.add_argument("--bootstrap", type=int, default=50)
+    a = sub.add_parser("decide", help="today's forecasts and paper plan from the panel (WAIT until promoted)")
+    a.add_argument("--candidate", default="A"); a.add_argument("--h", type=int, default=20)
+    a.add_argument("--capital", type=float, default=10000.0); a.add_argument("--promoted", action="store_true")
     p.add_argument("--market-dir", type=Path, default=Path("data/market"))
     return p
 
@@ -449,17 +455,50 @@ def main():
         elif args.command == "fetch-public":
             for r in sources.collect(args.market_dir, args.date, args.sources):
                 print(f"{r['source']:<28} {r.get('key', ''):<11} {r['result']}")
-        elif args.command in ("research-smoke", "research-usage", "research-submit", "research-run"):
+        elif args.command in ("research-usage", "research-submit", "research-run"):
             from .researcher import commands as rc
-            if args.command == "research-smoke":
-                out = rc.search_smoke(root, args.market_dir) if args.search else rc.smoke(root, args.market_dir, args.tools)
-            elif args.command == "research-usage":
+            if args.command == "research-usage":
                 out = rc.usage(root, args.market_dir)
             elif args.command == "research-submit":
                 out = rc.submit(root, args.market_dir, args.kind, args.symbol, args.days, args.ir_domain, args.alias)
             else:
                 out = rc.run(root, args.market_dir, args.loop, args.interval)
             print(json.dumps(out, indent=1, default=str))
+        elif args.command == "panel-build":
+            from .quant import panel as qpanel
+            print(json.dumps(qpanel.build(args.market_dir), indent=1))
+        elif args.command == "screen":
+            from .quant import universe as quniverse
+            from .quant.panel import Panel
+            pn = Panel(args.market_dir / "panel.sqlite3")
+            try:
+                sc = quniverse.screen(pn, args.date, rule_inputs=quniverse.rule_inputs_for(args.market_dir, args.date))
+            finally:
+                pn.close()
+            print(json.dumps({"day": sc.day.isoformat(), "kept": len(sc.isins), "unverified": sc.unverified, "stats": sc.stats,
+                              "isins": sc.isins[:100]}, indent=1))
+        elif args.command in ("evaluate", "decide"):
+            from .quant import decide as qdecide, evaluate as qevaluate, universe as quniverse
+            from .quant.panel import Panel
+            from .quant.universe import ScreenPolicy
+            pn = Panel(args.market_dir / "panel.sqlite3")
+            cfg = qevaluate.Config(candidate=args.candidate, h=args.h, W=args.capital, bootstrap=args.bootstrap if args.command == "evaluate" else 50,
+                                   ablate=tuple(args.ablate) if args.command == "evaluate" else (), evaluate_holdout=getattr(args, "holdout", False),
+                                   screen=ScreenPolicy(W=args.capital))
+            ri = lambda d: quniverse.rule_inputs_for(args.market_dir, d)  # noqa: E731
+            try:
+                if args.command == "evaluate":
+                    with Experiment(root, args.market_dir / "panel.sqlite3", {"trial": cfg.trial_id(), "holdout": cfg.evaluate_holdout}) as trial:
+                        out = qevaluate.walk_forward(pn, cfg, out_dir=Path("data/runs/eval"), rule_inputs_fn=ri)
+                        trial.output = Path("data/runs/eval") / (out["trial_id"] + ".json")
+                    print(json.dumps({k: out[k] for k in ("trial_id", "folds_done", "n_trades", "net_rupees_total", "folds_positive",
+                                                          "coverage_80_mean", "brier_skill_mean", "pooled", "label_exclusions")}, indent=1, default=str))
+                else:
+                    out = qdecide.latest_decision(pn, cfg, promoted=args.promoted, rule_inputs_fn=ri, out_dir=Path("data/runs/decisions"))
+                    print(json.dumps({k: out.get(k) for k in ("day", "action", "reasons", "universe", "plan", "policy")}, indent=1, default=str))
+                    print(f"forecasts: {len(out.get('forecasts', []))} (saved under data/runs/decisions)")
+            finally:
+                pn.close()
         elif args.command == "verify-calendar":
             print(json.dumps(sources.verify_nse_calendar(args.market_dir, args.year), indent=1))
         elif args.command == "build-master":
