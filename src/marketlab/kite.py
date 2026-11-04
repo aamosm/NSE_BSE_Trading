@@ -11,6 +11,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from . import netutil  # neutral helpers; the research provider uses netutil, never this module
+
 READ_PATHS = frozenset({
     "/user/profile", "/user/margins/equity", "/portfolio/holdings",
     "/portfolio/positions", "/orders", "/trades", "/instruments/NSE",
@@ -44,7 +46,6 @@ KITE_ERROR_TYPES = frozenset({
     "HoldingException", "NetworkException", "DataException", "GeneralException", "PermissionException",
 })
 READ_DEADLINE = 90.0  # seconds for one complete response, however slowly it trickles in
-CHUNK = 64 * 1024
 
 
 def _error_type(e: HTTPError) -> str:
@@ -61,22 +62,16 @@ def _error_type(e: HTTPError) -> str:
 
 def read_bounded(response, limit=MAX_RESPONSE, deadline=READ_DEADLINE, clock=time.monotonic):
     """Read a whole response under a size limit and a total deadline (socket timeouts are per read)."""
-    stop, parts, size = clock() + deadline, [], 0
-    while True:
-        if clock() > stop:
-            raise KiteError("Kite response exceeded the read deadline; no automatic retry")
-        part = response.read(CHUNK)
-        if not part:
-            return b"".join(parts)
-        size += len(part)
-        if size > limit:
-            raise KiteError("Provider response exceeded the configured limit")
-        parts.append(part)
+    try:
+        return netutil.read_bounded(response, limit, deadline, clock)
+    except netutil.ResponseLimit as e:
+        raise KiteError(str(e).replace("Response exceeded", "Kite response exceeded")) from None
 
 
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise KiteError("Unexpected provider redirect refused")
+
 
 
 def guard(method: str, path: str) -> None:

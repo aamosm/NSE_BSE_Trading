@@ -363,6 +363,16 @@ def parser():
     a.add_argument("--date", type=date.fromisoformat, required=True)
     a = sub.add_parser("snapshot", help="rules-engine input for one NSE symbol and session, with provenance")
     a.add_argument("--date", type=date.fromisoformat, required=True); a.add_argument("--symbol", required=True)
+    a = sub.add_parser("research-smoke", help="minimal real research-provider call (budgeted; never prints the key)")
+    a.add_argument("--tools", action="store_true", help="also verify web_search + JSON schema + domain filter")
+    a.add_argument("--search", action="store_true", help="one Search API request restricted to nseindia.com")
+    sub.add_parser("research-usage", help="research spend this IST day and month against the caps")
+    a = sub.add_parser("research-submit", help="queue one research job for an NSE symbol")
+    a.add_argument("--kind", required=True, choices=sorted(__import__("marketlab.researcher.jobs", fromlist=["KINDS"]).KINDS))
+    a.add_argument("--symbol", required=True); a.add_argument("--days", type=int, default=2)
+    a.add_argument("--ir-domain", nargs="*", default=[]); a.add_argument("--alias", nargs="*", default=[])
+    a = sub.add_parser("research-run", help="process research jobs (separate process from the scheduler)")
+    a.add_argument("--loop", action="store_true"); a.add_argument("--interval", type=int, default=30)
     p.add_argument("--market-dir", type=Path, default=Path("data/market"))
     return p
 
@@ -439,6 +449,17 @@ def main():
         elif args.command == "fetch-public":
             for r in sources.collect(args.market_dir, args.date, args.sources):
                 print(f"{r['source']:<28} {r.get('key', ''):<11} {r['result']}")
+        elif args.command in ("research-smoke", "research-usage", "research-submit", "research-run"):
+            from .researcher import commands as rc
+            if args.command == "research-smoke":
+                out = rc.search_smoke(root, args.market_dir) if args.search else rc.smoke(root, args.market_dir, args.tools)
+            elif args.command == "research-usage":
+                out = rc.usage(root, args.market_dir)
+            elif args.command == "research-submit":
+                out = rc.submit(root, args.market_dir, args.kind, args.symbol, args.days, args.ir_domain, args.alias)
+            else:
+                out = rc.run(root, args.market_dir, args.loop, args.interval)
+            print(json.dumps(out, indent=1, default=str))
         elif args.command == "verify-calendar":
             print(json.dumps(sources.verify_nse_calendar(args.market_dir, args.year), indent=1))
         elif args.command == "build-master":

@@ -171,6 +171,7 @@ def test_read_size_limit():
 
 RESEARCH_LAYER = ["research.py", "costs.py", "backtest.py", "audit.py", "experiments.py", "account.py",
                   "rules", "metrics"]
+LLM_FACING = ["researcher"]  # may use HTTP (its provider) but never broker, login or account code
 
 
 def test_research_and_model_layer_never_imports_a_broker_client():
@@ -183,3 +184,16 @@ def test_research_and_model_layer_never_imports_a_broker_client():
             module = node.module or "" if isinstance(node, ast.ImportFrom) else ""
             assert "kite" not in module and not any("kite" in n or "urllib" in n for n in names), path
             assert "urllib" not in module and "http" not in module, path
+
+
+def test_llm_facing_research_service_never_imports_broker_login_or_account_code():
+    root = Path(kite.__file__).parent / "researcher"
+    for path in root.rglob("*.py"):
+        if path.name == "commands.py":  # CLI entry: reads the env file for the provider key and the leak guard
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                mod = node.module or ""
+                assert not any(x in mod for x in ("kite", "login", "account", "service", "cli")), (path, mod)
+                assert not any(a.name in ("kite", "login", "account") for a in node.names), path
