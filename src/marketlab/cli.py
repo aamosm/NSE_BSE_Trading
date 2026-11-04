@@ -18,11 +18,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import account, login, master, service, sources
+from . import account, login, master, service, sources, webapp
 from .backtest import compare, load_bars, simulate
 from .audit import audit_dataset
 from .common import IST, atomic_json, money, now, timestamp
-from .dashboard import serve
 from .kite import AuthenticationRequired, KiteError, KiteReadOnly, PermissionDenied
 from .news import fetch_feed, ingest_feed
 from .store import Store
@@ -350,7 +349,8 @@ def parser():
     a.add_argument("--exchange", choices=["NSE", "BSE"], default="NSE")
     a.add_argument("--fixed-cost", default="0"); a.add_argument("--strategy", choices=["compare", "intraday_reversal"], default="compare")
     a = sub.add_parser("demo"); a.add_argument("--output", type=Path, default=Path("data/runs/demo"))
-    a = sub.add_parser("dashboard"); a.add_argument("--port", type=int, default=8765)
+    a = sub.add_parser("dashboard", help="private phone app and Kite login callback (loopback only)")
+    a.add_argument("--port", type=int, default=8765)
     a = sub.add_parser("backup"); a.add_argument("destination", type=Path)
     a = sub.add_parser("audit"); a.add_argument("file", type=Path); a.add_argument("--output", type=Path, default=Path("data/runs/audit.json"))
     a = sub.add_parser("fetch-public", help="download official NSE/BSE daily files for one trading date")
@@ -423,8 +423,8 @@ def main():
             state_write(root, report=demo(args.output), message="Synthetic demonstration only. Kite has not been connected by this demo.")
             print("Synthetic demo complete. Run dashboard to view it.")
         elif args.command == "dashboard":
-            print(f"Local dashboard: http://127.0.0.1:{args.port}")
-            serve(root/"status.json", args.port)
+            print(f"Private app: http://127.0.0.1:{args.port} (on the server, reach it through Tailscale Serve)")
+            webapp.serve(root, args.market_dir, args.port)
         elif args.command == "backup":
             db = Store(root/"evidence.sqlite3")
             try:

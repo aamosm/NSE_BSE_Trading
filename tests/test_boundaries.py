@@ -10,7 +10,7 @@ from marketlab.kite import KiteReadOnly, ReadOnlyViolation, guard
 from marketlab.store import Store
 from marketlab.news import ingest_feed, parse_feed, fetch_feed
 from marketlab.research import Forecast, Policy, paper_proposal, explain
-from marketlab.dashboard import render
+from marketlab.webassets import APP_JS, INDEX_HTML, message_page
 
 T = datetime(2026, 11, 4, 10, tzinfo=IST)
 
@@ -205,11 +205,11 @@ def test_naive_dates_are_rejected():
         timestamp("2026-11-04T10:00:00")
 
 
-def test_dashboard_escapes_untrusted_text_and_never_exposes_controls():
-    body = render({"message": "<script>bad()</script>"})
-    assert "<script>" not in body
-    assert "&lt;script&gt;" in body
-    assert "Live orders disabled" in body and "<form" not in body
+def test_app_pages_escape_untrusted_text_and_render_data_without_markup():
+    body = message_page("<script>bad()</script>", "<img src=x onerror=alert(1)>")
+    assert "<script>bad" not in body and "&lt;script&gt;" in body and "<img src=x" not in body
+    assert "innerHTML" not in APP_JS and "insertAdjacentHTML" not in APP_JS and "eval(" not in APP_JS
+    assert "<form" not in INDEX_HTML and "cannot place, change or cancel orders" in INDEX_HTML
 
 
 def test_atomic_json_replaces_complete_document(tmp_path):

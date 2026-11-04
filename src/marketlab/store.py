@@ -113,6 +113,23 @@ class Store:
         return {"id": best[1], "payload": json.loads(payload), "received_at": _iso(best[0]),
                 "first_received_at": first, "published_at": published, "batch_id": best[2]}
 
+    def latest_by_source(self, kind):
+        """{source: newest receipt time} for one kind (all receipts of that kind, any subject)."""
+        out = {}
+        for source, received in self.db.execute(
+                "SELECT o.source, r.received_at FROM receipts r JOIN observations o ON o.id = r.observation_id "
+                "WHERE o.kind=?", (kind,)):
+            t = timestamp(received)
+            if source not in out or t > out[source]:
+                out[source] = t
+        return out
+
+    def recent(self, kind, limit=30):
+        """Newest documents of a kind by first receipt (for timelines)."""
+        rows = self.db.execute("SELECT id, subject, payload, received_at FROM observations WHERE kind=?", (kind,)).fetchall()
+        rows.sort(key=lambda r: timestamp(r[3]), reverse=True)
+        return [{"id": r[0], "subject": r[1], "payload": json.loads(r[2]), "received_at": r[3]} for r in rows[:limit]]
+
     def receipts(self, observation_id):
         return [r[0] for r in self.db.execute(
             "SELECT received_at FROM receipts WHERE observation_id=? ORDER BY received_at", (observation_id,))]
