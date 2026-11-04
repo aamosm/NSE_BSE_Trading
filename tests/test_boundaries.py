@@ -129,10 +129,20 @@ def forecast():
                     20, .10, -.05, .08, .20, .01, .65, 200, "synthetic-model", "synthetic-calibration", ("e1",), True)
 
 
+def snapshot(**kw):
+    from marketlab.rules import Exchange, InstrumentSnapshot
+    base = InstrumentSnapshot(as_of=T.date(), exchange=Exchange.NSE, symbol="TESTA", isin="INE000A00001",
+                              series="EQ", has_derivatives=False, base_price=D("100.00"), price_band_pct=D("20"),
+                              tick_reference_price=D("100.00"), ltp=D("100.00"), surveillance=frozenset(),
+                              in_periodic_call_auction=False, suspended=False, special_preopen_today=False,
+                              mis_eligible=True, snapshot_id="SNAP-TEST")
+    return replace(base, **kw)
+
+
 def proposal(f=None, **kw):
     args = dict(at=T, price=100, equity=10000, available_cash=10000,
                 known_status=True, restricted=False, spread_bps=5, median_daily_volume=100000,
-                status_as_of=T, quote_as_of=T)
+                status_as_of=T, quote_as_of=T, snapshot=snapshot())
     args.update(kw)
     return paper_proposal(f or forecast(), **args)
 
@@ -207,3 +217,38 @@ def test_atomic_json_replaces_complete_document(tmp_path):
     atomic_json(p, {"v": 1}); atomic_json(p, {"v": 2})
     assert '"v": 2' in p.read_text()
     assert not list(tmp_path.glob(".write-*"))
+
+
+
+# ---- exchange rules are part of the paper gate (milestone B) ------------------------------------
+
+def test_missing_snapshot_abstains_instead_of_skipping_exchange_rules():
+    p = proposal(snapshot=None)
+    assert p["action"] == "ABSTAIN" and "EXCHANGE_RULES_NOT_CHECKED" in p["reasons"]
+
+
+@pytest.mark.parametrize("change, code", [
+    ({"as_of": T.date() - timedelta(days=1)}, "STALE_SNAPSHOT"),
+    ({"surveillance": None}, "SURVEILLANCE_UNKNOWN"),
+    ({"suspended": None}, "SUSPENDED_STATUS_UNKNOWN"),
+    ({"price_band_pct": D("5"), "base_price": D("90.00")}, "PRICE_OUTSIDE_BAND"),  # 100 > 94.50
+])
+def test_exchange_rule_failures_block_the_paper_proposal(change, code):
+    p = proposal(snapshot=snapshot(**change))
+    assert p["action"] == "ABSTAIN" and p["reasons"] == ["EXCHANGE_RULE_BLOCK"] and code in p["rule_codes"]
+
+
+def test_intraday_sleeve_is_checked_as_mis_and_t2t_is_refused():
+    f = replace(forecast(), sleeve="intraday")
+    p = proposal(f, snapshot=snapshot(series="BE", price_band_pct=D("5")))
+    assert p["action"] == "ABSTAIN" and "T2T_NO_INTRADAY" in p["rule_codes"]
+
+
+def test_snapshot_must_match_the_forecast_security():
+    p = proposal(snapshot=snapshot(isin="INE000B00002"))
+    assert p["action"] == "ABSTAIN" and "SNAPSHOT_IDENTITY_MISMATCH" in p["reasons"]
+
+
+def test_proposal_outside_market_hours_is_blocked_by_session_rules():
+    p = proposal(submit_at=T.replace(hour=16, minute=30))
+    assert p["action"] == "ABSTAIN" and "SESSION_NOT_ACCEPTING_ORDERS" in p["rule_codes"]

@@ -12,6 +12,10 @@ The runtime is deliberately small enough to audit. Most of the complexity belong
     src/marketlab/experiments.py  started/completed/failed research records
     src/marketlab/research.py     forecast contract, one-entry paper sizing and wording
     src/marketlab/dashboard.py    local read-only status display
+    src/marketlab/rules/          cash-equity exchange/broker rules engine (calendars, sessions, ticks, bands,
+                                  T2T series, surveillance, Kite order constraints, cited fee schedule); every
+                                  paper proposal passes it (research.exchange_rules_decision)
+    src/marketlab/metrics/        returns, risk, PSR/DSR/PBO selection statistics, trade and cost metrics
 
 ## What owns each decision
 

@@ -1,5 +1,29 @@
 # Cash research reset handoff
 
+## Update: Claude integration, 4 Nov 2026 (branch `cash-research-reset`, not pushed)
+
+- **Commits:**
+  - `422a66c` applies UPGRADE.patch to 19d12dc. It was verified file-for-file against the delivered folder (114 files; the archive matches upstream, 61 of 61). The commit also restores the `.gitignore` exclusions the patch dropped.
+  - `452d70c` covers Kite login and collection usability:
+    - the redirect is caught on 127.0.0.1:8766;
+    - the API key comes from git-ignored `data/private/kite_app.json`, and the secret is entered in a hidden prompt and never saved;
+    - TokenException and PermissionException are classified;
+    - collection continues past plan-limited endpoints;
+    - a new `summary` command.
+  - A third commit ports the cash rules engine and metrics, wires the rules into paper proposals and fixes R02, R09 and R10. See RESET_REVIEW.md for the R01–R10 table.
+- **Tests (Windows, Python 3.13.7, venv from requirements-dev.lock): 277 passed, 0 failed, 0 skipped.** That is the 76 reset tests, 12 Kite login/collection tests, and the ported rules/metrics tests with new regressions.
+- **Behaviour change:** `paper_proposal` now requires `snapshot=` (a dated `InstrumentSnapshot`). Without it, the result is ABSTAIN `EXCHANGE_RULES_NOT_CHECKED`. Rule failures return ABSTAIN `EXCHANGE_RULE_BLOCK` with `rule_codes`.
+- **One fee implementation:** `costs.py` now wraps `rules.charges`. They were checked identical to the paisa on 7 cases before the switch.
+- **Real-account checks:**
+  - **RUN:** none yet.
+  - **NOT_RUN:** Kite login (user action), collection and summary on the real account.
+  - Quotes and history need the paid Kite Connect plan. A refusal is recorded as `COLLECTED_PARTIAL` and does not stop the run.
+- **Still open:**
+  - The diagnostic backtest still approximates settlement as the next session in the data. It should use `MarketCalendar.settlement_date` where the calendar is loaded.
+  - BSE and 2027 calendars are missing.
+  - Milestones A and C–G from prompts/01_CLAUDE_ENGINEERING.txt.
+
+
 Date: 4 November 2026. Upstream: aamosm/NSE_BSE_Trading at 19d12dcac7415b17d3a5192035517ad285f9b389.
 Active package version: 0.2.0. Delivery: complete source ZIP plus UPGRADE.patch. No new commit has been pushed to GitHub.
 

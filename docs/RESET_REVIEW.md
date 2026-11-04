@@ -17,6 +17,21 @@ The user subsequently removed MTF, authorized implementation changes and asked f
 | R09: PBO tie optimism | Old selection metrics are not imported. Fable must implement and independently test its chosen selection diagnostics, including ties. |
 | R10: missing Budget Sunday | No claim of a complete hard-coded exchange calendar. The collector weekday window is labeled a convenience schedule; dated calendar ingestion remains required. |
 
+## Status after Claude's integration (4 Nov 2026, branch cash-research-reset)
+
+The cash-only rules engine and metrics library were ported back into the active package, without MTF. All 10 legacy counterexamples were first re-run against upstream 19d12dc on Windows / Python 3.13.7, and all 10 failed, as the review reported.
+
+| Finding | Status now | Evidence |
+| --- | --- | --- |
+| R01 stale snapshot date | **Fixed by design**: the overwriting replay is not active. Paper proposals pass the caller's snapshot unchanged to the engine, which blocks `STALE_SNAPSHOT` | `test_r01_stale_snapshot_date_is_not_overwritten_or_accepted`; `test_exchange_rule_failures_block_the_paper_proposal[as_of]` |
+| R02 omitted status = safe | **Fixed**: `InstrumentSnapshot` status fields default to `None` (unknown) | `test_r02_omitted_security_status_blocks_instead_of_defaulting_to_safe` |
+| R03 netted receipts spendable | Diagnostic simulator keeps receipts pending. The ledger is not active, so this remains open for the future cash paper account (milestone F) | — |
+| R04, R05, R08 | Not applicable (MTF removed) | — |
+| R06 same-day CNC round trip | Diagnostic simulator blocks it (`SAME_DAY_DELIVERY_NETTING_UNSUPPORTED`); the engine warns `INTRADAY_REVERSAL_OF_DELIVERY`. Intraday reclassification is open for milestone F | existing tests |
+| R07 partial split mutation | Ledger not active; no split path exists. Must be atomic when corporate actions are built (milestone C) | — |
+| R09 PBO tie optimism | **Fixed**: midranks for out-of-sample ties | `test_r09_pbo_midranks_ties_instead_of_ranking_them_as_wins` (review's example → PBO 0.5) |
+| R10 Budget Sunday | **Fixed**: 1 Feb 2026 is a weekend trading day at standard timings, T+1 settlement on 2 Feb (NSE/CMTR/72349, NCL/CMPT/72384); NSE 2026 = 246 sessions | `test_r10_*` (3 tests) |
+
 ## What changed
 
 The runtime now provides a narrow REST adapter, private evidence store, bounded history downloader, RSS evidence ingestion, normalized external-trade observations, diagnostic simulations, immutable experiment events, a forecast contract and a local status page.

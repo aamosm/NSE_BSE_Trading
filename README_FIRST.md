@@ -18,6 +18,9 @@ The old project was a rules/accounting simulator, not a finished stock-selection
 | Forecast interface | Distributions, calibration/evidence identifiers, expiry, sample count and validation gate |
 | Paper sizing | Whole shares, cash reserve, stock/sector/sleeve/risk/liquidity/cost constraints |
 | Status page | Mobile-friendly, loopback-only, deterministic wording, no order controls |
+| Exchange rules | Cash-only engine with sources: holiday, settlement and Budget-Sunday calendars; pre-open/CAS sessions; ticks; bands; T2T; surveillance stages; Kite order limits. Paper proposals abstain without a dated snapshot |
+| Metrics | Time-weighted return, XIRR, drawdowns, Sharpe (risk-free rate required), Sortino, PSR, DSR, PBO with midrank ties, trade and cost statistics |
+| Read-only summary | `python -m marketlab summary` prints the latest collected holdings, funds, positions and trades |
 
 Not implemented: production forecasts, full portfolio optimization/rebalancing, autonomous paper-trading loop, exchange-grade fill simulation, full corporate-action/settlement engine, news-to-signal extraction, historical point-in-time universe, WebSocket tick recorder, or live orders.
 

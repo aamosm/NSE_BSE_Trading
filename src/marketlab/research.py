@@ -8,6 +8,12 @@ import re
 
 from .common import timestamp
 from .costs import total_charges
+from .rules import (
+    AccountState, Exchange, InstrumentSnapshot, MarketCalendar, OrderRequest, OrderType, PositionState, Product,
+    Side, evaluate_order,
+)
+from .rules import Policy as RulesPolicy
+from .rules.types import Decision
 
 
 @dataclass(frozen=True)
@@ -69,12 +75,33 @@ class Policy:
             raise ValueError("Invalid policy limits")
 
 
+def exchange_rules_decision(forecast: Forecast, snapshot: InstrumentSnapshot, *, quantity: int, price,
+                            submit_at, calendar: MarketCalendar | None = None) -> Decision:
+    """Run the proposed paper entry through the exchange/broker rules engine as a LIMIT buy.
+
+    Core and swing sleeves are delivery (CNC); the intraday sleeve is MIS, always fully funded here.
+    The snapshot must describe this security on the submission date; the engine rejects stale, unknown
+    or restricted inputs (T2T, surveillance, bands, ticks, sessions, suspension, call auctions).
+    """
+    product = Product.MIS if forecast.sleeve == "intraday" else Product.CNC
+    order = OrderRequest(submitted_at=timestamp(submit_at), exchange=Exchange(forecast.exchange), side=Side.BUY,
+                         product=product, order_type=OrderType.LIMIT, quantity=quantity, price=D(str(price)))
+    return evaluate_order(order, snapshot, PositionState(), AccountState(), calendar=calendar or MarketCalendar(),
+                          policy=RulesPolicy(allowed_products=frozenset({Product.CNC, Product.MIS})))
+
+
 def paper_proposal(forecast: Forecast, *, at, price, equity, available_cash,
                    known_status: bool, restricted: bool, spread_bps: float,
                    median_daily_volume: int, existing_stock=0, existing_sector=0,
-                   existing_sleeve=0, bse_group=None, status_as_of=None, quote_as_of=None, policy=Policy()):
+                   existing_sleeve=0, bse_group=None, status_as_of=None, quote_as_of=None, policy=Policy(),
+                   snapshot: InstrumentSnapshot | None = None, calendar: MarketCalendar | None = None,
+                   submit_at=None):
     reasons = []
     f, t = forecast, timestamp(at)
+    if snapshot is None:
+        reasons.append("EXCHANGE_RULES_NOT_CHECKED")
+    elif snapshot.isin != f.isin or str(snapshot.exchange) != f.exchange:
+        reasons.append("SNAPSHOT_IDENTITY_MISMATCH")
     if f.validated_for_paper is not True or not f.model_id or not f.calibration_id:
         reasons.append("MODEL_NOT_VALIDATED")
     if not timestamp(f.as_of) <= t < timestamp(f.expires_at):
@@ -119,6 +146,10 @@ def paper_proposal(forecast: Forecast, *, at, price, equity, available_cash,
         qty -= 1
     if not qty:
         return {"action": "ABSTAIN", "quantity": 0, "reasons": ["CASH_RISK_OR_INTEGER_SHARE_LIMIT"], "live_orders": False}
+    rules = exchange_rules_decision(f, snapshot, quantity=qty, price=p, submit_at=submit_at or t, calendar=calendar)
+    if not rules.accepted:
+        return {"action": "ABSTAIN", "quantity": 0, "reasons": ["EXCHANGE_RULE_BLOCK"],
+                "rule_codes": sorted(c.code for c in rules.blocks), "live_orders": False}
     exit_cost = total_charges(p * qty, side="SELL", style=style, exchange=f.exchange,
                               bse_group=bse_group, dp=True)
     cost_fraction = float((buy + exit_cost) / (p * qty)) + spread_bps / 10000
@@ -130,6 +161,7 @@ def paper_proposal(forecast: Forecast, *, at, price, equity, available_cash,
     return {"action": "PAPER_BUY_PROPOSAL", "quantity": qty, "isin": f.isin,
             "sleeve": f.sleeve, "net_score": net_score, "round_trip_cost_estimate": str(buy + exit_cost),
             "reasons": ["COST_AND_RISK_GATES_PASSED"], "evidence_ids": f.evidence_ids,
+            "rule_warnings": sorted(c.code for c in rules.warnings), "snapshot_id": snapshot.snapshot_id,
             "model_id": f.model_id, "live_orders": False}
 
 
@@ -147,5 +179,9 @@ def explain(proposal):
         "CASH_RISK_OR_INTEGER_SHARE_LIMIT": "Cash, risk or whole-share limits leave no affordable quantity.",
         "EDGE_NOT_ABOVE_COST_AND_UNCERTAINTY": "Estimated upside does not cover costs and the uncertainty penalty.",
         "COST_AND_RISK_GATES_PASSED": "A paper proposal passed the configured cash, cost and risk checks.",
+        "EXCHANGE_RULES_NOT_CHECKED": "No dated security snapshot was supplied, so exchange and broker rules "
+                                      "could not be checked.",
+        "SNAPSHOT_IDENTITY_MISMATCH": "The security snapshot does not match the forecast's ISIN or exchange.",
+        "EXCHANGE_RULE_BLOCK": "Exchange or broker rules would reject this order; see rule_codes.",
     }
     return " ".join(meanings.get(x, "Unknown reason: " + x) for x in proposal["reasons"])
