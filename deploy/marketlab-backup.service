@@ -1,0 +1,17 @@
+[Unit]
+Description=MarketLab encrypted off-server backup (age + rclone)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=marketlab
+Group=marketlab
+EnvironmentFile=/etc/marketlab/marketlab.conf
+ExecStart=/opt/marketlab/current/deploy/backup.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/marketlab/backups /var/lib/marketlab/.config

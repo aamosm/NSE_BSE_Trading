@@ -1,0 +1,35 @@
+[Unit]
+Description=MarketLab scheduler (read-only collection, daily rule inputs, health; no order capability)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=1h
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=marketlab
+Group=marketlab
+EnvironmentFile=/etc/marketlab/marketlab.conf
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/marketlab/current/src
+WorkingDirectory=/opt/marketlab/current
+ExecStart=/opt/marketlab/current/.venv/bin/python -m marketlab --private-dir /var/lib/marketlab/private --market-dir /var/lib/marketlab/market run --interval 60 --backups /var/lib/marketlab/backups --symbols $SYMBOLS
+Restart=always
+RestartSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/marketlab
+MemoryMax=768M
+CPUQuota=60%
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly MarketLab encrypted backup (after the scheduler's 23:30 SQLite snapshots)
+
+[Timer]
+OnCalendar=*-*-* 23:50:00 Asia/Kolkata
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

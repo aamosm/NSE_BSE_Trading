@@ -1,0 +1,11 @@
+# /etc/marketlab/marketlab.conf  (NOT secret; owner root, mode 0644)
+# Secrets live only in /var/lib/marketlab/private/.env (owner marketlab, mode 0600).
+
+# Watchlist for daily rule snapshots and quotes (NSE only for now; BSE calendar not verified).
+SYMBOLS=NSE:INFY NSE:TCS NSE:HDFCBANK NSE:ITC NSE:ONGC
+
+# rclone remote for encrypted backups, created with `sudo -u marketlab rclone config`.
+BACKUP_REMOTE=b2-marketlab:your-bucket-name/marketlab
+
+# age public key (recipient) of a key pair whose PRIVATE half stays off the server (e.g. on your laptop).
+BACKUP_RECIPIENT=age1replace_with_your_public_key

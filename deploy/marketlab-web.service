@@ -1,0 +1,34 @@
+[Unit]
+Description=MarketLab private phone app and Kite login callback (loopback only; reached via Tailscale Serve)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=marketlab
+Group=marketlab
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/marketlab/current/src
+WorkingDirectory=/opt/marketlab/current
+ExecStart=/opt/marketlab/current/.venv/bin/python -m marketlab --private-dir /var/lib/marketlab/private --market-dir /var/lib/marketlab/market dashboard --port 8765
+Restart=always
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Writes only the login state, session token and pause control; market data is read-only here.
+ReadWritePaths=/var/lib/marketlab/private
+ReadOnlyPaths=/var/lib/marketlab/market
+MemoryMax=256M
+CPUQuota=25%
+
+[Install]
+WantedBy=multi-user.target
