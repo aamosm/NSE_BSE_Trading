@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import account, login, master, sources
+from . import account, login, master, service, sources
 from .backtest import compare, load_bars, simulate
 from .audit import audit_dataset
 from .common import IST, atomic_json, money, now, timestamp
@@ -335,7 +335,12 @@ def parser():
     a.add_argument("--wait", type=float, default=300.0, help="seconds to wait for the browser login redirect")
     sub.add_parser("summary")
     a = sub.add_parser("collect"); a.add_argument("--symbols", nargs="*", default=[]); a.add_argument("--instruments", action="store_true")
-    a = sub.add_parser("watch"); a.add_argument("--symbols", nargs="*", default=[]); a.add_argument("--interval", type=int, default=300)
+    a = sub.add_parser("run", help="supervised scheduler: collection, daily inputs, health (no orders)")
+    a.add_argument("--symbols", nargs="*", default=[], help="watchlist, e.g. NSE:INFY")
+    a.add_argument("--interval", type=int, default=60); a.add_argument("--once", action="store_true")
+    a.add_argument("--backups", type=Path)
+    a = sub.add_parser("pause", help="pause paper analysis (collection continues)")
+    a = sub.add_parser("resume", help="resume paper analysis")
     a = sub.add_parser("history")
     for name in ("token", "interval", "start", "end", "exchange", "symbol", "isin", "output"):
         a.add_argument("--"+name, required=True, type=int if name=="token" else Path if name=="output" else str)
@@ -371,20 +376,15 @@ def main():
             print(summary_text(root))
         elif args.command == "collect":
             collect_once(root, args.symbols, args.instruments)
-        elif args.command == "watch":
-            if args.interval < 60:
-                raise ValueError("The collector interval must be at least 60 seconds")
-            while True:
-                local = now()
-                if local.weekday() < 5 and clock(8, 30) <= local.time() <= clock(16, 15):
-                    try:
-                        collect_once(root, args.symbols)
-                    except (KiteError, OSError, ValueError, RuntimeError) as e:
-                        state_write(root, collection={"status": type(e).__name__, "attempt_at": now()},
-                                    message="Collection is paused or failed. Check authentication and connectivity.")
-                        print(type(e).__name__, flush=True)
-                # Holiday/special-session collection needs an explicit calendar; no trading depends on this schedule.
-                time.sleep(args.interval)
+        elif args.command == "run":
+            if args.interval < 30:
+                raise ValueError("The scheduler interval must be at least 30 seconds")
+            ctx = service.Context(root, args.market_dir, args.symbols, backups=args.backups)
+            service.run_forever(ctx, args.interval, iterations=1 if args.once else None)
+            print("Service tick complete." if args.once else "Service stopped.")
+        elif args.command in ("pause", "resume"):
+            service.set_paused(root, args.command == "pause")
+            print(f"Paper analysis {'paused' if args.command == 'pause' else 'resumed'}; collection is unaffected.")
         elif args.command == "history":
             historical(root, args.token, args.interval, args.start, args.end, args.output, args.exchange, args.symbol, args.isin)
         elif args.command == "news":
