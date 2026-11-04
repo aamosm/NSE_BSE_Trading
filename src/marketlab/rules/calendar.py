@@ -8,10 +8,12 @@ loudly instead of silently treating every weekday as a trading day.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 
 from .provenance import Cite, Status
 from .types import Exchange, RuleUnknown
+
+REGULAR_OPEN = time(9, 0)  # pre-open order entry on a regular trading day (NSE/CMTR/73927)
 
 T_PLUS_1_FROM = date(2023, 1, 27)
 T_PLUS_1_CITE = Cite(("NSE/CMTR/73927",), Status.PRIMARY,
@@ -102,6 +104,12 @@ class MarketCalendar:
         if d in y.weekend_trading_days:
             return True
         return d.weekday() < 5 and d not in y.trading_holidays
+
+    def session_open(self, exchange: Exchange, d: date) -> time | None:
+        """Earliest order-entry time (pre-open start) of the day's session; None on a non-trading day."""
+        if self.is_special_session(exchange, d):
+            raise RuleUnknown(f"{d} is a special session whose timetable is not loaded")
+        return REGULAR_OPEN if self.is_trading_day(exchange, d) else None
 
     def is_settlement_day(self, exchange: Exchange, d: date) -> bool:
         y = self.year(exchange, d)

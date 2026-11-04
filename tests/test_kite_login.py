@@ -174,7 +174,7 @@ def test_collection_continues_past_plan_limited_endpoints_and_summary_reads_it(t
     assert status["status"] == "COLLECTED_PARTIAL"
     assert set(status["unavailable"]) == {"quotes", "instruments_NSE", "instruments_BSE"}
     db = Store(tmp_path / "evidence.sqlite3")
-    assert db.count() == 4
+    assert db.count() == 5  # four account kinds plus the completed-batch record
     db.close()
     text = cli.summary_text(tmp_path)
     # 12 shares: invested 12 x 100.50 = 1206.00, current 12 x 110 = 1320.00

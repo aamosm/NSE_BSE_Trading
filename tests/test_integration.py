@@ -30,7 +30,7 @@ def test_mock_collection_records_reads_without_exposing_account_fields(tmp_path,
     monkeypatch.setattr(cli, "client", lambda root: FakeKite())
     cli.collect_once(tmp_path, ["NSE:TEST"], instruments=True)
     db = Store(tmp_path/"evidence.sqlite3")
-    assert db.count() == 7
+    assert db.count() == 8  # seven reads plus the completed-batch record
     status = json.loads((tmp_path/"status.json").read_text())
     assert status["live_orders"] is False
     assert "INE000A00001" not in (tmp_path/"status.json").read_text()
