@@ -14,7 +14,7 @@ import time
 import uuid
 import webbrowser
 from datetime import date, datetime, timedelta, time as clock
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -81,7 +81,9 @@ class CallbackCatcher:
                 pass
 
         self._result = result
-        self.server = HTTPServer(("127.0.0.1", port), Handler)
+        # One thread per connection: idle browser pre-connections cannot delay the real redirect.
+        self.server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        self.server.daemon_threads = True
         self.server.timeout = 0.5
         self.port = self.server.server_address[1]
 
