@@ -268,6 +268,17 @@ def historical(root, token, interval, start, end, output, exchange, symbol, isin
     print("Historical dataset and limitations metadata saved.")
 
 
+def dataset_bse_group(path: Path) -> str:
+    """BSE fee group recorded with the dataset from listing data; never a command-line override."""
+    meta_path = path.with_suffix(".metadata.json")
+    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    group, source = meta.get("bse_group"), meta.get("bse_group_source")
+    if not group or not source:
+        raise ValueError("BSE charges depend on the scrip group; the dataset metadata must record bse_group "
+                         "and bse_group_source from the security master")
+    return group
+
+
 def import_trades(root, path):
     db = Store(root/"evidence.sqlite3")
     try:
@@ -327,7 +338,7 @@ def parser():
     a = sub.add_parser("news"); a.add_argument("--file", type=Path); a.add_argument("--url")
     a = sub.add_parser("import-trades"); a.add_argument("file", type=Path)
     a = sub.add_parser("backtest"); a.add_argument("file", type=Path); a.add_argument("--output", type=Path)
-    a.add_argument("--exchange", choices=["NSE", "BSE"], default="NSE"); a.add_argument("--bse-group")
+    a.add_argument("--exchange", choices=["NSE", "BSE"], default="NSE")
     a.add_argument("--fixed-cost", default="0"); a.add_argument("--strategy", choices=["compare", "intraday_reversal"], default="compare")
     a = sub.add_parser("demo"); a.add_argument("--output", type=Path, default=Path("data/runs/demo"))
     a = sub.add_parser("dashboard"); a.add_argument("--port", type=int, default=8765)
@@ -378,17 +389,18 @@ def main():
         elif args.command == "import-trades":
             import_trades(root, args.file)
         elif args.command == "backtest":
+            bse_group = dataset_bse_group(args.file) if args.exchange == "BSE" else None
             parameters = {"strategy": args.strategy, "exchange": args.exchange,
-                          "bse_group": args.bse_group, "fixed_cost": args.fixed_cost}
+                          "bse_group": bse_group, "fixed_cost": args.fixed_cost}
             with Experiment(root, args.file, parameters) as trial:
                 output = args.output or Path("data/runs")/trial.run_id/"report.json"
                 if output.exists():
                     raise ValueError("Output exists; choose a new experiment output path")
                 if args.strategy == "compare":
-                    report = compare(args.file, exchange=args.exchange, bse_group=args.bse_group, fixed_cost_inr=args.fixed_cost)
+                    report = compare(args.file, exchange=args.exchange, bse_group=bse_group, fixed_cost_inr=args.fixed_cost)
                 else:
                     run = simulate(load_bars(args.file), strategy=args.strategy, exchange=args.exchange,
-                                   bse_group=args.bse_group, fixed_cost_inr=args.fixed_cost)
+                                   bse_group=bse_group, fixed_cost_inr=args.fixed_cost)
                     report = {"comparison": {args.strategy: run}, "profitability_proven": False,
                               "dataset_sha256": hashlib.sha256(args.file.read_bytes()).hexdigest()}
                 report["run_id"] = trial.run_id

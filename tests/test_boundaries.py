@@ -250,5 +250,7 @@ def test_snapshot_must_match_the_forecast_security():
 
 
 def test_proposal_outside_market_hours_is_blocked_by_session_rules():
-    p = proposal(submit_at=T.replace(hour=16, minute=30))
+    late = T.replace(hour=16, minute=30)
+    f = replace(forecast(), as_of=late, expires_at=late + timedelta(hours=1))
+    p = proposal(f, at=late, submit_at=late, status_as_of=late, quote_as_of=late)
     assert p["action"] == "ABSTAIN" and "SESSION_NOT_ACCEPTING_ORDERS" in p["rule_codes"]

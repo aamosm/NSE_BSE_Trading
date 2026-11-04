@@ -53,6 +53,7 @@ class Source:
 
 
 CHECKED = date(2026, 11, 4)
+CHECKED_2 = date(2026, 11, 5)
 
 _SOURCES: tuple[Source, ...] = (
     # ---- NSE / NSE Clearing / SEBI (primary) -------------------------------------------
@@ -100,9 +101,39 @@ _SOURCES: tuple[Source, ...] = (
     Source("NCL/CMPT/72384", "Settlement schedule ... Live Trading Session on Sunday February 01, 2026",
            "NSE Clearing", SourceKind.CLEARING, "https://nsearchives.nseindia.com/content/circulars/CMPT72384.pdf",
            date(2026, 1, 19), CHECKED),
+    Source("NSE/CMTR/76941", "Muhurat Trading session on account of Diwali (Sunday 8 Nov 2026)", "NSE",
+           SourceKind.EXCHANGE, "https://nsearchives.nseindia.com/content/circulars/CMTR76941.pdf",
+           date(2026, 10, 19), CHECKED_2, "Session table read in full on 5 Nov 2026."),
+    Source("NCL/CMPT/77037", "Timings on Muhurat Trading session (settlement schedule)", "NSE Clearing",
+           SourceKind.CLEARING, "https://nsearchives.nseindia.com/content/circulars/CMPT77037.pdf",
+           date(2026, 10, 21), CHECKED_2, "8 Nov trades: settlement M 2026211, settlement date 9 Nov 2026."),
+    Source("NSE/INSP/45900", "Modifications in the STP messaging formats on account of implementation of the "
+           "Stamp Duty", "NSE", SourceKind.EXCHANGE, "https://nsearchives.nseindia.com/content/circulars/INSP45900.pdf",
+           date(2020, 9, 30), CHECKED_2, "Contract-note STT field (COUN) allows integer values only."),
+    Source("STT-RULES-2004-DRAFT", "Securities Transaction Tax rules, 2004 draft: aggregation per client code, "
+           "security and trading day (third-party copy)", "via scribd.com", SourceKind.THIRD_PARTY,
+           "https://www.scribd.com/document/252690660/STT", None, CHECKED_2,
+           "Draft text seen through a search summary; final rules not read."),
     # ---- Zerodha / Kite (broker official) ----------------------------------------------
     Source("ZERODHA/CHARGES", "Zerodha charges list", "Zerodha", SourceKind.BROKER, "https://zerodha.com/charges/",
            None, CHECKED, "Page shows no effective dates; values are a 2026-11-04 snapshot."),
+    Source("ZERODHA/STT-ROUNDING", "How is the Securities Transaction Tax (STT) calculated?", "Zerodha",
+           SourceKind.BROKER, "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/"
+           "articles/how-is-the-securities-transaction-tax-stt-calculated", None, CHECKED_2,
+           "STT rounded to the nearest rupee (50 paise and above up); aggregation level not stated."),
+    Source("ZERODHA/DP-CHARGES", "What do DP charges mean?", "Zerodha", SourceKind.BROKER,
+           "https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/"
+           "what-do-dp-charges-mean", None, CHECKED_2,
+           "Once per scrip per sell day; funds statement, not contract note; 15.34 / 15.05 incl. GST."),
+    Source("KITE/CA-ADJUSTMENT", "Kite charts not matching NSE/BSE records (corporate-action adjustment)", "Zerodha",
+           SourceKind.BROKER, "https://support.zerodha.com/category/trading-and-markets/charts-and-orders/charts/"
+           "articles/kite-charts-not-matching-as-per-the-records-in-nse-or-bse", None, CHECKED_2,
+           "Historical OHLC adjusted for bonus, split, rights, spin-off and extraordinary dividends (>= 2%)."),
+    Source("KITE/CA-FORUM-15971", "Kite forum: getting the right closing prices adjusted for corporate actions",
+           "Zerodha (forum staff)", SourceKind.BROKER,
+           "https://kite.trade/forum/discussion/15971/getting-the-right-closing-prices-adjusted-for-corporate-actions",
+           None, CHECKED_2, "Adjusted before market open on the ex-date; volume adjusted except for dividends; "
+           "no corporate-action API."),
     Source("ZERODHA/MTF-FAQ", "FAQs on Margin Trading Facility", "Zerodha", SourceKind.BROKER,
            "https://support.zerodha.com/category/trading-and-markets/margins/margin-trading-facility/articles/"
            "margin-trading-facility-mtf-faqs", None, CHECKED),

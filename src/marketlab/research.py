@@ -7,7 +7,7 @@ import math
 import re
 
 from .common import timestamp
-from .costs import total_charges
+from .costs import BSE_GROUPS, total_charges
 from .rules import (
     AccountState, Exchange, InstrumentSnapshot, MarketCalendar, OrderRequest, OrderType, PositionState, Product,
     Side, evaluate_order,
@@ -63,6 +63,7 @@ class Policy:
     minimum_samples: int = 100
     max_spread_bps: float = 15
     max_participation: float = .001
+    max_submit_delay_seconds: int = 120  # a proposal older than this at submission must be re-decided
     # Caps are illustrative research constraints, not recommended allocations.
     sleeve_caps: dict = field(default_factory=lambda: {"core": .50, "swing": .20, "intraday": .10})
 
@@ -71,7 +72,7 @@ class Policy:
                  self.max_participation, *self.sleeve_caps.values()]
         if any(not math.isfinite(v) or not 0 <= v <= 1 for v in rates):
             raise ValueError("Invalid policy fractions")
-        if self.minimum_samples <= 0 or not 0 <= self.max_spread_bps < 10000:
+        if self.minimum_samples <= 0 or not 0 <= self.max_spread_bps < 10000 or not 0 <= self.max_submit_delay_seconds <= 3600:
             raise ValueError("Invalid policy limits")
 
 
@@ -93,18 +94,37 @@ def exchange_rules_decision(forecast: Forecast, snapshot: InstrumentSnapshot, *,
 def paper_proposal(forecast: Forecast, *, at, price, equity, available_cash,
                    known_status: bool, restricted: bool, spread_bps: float,
                    median_daily_volume: int, existing_stock=0, existing_sector=0,
-                   existing_sleeve=0, bse_group=None, status_as_of=None, quote_as_of=None, policy=Policy(),
+                   existing_sleeve=0, status_as_of=None, quote_as_of=None, policy=Policy(),
                    snapshot: InstrumentSnapshot | None = None, calendar: MarketCalendar | None = None,
                    submit_at=None):
+    """One integer-share paper entry, or ABSTAIN with reasons.
+
+    ``at`` is the decision time: every input must have been known by then. ``submit_at`` (default
+    ``at``) is when the simulated order would reach the exchange; freshness is checked again at that
+    time and the exchange rules are evaluated at it. A proposal submitted more than
+    ``policy.max_submit_delay_seconds`` after its decision must be re-decided (REVALIDATION_REQUIRED).
+    The BSE fee group is taken from the dated security snapshot (listing data), never from the caller.
+    """
     reasons = []
     f, t = forecast, timestamp(at)
+    s = timestamp(submit_at) if submit_at is not None else t
+    if s < t:
+        reasons.append("SUBMISSION_BEFORE_DECISION")
+    elif (s - t).total_seconds() > policy.max_submit_delay_seconds:
+        reasons.append("REVALIDATION_REQUIRED")
     if snapshot is None:
         reasons.append("EXCHANGE_RULES_NOT_CHECKED")
     elif snapshot.isin != f.isin or str(snapshot.exchange) != f.exchange:
         reasons.append("SNAPSHOT_IDENTITY_MISMATCH")
+    bse_group = None
+    if f.exchange == "BSE":
+        bse_group = snapshot.series.upper() if snapshot is not None and snapshot.series else None
+        if bse_group not in BSE_GROUPS:
+            reasons.append("BSE_FEE_GROUP_UNKNOWN")
+            bse_group = None
     if f.validated_for_paper is not True or not f.model_id or not f.calibration_id:
         reasons.append("MODEL_NOT_VALIDATED")
-    if not timestamp(f.as_of) <= t < timestamp(f.expires_at):
+    if not (timestamp(f.as_of) <= t and max(t, s) < timestamp(f.expires_at)):
         reasons.append("STALE_OR_FUTURE_FORECAST")
     if f.samples < policy.minimum_samples:
         reasons.append("INSUFFICIENT_SAMPLES")
@@ -114,9 +134,11 @@ def paper_proposal(forecast: Forecast, *, at, price, equity, available_cash,
         reasons.append("UNKNOWN_OR_RESTRICTED_SECURITY")
     if status_as_of is None or quote_as_of is None:
         reasons.append("STALE_OR_MISSING_MARKET_INPUT")
-    elif (timestamp(status_as_of).date() != t.date() or timestamp(status_as_of) > t
-          or not timedelta(0) <= t-timestamp(quote_as_of) <= timedelta(minutes=5)):
-        reasons.append("STALE_OR_MISSING_MARKET_INPUT")
+    else:
+        status_t, quote_t = timestamp(status_as_of), timestamp(quote_as_of)
+        if (status_t > t or quote_t > t or status_t.date() != s.date()
+                or not timedelta(0) <= s - quote_t <= timedelta(minutes=5)):
+            reasons.append("STALE_OR_MISSING_MARKET_INPUT")
     if f.exchange not in {"NSE", "BSE"} or f.sleeve not in policy.sleeve_caps:
         reasons.append("UNSUPPORTED_MARKET_OR_SLEEVE")
     if not math.isfinite(spread_bps) or spread_bps < 0 or spread_bps > policy.max_spread_bps:
@@ -146,7 +168,7 @@ def paper_proposal(forecast: Forecast, *, at, price, equity, available_cash,
         qty -= 1
     if not qty:
         return {"action": "ABSTAIN", "quantity": 0, "reasons": ["CASH_RISK_OR_INTEGER_SHARE_LIMIT"], "live_orders": False}
-    rules = exchange_rules_decision(f, snapshot, quantity=qty, price=p, submit_at=submit_at or t, calendar=calendar)
+    rules = exchange_rules_decision(f, snapshot, quantity=qty, price=p, submit_at=s, calendar=calendar)
     if not rules.accepted:
         return {"action": "ABSTAIN", "quantity": 0, "reasons": ["EXCHANGE_RULE_BLOCK"],
                 "rule_codes": sorted(c.code for c in rules.blocks), "live_orders": False}
@@ -183,5 +205,8 @@ def explain(proposal):
                                       "could not be checked.",
         "SNAPSHOT_IDENTITY_MISMATCH": "The security snapshot does not match the forecast's ISIN or exchange.",
         "EXCHANGE_RULE_BLOCK": "Exchange or broker rules would reject this order; see rule_codes.",
+        "SUBMISSION_BEFORE_DECISION": "The submission time is earlier than the decision time.",
+        "REVALIDATION_REQUIRED": "Too much time passed between the decision and submission; decide again.",
+        "BSE_FEE_GROUP_UNKNOWN": "The BSE group (which sets exchange charges) is not known from listing data.",
     }
     return " ".join(meanings.get(x, "Unknown reason: " + x) for x in proposal["reasons"])

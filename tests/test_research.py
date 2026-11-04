@@ -30,7 +30,8 @@ def test_intraday_brokerage_stt_and_no_dp():
     c = charges(1000, side="BUY", style="intraday", dp=True)
     s = charges(1000, side="SELL", style="intraday", dp=True)
     assert c["brokerage"] == s["brokerage"] == D(".30")
-    assert c["stt"] == 0 and s["stt"] == D(".25")
+    # 0.025% of 1,000 = 0.25; STT is rounded to the rupee (under 50 paise rounds down) -> 0
+    assert c["stt"] == 0 and s["stt"] == D("0")
     assert c["dp"] == s["dp"] == 0
 
 

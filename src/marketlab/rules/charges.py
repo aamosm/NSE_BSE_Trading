@@ -151,3 +151,120 @@ def with_gst(schedule: ChargeSchedule, fee: Decimal) -> Decimal:
 def dp_charges(schedule: ChargeSchedule, sell_days: set[tuple[str, date]]) -> Decimal:
     """DP charge for delivery sells: one charge per (ISIN, sell date). Not charged on MIS."""
     return schedule.dp_charge_per_scrip_incl_gst * len(sell_days)
+
+
+# ---- Day-level statutory aggregation (review of 3513d33, finding 5) -------------------------------
+
+RUPEE = D("1")
+STT_BASIS_CITE = Cite(("ZERODHA/STT-ROUNDING", "STT-RULES-2004-DRAFT", "NSE/INSP/45900"), Status.ASSUMPTION,
+                      "STT per exchange, client, ISIN, trade date, trade kind and side: aggregate value / quantity "
+                      "rounded to the paisa, STT on that, rounded to the nearest rupee (50 paise and above up). "
+                      "Basis from the 2004 draft STT rules; Zerodha documents the rupee rounding; contract-note STT "
+                      "is an integer field. Unreconciled with a real contract note.")
+STAMP_CITE = Cite(("ZERODHA/CHARGES",), Status.ASSUMPTION,
+                  "Stamp duty allocation and rounding UNRESOLVED: per-order paisa rounding is assumed.")
+DP_CITE = Cite(("ZERODHA/DP-CHARGES",), Status.BROKER_OFFICIAL,
+               "DP charge once per scrip per sell day irrespective of quantity; posted to the funds statement, "
+               "not the contract note. Rs 15.34 incl. GST for a male primary holder, Rs 15.05 for a female "
+               "primary holder (account-specific; reconcile with the funds statement).")
+DAY_ASSUMPTIONS = ("STT_AGGREGATION_UNRECONCILED", "STAMP_ALLOCATION_UNRESOLVED", "DP_FROM_FUNDS_STATEMENT")
+
+
+def round_rupee(x: Decimal) -> Decimal:
+    return x.quantize(RUPEE, rounding=ROUND_HALF_UP)
+
+
+@dataclass(frozen=True, slots=True)
+class Fill:
+    trade_date: date
+    exchange: Exchange
+    isin: str
+    kind: TradeKind
+    side: Side
+    price: Decimal
+    quantity: int
+    order_id: str
+    bse_group: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SttGroup:
+    trade_date: date
+    exchange: Exchange
+    isin: str
+    kind: TradeKind
+    side: Side
+    quantity: int
+    turnover: Decimal
+    average_price: Decimal  # turnover / quantity, rounded to the paisa
+    stt: Decimal  # whole rupees
+
+
+@dataclass(frozen=True, slots=True)
+class DayCharges:
+    stt_groups: tuple[SttGroup, ...]
+    orders: tuple[tuple[str, ChargeBreakdown], ...]  # per order; their stt field is NOT used in totals
+    dp: Decimal
+    non_stt: Decimal  # brokerage + exchange + SEBI + IPFT + stamp + GST over all orders
+    stt: Decimal
+    total: Decimal
+    assumptions: tuple[str, ...] = DAY_ASSUMPTIONS
+
+
+def stt_group(schedule: ChargeSchedule, key, fills) -> SttGroup:
+    d, exchange, isin, kind, side = key
+    qty = sum(f.quantity for f in fills)
+    turnover = sum((f.price * f.quantity for f in fills), D("0"))
+    avg = _r(turnover / qty)
+    stt = round_rupee(avg * qty * schedule.stt_pct[(kind, side)] / 100)
+    return SttGroup(d, exchange, isin, kind, side, qty, turnover, avg, stt)
+
+
+def day_charges(schedule: ChargeSchedule, fills) -> DayCharges:
+    """Statutory and broker charges for a set of executed fills, aggregated the way the bill is built.
+
+    Per order: brokerage (cap per executed order), exchange, SEBI, IPFT, stamp, GST. Per exchange/ISIN/
+    day/kind/side: STT rounded to the rupee. Per ISIN and sell date (delivery only): one DP charge.
+    """
+    fills = list(fills)
+    if not fills:
+        raise ValueError("No fills")
+    for f in fills:
+        if f.quantity <= 0 or f.price <= 0:
+            raise ValueError("price and quantity must be positive")
+    orders: dict[str, list[Fill]] = {}
+    for f in fills:
+        orders.setdefault(f.order_id, []).append(f)
+    order_rows = []
+    for oid, group in sorted(orders.items()):
+        first = group[0]
+        if any((g.trade_date, g.exchange, g.isin, g.kind, g.side) != (first.trade_date, first.exchange, first.isin,
+                                                                       first.kind, first.side) for g in group):
+            raise ValueError(f"Order {oid} mixes dates, securities, kinds or sides")
+        turnover = sum((g.price * g.quantity for g in group), D("0"))
+        order_rows.append((oid, order_charges(schedule, exchange=first.exchange, kind=first.kind, side=first.side,
+                                              price=turnover, quantity=1, trade_date=first.trade_date,
+                                              bse_group=first.bse_group)))
+    keyed: dict[tuple, list[Fill]] = {}
+    for f in fills:
+        keyed.setdefault((f.trade_date, f.exchange, f.isin, f.kind, f.side), []).append(f)
+    groups = tuple(stt_group(schedule, k, v) for k, v in sorted(keyed.items(), key=lambda kv: tuple(map(str, kv[0]))))
+    sell_days = {(f.isin, f.trade_date) for f in fills if f.kind is TradeKind.DELIVERY and f.side is Side.SELL}
+    dp = dp_charges(schedule, sell_days)
+    non_stt = sum((c.total - c.stt for _, c in order_rows), D("0"))
+    stt = sum((g.stt for g in groups), D("0"))
+    return DayCharges(groups, tuple(order_rows), dp, non_stt, stt, non_stt + stt + dp)
+
+
+def reconcile_dp(expected_by_date: dict[date, Decimal], statement_by_date: dict[date, Decimal]) -> dict:
+    """Compare expected DP charges with DP debits from the owner's funds statement, per posting date.
+
+    The statement is the authority (DP is not on the contract note). Returns matched dates and
+    differences; nothing is adjusted automatically.
+    """
+    dates = sorted(set(expected_by_date) | set(statement_by_date))
+    rows = [{"date": d, "expected": expected_by_date.get(d, D("0")), "statement": statement_by_date.get(d, D("0"))}
+            for d in dates]
+    for r in rows:
+        r["difference"] = r["statement"] - r["expected"]
+    return {"matched": all(r["difference"] == 0 for r in rows), "rows": rows}

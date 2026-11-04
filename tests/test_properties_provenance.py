@@ -89,4 +89,4 @@ def test_primary_status_requires_an_official_exchange_or_regulator_source():
 
 def test_sources_have_locations_and_check_dates():
     for s in SOURCES.values():
-        assert s.url and s.checked_on == date(2026, 11, 4)
+        assert s.url and s.checked_on in (date(2026, 11, 4), date(2026, 11, 5))
