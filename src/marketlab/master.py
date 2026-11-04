@@ -108,12 +108,15 @@ def _num(x):
 class Inputs:
     """Stored files usable for session D, chosen strictly by receipt time before D's open."""
 
-    def __init__(self, market: Path, day: date, calendar: MarketCalendar | None = None, exchange=Exchange.NSE):
+    def __init__(self, market: Path, day: date, calendar: MarketCalendar | None = None, exchange=Exchange.NSE,
+                 cutoff: datetime | None = None):
         self.market, self.day, self.cal = market, day, calendar or MarketCalendar()
         opens = self.cal.session_open(exchange, day)
         if opens is None:
             raise RuleUnknown(f"{day} is not a trading day")
-        self.cutoff = datetime.combine(day, opens, IST)
+        # Default: files first received before the session opens (pre-session decisions). A later decision
+        # time may use files received before that time, never after it.
+        self.cutoff = timestamp(cutoff) if cutoff else datetime.combine(day, opens, IST)
         self.previous = self.cal.previous_trading_day(exchange, day)
         self.used = {}
 
@@ -142,9 +145,10 @@ def month_end_before(cal: MarketCalendar, exchange: Exchange, day: date) -> date
     return cal.previous_trading_day(exchange, d)
 
 
-def build_nse_snapshot(market: Path, symbol: str, day: date, calendar: MarketCalendar | None = None):
+def build_nse_snapshot(market: Path, symbol: str, day: date, calendar: MarketCalendar | None = None,
+                       cutoff: datetime | None = None):
     """(InstrumentSnapshot | None, provenance). None when the security is not identifiable from stored files."""
-    inp = Inputs(market, day, calendar)
+    inp = Inputs(market, day, calendar, cutoff=cutoff)
     prov = {"day": day.isoformat(), "symbol": symbol, "cutoff": inp.cutoff.isoformat(),
             "previous_session": inp.previous.isoformat(), "fields": {}, "inputs": inp.used}
     f = prov["fields"]
@@ -259,13 +263,13 @@ def corporate_action_ex_dates(inp: Inputs, company_name: str):
 
 # ---- security master ---------------------------------------------------------------------------
 
-def build_master(market: Path, day: date, calendar: MarketCalendar | None = None) -> dict:
+def build_master(market: Path, day: date, calendar: MarketCalendar | None = None, cutoff=None) -> dict:
     """Listings usable for session ``day``: NSE (equity list + previous bhavcopy) and BSE (previous bhavcopy).
 
     Rows are (snapshot_date, exchange, isin, symbol, series) with exchange codes and the source of each.
     Rebuildable derived data; the raw files and catalog remain the evidence.
     """
-    inp = Inputs(market, day, calendar)
+    inp = Inputs(market, day, calendar, cutoff=cutoff)
     listings = []
     eq = inp.snapshot("nse_equity_list")
     nse_bhav = inp.dated("nse_bhavcopy")

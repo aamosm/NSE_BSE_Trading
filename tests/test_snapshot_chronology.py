@@ -154,3 +154,20 @@ def test_legacy_database_is_migrated_and_old_receipts_stay_readable(tmp_path):
     # Legacy receipts have no batch, so the account view does not present them as a completed batch.
     assert account.account_view(db, at(4, 11))["batch"] is None
     db.close()
+
+
+def test_cash_decisions_require_fresh_confirmed_account_data(tmp_path):
+    db = Store(tmp_path / "e.sqlite3")
+    batch(db, at(5, 9, 20), "b1", holdings=HOLD_A, funds=FUNDS, positions={"net": [], "day": []})
+    view = account.account_view(db, at(5, 9, 25))
+    assert account.fresh_for_cash_decision(view, at(5, 9, 25), login_at=at(5, 8, 0)) == (True, [])
+    ok, why = account.fresh_for_cash_decision(view, at(5, 9, 45))
+    assert not ok and why == ["ACCOUNT_DATA_STALE"]  # older than 10 minutes
+    ok, why = account.fresh_for_cash_decision(view, at(5, 9, 25), login_at=at(5, 9, 22))
+    assert "ACCOUNT_DATA_BEFORE_LOGIN" in why
+    batch(db, at(5, 9, 30), "b2", unavailable={"funds": "PERMISSION_DENIED"}, holdings=HOLD_A,
+          positions={"net": [], "day": []})
+    ok, why = account.fresh_for_cash_decision(account.account_view(db, at(5, 9, 31)), at(5, 9, 31))
+    assert not ok and "FUNDS_UNAVAILABLE" in why
+    assert account.fresh_for_cash_decision({"batch": None}, at(5, 9, 31)) == (False, ["NO_COMPLETED_BATCH"])
+    db.close()

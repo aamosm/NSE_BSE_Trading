@@ -239,3 +239,29 @@ def summary_text(view):
             out.append(f"  {r['symbol']:<14} {r['side']:<4} {r['product']:<4} fills {r['fills']:>3}  "
                        f"qty {_fmt(r['quantity'], 6)}  value {_fmt(r['value'], 12)}")
     return "\n".join(out)
+
+
+def fresh_for_cash_decision(view, at=None, max_age=None, login_at=None) -> tuple[bool, list]:
+    """May a cash-dependent paper proposal rely on this actual-account view? (ok, reasons).
+
+    Requires a completed batch, received within ``max_age`` (default 10 minutes) of the decision, after the
+    latest login, with holdings, funds and positions all OK for today. Anything else means WAIT.
+    """
+    from datetime import timedelta as _td
+    at = timestamp(at) if at else now()
+    max_age = max_age or _td(minutes=10)
+    if not view or view.get("batch") is None:
+        return False, ["NO_COMPLETED_BATCH"]
+    reasons = []
+    finished = timestamp(view["batch"]["finished_at"])
+    if finished > at:
+        reasons.append("ACCOUNT_DATA_FROM_FUTURE")
+    elif at - finished > max_age:
+        reasons.append("ACCOUNT_DATA_STALE")
+    if login_at and finished < timestamp(login_at):
+        reasons.append("ACCOUNT_DATA_BEFORE_LOGIN")
+    for kind in ("holdings", "funds", "positions"):
+        state = view["sections"].get(kind, {}).get("state")
+        if state != "OK":
+            reasons.append(f"{kind.upper()}_{state or 'MISSING'}")
+    return not reasons, reasons

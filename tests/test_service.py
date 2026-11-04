@@ -21,29 +21,87 @@ def names(jobs):
     return sorted(n for n, _ in jobs)
 
 
+def earlier_sessions_done(day):
+    """Mark the catch-up window as complete so a test sees only today's jobs."""
+    out, p = {}, day
+    for _ in range(service.CATCH_UP_SESSIONS):
+        p = CAL.previous_trading_day(service.Exchange.NSE, p)
+        out[f"public_eod_done:{p}"] = "2026-11-01T00:00:00+05:30"
+    return out
+
+
 @pytest.mark.parametrize("when, expected", [
-    (at(5, 8, 0), ["feeds", "prepare", "public_daily", "public_eod"]),  # Thu morning: catch up Wed files
-    (at(5, 10, 0), ["broker", "feeds", "public_daily"]),
-    (at(5, 19, 30), ["broker", "feeds", "public_daily", "public_eod"]),
-    (at(7, 10, 0), ["feeds", "public_daily"]),  # Saturday: no broker session
-    (at(8, 14, 30), ["broker", "feeds", "public_daily"]),  # Muhurat session (opens 14:05)
-    (at(8, 12, 0), ["feeds", "public_daily"]),  # before Muhurat pre-open minus 30 min
+    (at(5, 8, 0), ["feeds", "prepare", "public_daily"]),  # owner logs in at 08:00; broker reads start 08:05
+    (at(5, 8, 5), ["broker", "feeds", "prepare", "public_daily"]),
+    (at(5, 10, 0), ["broker", "feeds", "prepare", "public_daily"]),  # a late start still prepares today's inputs
+    (at(5, 16, 50), ["feeds", "public_daily", "public_eod"]),  # bhavcopies were published at about 16:35 IST
+    (at(5, 19, 30), ["broker", "feeds", "public_daily", "public_eod"]),  # 18:00 daily account read
+    (at(7, 10, 0), ["feeds", "public_daily"]),  # Saturday: no session
+    (at(8, 12, 0), ["feeds", "prepare", "public_daily"]),  # Muhurat day, before 13:10
+    (at(8, 14, 30), ["broker", "feeds", "prepare", "public_daily"]),  # Muhurat session (pre-open 14:05)
     (at(5, 23, 40), ["backup", "broker", "feeds", "public_daily", "public_eod"]),
 ])
 def test_due_windows_follow_the_exchange_calendar(when, expected):
-    assert names(service.due_jobs(when, CAL, {})) == expected
+    assert names(service.due_jobs(when, CAL, earlier_sessions_done(when.date()))) == expected
 
 
-def test_eod_target_is_the_latest_completed_session():
-    jobs = dict(service.due_jobs(at(9, 7, 0), CAL, {}))  # Monday morning after the Sunday Muhurat session
-    assert jobs["public_eod"]["day"] == date(2026, 11, 8)
+def test_catch_up_covers_the_last_five_sessions_including_muhurat():
+    jobs = [a["day"] for n, a in service.due_jobs(at(9, 7, 0), CAL, {}) if n == "public_eod"]
+    # Monday 9 Nov before 16:45: today is not due; previous five sessions (Muhurat Sunday included) are.
+    assert jobs == [date(2026, 11, 8), date(2026, 11, 6), date(2026, 11, 5), date(2026, 11, 4), date(2026, 11, 3)]
 
 
 def test_jobs_respect_their_cadence():
     last = {"broker": at(5, 10, 0).isoformat(), "feeds": at(5, 9, 50).isoformat(),
-            "public_daily:2026-11-05": at(5, 7, 0).isoformat()}
+            "public_daily:2026-11-05": at(5, 7, 0).isoformat(), "prepare:2026-11-05": at(5, 8, 0).isoformat(),
+            **earlier_sessions_done(date(2026, 11, 5))}
     assert names(service.due_jobs(at(5, 10, 3), CAL, last)) == []
     assert names(service.due_jobs(at(5, 10, 5), CAL, last)) == ["broker"]
+
+
+def test_complete_or_long_missing_eod_days_stop_being_retried(tmp_path, monkeypatch):
+    c = ctx(tmp_path)
+    outcomes = {date(2026, 11, 4): "OK", date(2026, 11, 3): "WAITING:nse_bhavdata_full"}
+    jobs = {k: ok_job for k in service.JOBS}
+    jobs["public_eod"] = lambda cx, a: outcomes.get(a["day"], "OK")
+    st = service.tick(c, at(5, 7, 0), jobs)
+    assert "public_eod_done:2026-11-04" in st["last_run"] and "public_eod_done:2026-11-03" not in st["last_run"]
+    due = [a["day"] for n, a in service.due_jobs(at(5, 7, 40), CAL, st["last_run"]) if n == "public_eod"]
+    assert date(2026, 11, 4) not in due and date(2026, 11, 3) in due  # the waiting day is retried after 30 min
+
+
+def test_unpublished_files_older_than_two_days_are_closed_as_missing(tmp_path, monkeypatch):
+    from marketlab import sources
+    c = ctx(tmp_path)
+    monkeypatch.setattr(sources, "collect", lambda *a, **k: [{"source": "nse_bhavdata_full", "result": "NOT_PUBLISHED"}])
+    monkeypatch.setattr(service, "now", lambda: at(5, 7, 0))
+    assert service.job_public_eod(c, {"day": date(2026, 11, 4)}) == "WAITING:nse_bhavdata_full"
+    assert service.job_public_eod(c, {"day": date(2026, 11, 2)}) == "OK_MISSING:nse_bhavdata_full"
+
+
+def test_sleep_or_shutdown_gap_is_recorded(tmp_path):
+    c = ctx(tmp_path)
+    service.tick(c, at(5, 10, 0), {k: ok_job for k in service.JOBS})
+    st = service.tick(c, at(5, 11, 30), {k: ok_job for k in service.JOBS})
+    assert st["last_gap"]["minutes"] == 90 and len(st["gaps"]) == 1
+    st = service.tick(c, at(5, 11, 31), {k: ok_job for k in service.JOBS})
+    assert len(st["gaps"]) == 1  # a normal one-minute tick is not a gap
+
+
+def test_late_start_prepares_with_inputs_cut_off_at_the_decision_time(tmp_path, monkeypatch):
+    from marketlab import master
+    c = ctx(tmp_path)
+    seen = {}
+    monkeypatch.setattr(master, "build_master", lambda m, d, cal, cutoff=None: seen.setdefault("cutoff", cutoff)
+                        and {"listings": 0})
+    monkeypatch.setattr(master, "build_nse_snapshot", lambda *a, **k: (None, {"blocker": "X"}))
+    monkeypatch.setattr(service, "now", lambda: at(5, 11, 0))
+    out = service.job_prepare(c, {"day": date(2026, 11, 5)})
+    assert seen["cutoff"] == at(5, 11, 0) and out.endswith(",late")
+    db = Store(c.root / "evidence.sqlite3")
+    rec = db.as_of("paper_decision", "2026-11-05", at(6, 0))
+    db.close()
+    assert rec[0]["payload"]["late_start"] is True and rec[0]["payload"]["action"] == "WAIT"
 
 
 def ctx(tmp_path):

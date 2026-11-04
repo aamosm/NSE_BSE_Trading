@@ -31,6 +31,10 @@ from .rules.types import Exchange, RuleUnknown
 from .store import Store
 
 STATE_FILE = "service_state.json"
+BROKER_LEAD = timedelta(minutes=55)  # first broker read at 08:05 on a regular day (owner logs in at 08:00)
+EOD_START = clock(16, 45)
+CATCH_UP_SESSIONS = 5
+GAP_THRESHOLD = timedelta(minutes=5)  # a longer silence between ticks is recorded (sleep, shutdown, crash)
 CONTROL_FILE = "control.json"
 LOCK_FILE = "service.lock"
 BREAKER_BASE = timedelta(minutes=15)
@@ -106,27 +110,30 @@ def due_jobs(at: datetime, cal: MarketCalendar, last: dict) -> list[tuple[str, d
             opens = cal.session_open(Exchange.NSE, d)
         except RuleUnknown:
             opens = None
-        if opens and (datetime.combine(d, opens, IST) - timedelta(minutes=30)).time() <= t <= clock(16, 30) \
+        if opens and (datetime.combine(d, opens, IST) - BROKER_LEAD).time() <= t <= clock(16, 30) \
                 and every("broker", 5):
             jobs.append(("broker", {"key": "broker"}))
     if t >= clock(18, 0) and once(f"broker_daily:{d}"):
         jobs.append(("broker", {"key": f"broker_daily:{d}"}))
-    # End-of-day exchange files for the latest completed session: evenings after it, or the next morning.
-    target = None
-    if today_trading and t >= clock(19, 0):
-        target = d
-    elif t < clock(9, 0):
+    # End-of-day exchange files: today's from 16:45 (bhavcopies were published at about 16:35 IST, sec_list
+    # 18:00, REG1_IND 19:50, index closes 23:20, delivery data 23:55 on 4 Nov 2026), and catch-up for up to
+    # CATCH_UP_SESSIONS earlier sessions not yet complete (laptop off or asleep). Retried every 30 minutes.
+    targets = [d] if today_trading and t >= EOD_START else []
+    p = d
+    for _ in range(CATCH_UP_SESSIONS):
         try:
-            target = cal.previous_trading_day(Exchange.NSE, d)
+            p = cal.previous_trading_day(Exchange.NSE, p)
         except RuleUnknown:
-            target = None
-    if target and every(f"public_eod:{target}", 30):
-        jobs.append(("public_eod", {"key": f"public_eod:{target}", "day": target}))
+            break
+        targets.append(p)
+    for target in targets:
+        if f"public_eod_done:{target}" not in last and every(f"public_eod:{target}", 30):
+            jobs.append(("public_eod", {"key": f"public_eod:{target}", "day": target}))
     if t >= clock(7, 0) and once(f"public_daily:{d}"):
         jobs.append(("public_daily", {"key": f"public_daily:{d}", "day": d}))
     if clock(6, 0) <= t <= clock(23, 45) and every("feeds", 30):
         jobs.append(("feeds", {"key": "feeds"}))
-    if today_trading and clock(8, 0) <= t <= clock(9, 30) and once(f"prepare:{d}"):
+    if today_trading and clock(8, 0) <= t <= clock(15, 30) and once(f"prepare:{d}"):
         jobs.append(("prepare", {"key": f"prepare:{d}", "day": d}))
     if t >= clock(23, 30) and once(f"backup:{d}"):
         jobs.append(("backup", {"key": f"backup:{d}", "day": d}))
@@ -151,7 +158,11 @@ def job_public_eod(ctx, args):
     waiting = [r["source"] for r in out if r["result"] == "NOT_PUBLISHED"]
     if failed:
         raise JobFailed("SOURCE_FAILED:" + ",".join(failed))
-    return "OK" if not waiting else "WAITING:" + ",".join(waiting)
+    if not waiting:
+        return "OK"
+    if (now().date() - args["day"]).days >= 2:  # still unpublished two days later: recorded as missing, not retried
+        return "OK_MISSING:" + ",".join(waiting)
+    return "WAITING:" + ",".join(waiting)
 
 
 def job_public_daily(ctx, args):
@@ -183,22 +194,25 @@ def job_feeds(ctx, args):
 def job_prepare(ctx, args):
     """Security master and watchlist rule inputs for today's session; then the paper-analysis step."""
     from . import master
-    summary = master.build_master(ctx.market, args["day"], ctx.cal)
+    opens = datetime.combine(args["day"], ctx.cal.session_open(Exchange.NSE, args["day"]), IST)
+    cutoff = max(opens, now())  # a late start may use files received before the actual decision time
+    late = cutoff - opens > timedelta(minutes=15)
+    summary = master.build_master(ctx.market, args["day"], ctx.cal, cutoff=cutoff)
     built, blocked = 0, {}
     for sym in ctx.symbols:
         name = sym.split(":", 1)[-1]
         if not sym.startswith("NSE:"):
             blocked[name] = "BSE_SNAPSHOT_NOT_BUILT"
             continue
-        snap, prov = master.build_nse_snapshot(ctx.market, name, args["day"], ctx.cal)
+        snap, prov = master.build_nse_snapshot(ctx.market, name, args["day"], ctx.cal, cutoff=cutoff)
         if snap is None:
             blocked[name] = prov.get("blocker", "UNKNOWN")
         else:
             built += 1
             ctx.catalog_append("instrument_snapshot", name, {"snapshot": master.snapshot_json(snap), "provenance": prov})
     if not control(ctx.root)["analysis_paused"]:
-        record_decision(ctx, args["day"], "WAIT", ["MODEL_NOT_VALIDATED"], symbols=ctx.symbols)
-    return f"OK:master={summary['listings']},snapshots={built},blocked={len(blocked)}"
+        record_decision(ctx, args["day"], "WAIT", ["MODEL_NOT_VALIDATED"], symbols=ctx.symbols, late_start=late)
+    return f"OK:master={summary['listings']},snapshots={built},blocked={len(blocked)}" + (",late" if late else "")
 
 
 def job_backup(ctx, args):
@@ -223,10 +237,11 @@ class JobFailed(RuntimeError):
     pass
 
 
-def record_decision(ctx, day, action, reasons, symbols=()):
+def record_decision(ctx, day, action, reasons, symbols=(), late_start=False):
     from .research import explain
     entry = {"day": day.isoformat(), "action": action, "reasons": reasons, "symbols": list(symbols),
-             "explanation": explain({"reasons": reasons}), "model_id": None, "simulated": True, "live_orders": False}
+             "explanation": explain({"reasons": reasons}), "model_id": None, "simulated": True, "live_orders": False,
+             "late_start": bool(late_start)}
     db = Store(ctx.root / "evidence.sqlite3")
     try:
         db.append("paper_decision", "marketlab:analysis", day.isoformat(), entry)
@@ -266,6 +281,12 @@ def tick(ctx: Context, at=None, jobs=None) -> dict:
     jobs = jobs or JOBS
     st = ctx.state
     last, results, breakers = st.setdefault("last_run", {}), st.setdefault("jobs", {}), st.setdefault("breakers", {})
+    prev_tick = st.get("last_tick_at")
+    if prev_tick and at - timestamp(prev_tick) > GAP_THRESHOLD:
+        gap = {"from": prev_tick, "to": at.isoformat(), "minutes": int((at - timestamp(prev_tick)).total_seconds() // 60)}
+        st["last_gap"] = gap
+        st["gaps"] = (st.get("gaps") or [])[-9:] + [gap]
+    st["last_tick_at"] = at.isoformat()
     session = login.session_status(ctx.root, at)
     if session["state"] == "AUTHENTICATED" and st.get("auth_invalid") and st.get("auth_invalid_at", "") < (
             session.get("login_at") or ""):
@@ -282,6 +303,8 @@ def tick(ctx: Context, at=None, jobs=None) -> dict:
             if outcome != "SKIPPED_AUTH_REQUIRED":
                 breakers.pop(provider, None)
                 last[args["key"]] = at.isoformat()
+            if name == "public_eod" and (outcome == "OK" or str(outcome).startswith("OK_MISSING")):
+                last[f"public_eod_done:{args['day']}"] = at.isoformat()
         except AuthenticationRequired:
             st["auth_invalid"], st["auth_invalid_at"] = True, at.isoformat()
             results[name] = {"at": at.isoformat(), "result": "AUTH_REQUIRED"}
@@ -289,7 +312,7 @@ def tick(ctx: Context, at=None, jobs=None) -> dict:
             label = str(e) if isinstance(e, JobFailed) else type(e).__name__
             results[name] = {"at": at.isoformat(), "result": "FAILED", "error": label[:200]}
             _open_breaker(breakers, provider, at)
-    for k in [k for k in last if ":" in k and k.split(":", 1)[1] < (at.date() - timedelta(days=7)).isoformat()]:
+    for k in [k for k in last if ":" in k and k.split(":", 1)[1] < (at.date() - timedelta(days=14)).isoformat()]:
         del last[k]  # keep the schedule memory small
     auth_ok = session["state"] == "AUTHENTICATED" and not st.get("auth_invalid")
     open_breakers = [p for p, b in breakers.items() if timestamp(b["open_until"]) > at]
