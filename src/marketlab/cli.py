@@ -262,6 +262,10 @@ def historical(root, token, interval, start, end, output, exchange, symbol, isin
         "isin_verification": "User-supplied; independently reconcile with exchange security master",
         "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
         "availability_assumption": "OHLC available after bar end; not original-vintage archived observations",
+        "series_kind": "PROVIDER_ORIGINAL", "adjustment_basis": "PROVIDER_AS_OF_RETRIEVAL",
+        "adjustment_note": "Kite adjusts history for bonus, split, rights, spin-off and extraordinary dividends "
+                           "before the ex-date open; prices before an action are NOT actual traded prices. Keep this "
+                           "vintage; never apply the same actions again (marketlab.corporate_actions).",
         "corporate_actions_verified": False, "historical_universe_verified": False,
         "historical_security_status_verified": False, "historical_fee_schedule_verified": False,
         "purpose": "exploratory research only; requires data audit before strategy certification"})

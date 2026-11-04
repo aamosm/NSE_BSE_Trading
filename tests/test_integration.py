@@ -54,6 +54,7 @@ def test_history_exports_hash_and_explicit_unverified_data_flags(tmp_path, monke
     assert len(rows) == 4 and "23:59:59" in rows[0]["available_at"]
     meta = json.loads(output.with_suffix(".metadata.json").read_text())
     assert meta["corporate_actions_verified"] is False and meta["sha256"]
+    assert meta["series_kind"] == "PROVIDER_ORIGINAL" and meta["adjustment_basis"] == "PROVIDER_AS_OF_RETRIEVAL"
     with pytest.raises(ValueError, match="Output exists"):
         cli.historical(tmp_path,123,"day","2025-01-01T00:00:00+05:30","2025-01-05T00:00:00+05:30",
                        output,"NSE","TEST","INE000A00001")
