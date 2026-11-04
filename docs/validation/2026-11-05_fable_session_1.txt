@@ -1,0 +1,24 @@
+Fable session 1 validation record, 5 Nov 2026 (late), Windows 11, Python 3.13.7. Pass/fail only; no account data.
+
+Specification: docs/FABLE_SESSION_1_SPEC.md; every worked number recomputed by script before being written.
+
+Targeted test files (final runs all PASSED):
+  test_quant_core (26: ridge, conformal, shrinkage, break-even, gate, allocation exact + neighbourhood, exact charges,
+  exit policy, reliability, CUSUM, n*, MDE, calibration metrics)
+  test_quant_pipeline (panel round trip, implied factors across true sessions only, labels with factor and slippage,
+  features on a geometric series, standardization, universe screen, purge, walk-forward report, holdout separation)
+  test_calendar_sessions (+3: API-built years, blocked special session, load_calendar fallback/API)
+  test_researcher, test_service, test_login_flow, test_public_data, test_muhurat_2026, test_engine, test_webapp,
+  test_webapp_ui (endpoints without data, policy validation, request queue + execution, failure recording, views),
+  test_boundaries
+Found and fixed during the session: features window off by one (229 vs 230 sessions); purge by count instead of
+session index; entry gate never flagged a price above the cap; Label field name mismatch; NaN in reports;
+implied factors computed across non-consecutive sessions (3,246 false factors on the real 2-session panel).
+
+Real data, read-only:
+  panel-build ... PASS (2 sessions, 3,493 ISINs, 167 index rows, 0 factors, 2 unchecked days: correct)
+  screen 2026-11-04 / decide ... PASS (INSUFFICIENT_HISTORY, as designed)
+  dashboard endpoints on real folders ... PASS (8 x 200; 19 missing bhavcopy sessions listed from the calendar;
+  POST kind=orders -> 400)
+
+NOT RUN: historical backfill, any evaluation on real history, server, phone login.

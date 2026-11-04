@@ -69,6 +69,15 @@ Tokens expire at the **next 06:00 IST** and can be invalidated earlier, so log i
 
 Files are stored compressed under `data/market/raw/`, and every attempt is recorded in `data/market/catalog.sqlite3`. See `docs/SOURCE_STATUS.md`.
 
+## E2. Price panel, universe, evaluation (the quant core)
+
+    .\.venv\Scripts\python.exe -m marketlab panel-build                                     # actual prices from stored bhavcopies
+    .\.venv\Scripts\python.exe -m marketlab screen --date 2026-11-04                        # dated universe (spec 3.1)
+    .\.venv\Scripts\python.exe -m marketlab evaluate --candidate A --h 20                   # registered trial (after the backfill)
+    .\.venv\Scripts\python.exe -m marketlab decide --candidate A --h 20                     # forecasts + plan; WAIT until promoted
+
+All of these can also be requested from the dashboard's Controls tab; the scheduler runs them one at a time.
+
 ## F. Historical candles (Kite)
 
     .\.venv\Scripts\python.exe -m marketlab history --token 408065 --exchange NSE --symbol INFY --isin INE009A01021 --interval day --start 2025-01-01T00:00:00+05:30 --end 2026-01-01T00:00:00+05:30 --output data/raw/infy_daily_v1.csv

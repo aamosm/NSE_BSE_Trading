@@ -1,5 +1,7 @@
 # Fable session 1: preparation bundle
 
+> **Status (5 Nov 2026, late):** the session has been held. Its output is `docs/FABLE_SESSION_1_SPEC.md`, implemented in `src/marketlab/quant/`. Overrides to this document are listed in the spec's §1 (position caps, intraday removed as a candidate, Perplexity removed, calendar from APIs, dynamic universe). The Perplexity facts below are kept as a record; no provider is configured.
+
 Prepared 5 November 2026 by Claude Opus 5.5, the implementation owner. The prompt is `prompts/02_FABLE_SESSION_1_DESIGN.txt`.
 
 The engineering-heavy deliverables of that prompt are **already drafted, built and verified** below. They are numbered as in the prompt's DELIVER list: 1, 3, 4, 5 (reproducibility part), 6, 7 (non-forecasting functions) and 9 (backlog).

@@ -1,61 +1,34 @@
 # Briefing for GPT (reviewer and source researcher)
 
-Date: 5 November 2026. Repository `aamosm/NSE_BSE_Trading`, branch `cash-research-reset`.
+Date: 5 November 2026 (late). Repository `aamosm/NSE_BSE_Trading`, branch `cash-research-reset`.
 - **Your last review:** `3513d33`.
-- **This milestone:** commits `2d53906` through the docs commit at the head of the branch (`docs/HANDOFF.md` lists every SHA).
-- **Push status:** the owner decides when to push; review on GitHub once it is pushed.
+- **Since then:** milestone 1 (`2d53906`..`19db166`), then Fable session 1 and its implementation (`15e6956`, `83bb124`, `45a956f`, the dashboard commit). `docs/HANDOFF.md` lists them.
 
 ## Your role this round
 
-- Review the new commits and the five small documents:
-  - `HANDOFF.md`;
-  - `DATA_READINESS.md`;
-  - `SOURCE_STATUS.md`;
-  - `DEPLOYMENT.md`;
-  - `FABLE_HANDOFF.md`.
-- Answer the source questions in `docs/ROADMAP.md` §4.
-- Do **not** request another unchanged test-suite run: Claude ran targeted tests per change (listed in HANDOFF).
+- Review `docs/FABLE_SESSION_1_SPEC.md` for mathematical errors first; then `src/marketlab/quant/` against it.
+- Answer the source questions in `docs/ROADMAP.md` §4, especially the NSE base-price adjustment rule (H-CA1).
+- Do not request another unchanged test-suite run; targeted tests are listed in HANDOFF.
 - Never ask for credentials, statements or account data.
 
-## Scope (unchanged limits, new hosting)
+## What to check first (highest risk)
 
-- **Market:** cash-only NSE/BSE equities, read-only Kite, simulated execution only. No MTF, borrowing, shorting, derivatives, orders or live toggle.
-- **Hosting:** one private Linux server (prepared, not yet rented) and a phone PWA over Tailscale.
-- **Login:** stays manual. The owner logs in on Zerodha's page from the phone each trading day.
-
-## What to review first (highest risk)
-
-1. **Login callback:** `src/marketlab/login.py`, `webapp.py` (`_login_start`, `_callback`), `cli.py` (`CallbackCatcher`, `auth`).
-   - State uses `redirect_params`, is stored hashed, single-use, 10 minutes, at most 5 pending.
-   - The path must equal `KITE_REDIRECT_URL`'s path exactly. One value per parameter; `status=success`.
-   - The account check is mandatory. Request lines are never logged.
-   - Is anything missing for a redirect that arrives on the phone through Tailscale Serve?
-2. **Snapshot chronology:** `store.py` (`latest`, batches), `account.py`.
-   - A→B→A, a kind missing from the newest batch, an incomplete batch, trade-book session attribution (after `session_open`), unknown numbers.
-3. **Point-in-time rule inputs:** `master.py`.
-   - Series for session D come from the previous day's after-close `sec_list` and `REG1_IND` (observed: 3/3 series changes agree).
-   - `Status=S` → suspended and `ICA≠100` → call auction are labelled ASSUMPTION. Please find NSE's field definitions.
-4. **Costs:** `rules/charges.day_charges`. Is the aggregation (exchange, ISIN, date, kind, side; average price to the paisa; rupee rounding) right under the **final** STT rules?
-5. **Scheduler failure behaviour:** `service.py`. Due windows, breaker back-off, AUTH_REQUIRED on an invalidated token, idempotent WAIT decisions, alert/heartbeat content.
-6. **Deployment:** `deploy/*`, `docs/DEPLOYMENT.md`. Hardening, secrets procedure, Tailscale Serve (not Funnel), redirect registration order, backup/restore, rollback.
+1. **Labels and leakage** (`quant/labels.py`, `quant/evaluate.py`): entry at open(D+1) with slippage, exit at open(D+h+1); purge by label end index plus an h-session embargo; inner fold purged; conformal residuals from the purged last 20%; holdout locked. Is any training-time quantity computed on test dates? (`features.market_stats` is fitted on training rows; rank standardization is per date.)
+2. **Exchange-implied factors** (`quant/panel.py`): prev_close / prior-session close, only across true consecutive exchange sessions. Does the exclusion rule for unexplained factors (spec §2.4) make sense before the action history exists?
+3. **Allocator** (`quant/allocate.py`): objective, feasibility (cash after fees, caps, K), enumeration vs neighbourhood search, exact-charge recheck. The worked example (q = 20, 0, 0; objective 14.54) is in the tests.
+4. **Conformal distribution** (`quant/forecast.py`): index conventions, `P(y > c)` with the +1 correction, the vol scaling σ̂ = vol_20·√h.
+5. **Economics** (spec §0): the n* derivation and the minimum-detectable-edge arithmetic.
+6. **Calendar from API** (`rules/calendar.py`, `sources.load_calendar`): weekday entries as closures; `*` as special sessions; overrides; discrepancy reporting.
 
 ## Evidence (pass/fail only)
 
-- **Targeted tests:** 148 new tests in 8 files plus the affected existing suites. 435 tests are collected in total; the unchanged ones were not re-run for a count.
-- **Real data, read-only:**
-  - 15 official sources retrieved and catalogued;
-  - security master for 5 Nov (2,627 NSE / 5,044 BSE listings, 0 ISIN conflicts);
-  - real snapshots through the engine: GSM-2 fresh buy blocked, ESM-1 BE delivery accepted with a warning;
-  - NSE 2026 holidays and settlement holidays agree with NSE's APIs;
-  - one Kite batch COLLECTED; a pre-open trade book is labelled SESSION_UNKNOWN.
-- **App:** smoke-tested on loopback.
-- **Restore:** SQLite backup → archive → restore → `integrity_check` ok.
-- **Not run:** any server step, phone login over Tailscale, age encryption, contract-note reconciliation, corporate-action reconciliation.
+- Targeted tests: 26 hand-worked quant checks plus the synthetic-panel pipeline, calendar, research, service, app and boundary suites; all passed in their final runs.
+- Real data: panel built from the two stored sessions (0 implied factors, 2 unchecked days: correct); dashboard endpoints 200 on the real folders.
+- Not run: any evaluation on real history (no backfill yet), the server, the phone login.
 
 ## Known limitations (not defects to rediscover)
 
-- No historical backfill yet, so no horizon is testable (`DATA_READINESS.md`).
-- No official corporate-action history; Kite history is provider-adjusted.
-- BSE calendar unverified; 2027 calendar not loaded; MIS list unavailable; Zerodha's MIS square-off time on Muhurat unknown.
-- No model, allocator, paper ledger or replay harness. Every decision is WAIT / MODEL_NOT_VALIDATED.
-- Exchange website terms of use not yet reviewed.
+- No horizon is testable until the backfill; the old-format bhavcopy parser is not written.
+- Dividends are omitted from labels pending H-CA1.
+- Family B/C have no history; prospective collection only.
+- No LLM provider is configured (owner decision); the adapter contract remains.

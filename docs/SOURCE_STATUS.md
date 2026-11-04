@@ -75,7 +75,7 @@ On 5 Nov a full collection **batch** completed (status COLLECTED). Rate limits a
    The scheduler fetches end-of-day files from 16:45 and retries until they are stored. These are single observations, so the distribution is still to be measured.
 8. **Band-change files are named after the session they take effect in.** `eq_band_changes_05112026` was published 4 Nov 18:00, and all six changes already appear in `sec_list_04112026`. This also cross-checks that sec_list dated D describes D+1.
 
-## 4a. Research providers (5 Nov 2026)
+## 4a. Research providers (5 Nov 2026; provider removed later the same day)
 
 | Route | Result |
 | --- | --- |
@@ -83,7 +83,7 @@ On 5 Nov a full collection **batch** completed (status COLLECTED). Rate limits a
 | Perplexity `GET /v1/models` | 200 (54 models, including `openai/gpt-6-luna`) |
 | Perplexity Search API `POST /search` | 200. `search_domain_filter` honoured (5/5 results on nsearchives.nseindia.com; the Muhurat circular CMTR76941 found); $0.001 (fast); 0.61 s |
 
-All spend goes through `researcher/budget.py`. The ledger total on 5 Nov is $0.0071, including one out-of-band diagnostic search recorded by hand.
+All spend goes through `researcher/budget.py`. The ledger total on 5 Nov is $0.0071, including one out-of-band diagnostic search recorded by hand. **Owner decision later on 5 Nov: the Perplexity adapters were removed and the key deleted from the env file; no provider is configured.** The exchange's own feeds are the event source.
 
 ## 5. Next acquisition work (in order)
 

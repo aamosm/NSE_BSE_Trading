@@ -19,13 +19,17 @@ The runtime is deliberately small enough to audit. Most of the complexity belong
     src/marketlab/backtest.py         diagnostic controls and chronological fold ranges
     src/marketlab/experiments.py      started/completed/failed research records
     src/marketlab/research.py         forecast contract, one-entry paper sizing and wording
+    src/marketlab/quant/              panel (actual prices, implied factors), universe screen, labels, features,
+                                      forecast (ridge + split conformal), allocate (integer, fixed costs, EXIT.v1),
+                                      evaluate (purged walk-forward, promotion), monitor, decide
+    src/marketlab/researcher/         evidence schema, budget ledger, job queue, templates, provider contract (no provider)
     src/marketlab/rules/              cash-equity exchange/broker rules engine (calendars incl. special sessions,
                                       sessions, ticks, bands, T2T series, surveillance, Kite order constraints,
                                       cited fee schedule with day-level STT); every paper proposal passes it
     src/marketlab/metrics/            returns, risk, PSR/DSR/PBO selection statistics, trade and cost metrics
     deploy/                           systemd units, provisioning, pinned release install/rollback, backups
 
-Processes on the server: `marketlab-scheduler` (collection and daily inputs) and `marketlab-web` (phone app), both as user `marketlab`, both bound to loopback or outbound only. The phone reaches the app through Tailscale Serve. Bulk exchange files (`market/raw`) and their catalog are kept apart from private account evidence (`private/evidence.sqlite3`).
+Processes: the scheduler (`run`: collection, daily inputs, dashboard job requests) and the dashboard (`dashboard`), both bound to loopback or outbound only; on a server they are the `marketlab-scheduler` and `marketlab-web` units. The phone reaches the app through Tailscale Serve. Bulk exchange files (`market/raw`) and their catalog are kept apart from private account evidence (`private/evidence.sqlite3`).
 
 ## What owns each decision
 
