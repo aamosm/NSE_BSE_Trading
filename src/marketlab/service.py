@@ -83,6 +83,159 @@ def set_paused(root: Path, paused: bool, at=None) -> dict:
     return value
 
 
+# ---- owner policy (bounded, validated) and job requests from the dashboard ---------------------------------
+
+POLICY_FILE = "policy.json"
+POLICY_DEFAULTS = {"capital": 10000.0, "K": 2, "cap_fraction": 0.5, "reserve_fraction": 0.2, "v_min_crore": 5.0, "h": 20,
+                   "candidate": "A", "symbols": [], "families": {"A": True, "B": False, "C": False}, "risk_multiplier": 1.0}
+POLICY_BOUNDS = {"capital": (1000.0, 1e8), "K": (1, 10), "cap_fraction": (0.05, 1.0), "reserve_fraction": (0.0, 0.9),
+                 "v_min_crore": (0.1, 1000.0), "h": (5, 250), "risk_multiplier": (0.25, 1.0)}
+REQUEST_KINDS = {"prepare", "fetch_public", "build_master", "panel_build", "decide", "evaluate"}
+REQUESTS_DIR = "requests"
+
+
+def policy(root: Path) -> dict:
+    saved = read_json(root / POLICY_FILE, {})
+    out = dict(POLICY_DEFAULTS)
+    out["families"] = dict(POLICY_DEFAULTS["families"])
+    for k, v in saved.items():
+        if k == "families" and isinstance(v, dict):
+            out["families"].update({f: bool(v.get(f, out["families"][f])) for f in out["families"]})
+        elif k in out:
+            out[k] = v
+    return out
+
+
+def set_policy(root: Path, updates: dict) -> dict:
+    """Validate and store owner policy edits. Unknown keys and out-of-range values are refused."""
+    import re
+    current = policy(root)
+    for k, v in updates.items():
+        if k not in POLICY_DEFAULTS:
+            raise ValueError(f"unknown policy key {k}")
+        if k in POLICY_BOUNDS:
+            lo, hi = POLICY_BOUNDS[k]
+            try:
+                num = int(v) if isinstance(lo, int) else float(v)
+            except (TypeError, ValueError):
+                raise ValueError(f"{k} must be a number") from None
+            if not lo <= num <= hi:
+                raise ValueError(f"{k} must be between {lo} and {hi}")
+            current[k] = num
+        elif k == "candidate":
+            if v not in ("A", "B", "C"):
+                raise ValueError("candidate must be A, B or C")
+            current[k] = v
+        elif k == "symbols":
+            if not isinstance(v, list) or len(v) > 50 or not all(isinstance(x, str) and re.fullmatch(r"[A-Z0-9&.-]{1,20}", x) for x in v):
+                raise ValueError("symbols must be up to 50 NSE symbols")
+            current[k] = sorted(set(v))
+        elif k == "families":
+            if not isinstance(v, dict):
+                raise ValueError("families must be an object")
+            current["families"] = {f: bool(v.get(f, current["families"][f])) for f in current["families"]}
+    current["changed_at"] = now().isoformat()
+    atomic_json(root / POLICY_FILE, current)
+    return current
+
+
+def submit_request(root: Path, kind: str, args: dict | None = None, at=None) -> dict:
+    """Queue a job for the scheduler process (the web server never runs heavy work itself)."""
+    import uuid
+    if kind not in REQUEST_KINDS:
+        raise ValueError(f"unknown request kind {kind}")
+    args = args or {}
+    clean = {}
+    if "date" in args:
+        clean["date"] = date.fromisoformat(str(args["date"])).isoformat()
+    if kind == "evaluate":
+        clean["candidate"] = str(args.get("candidate", "A"))[:1]
+        clean["h"] = int(args.get("h", 20))
+        if not 5 <= clean["h"] <= 250 or clean["candidate"] not in ("A", "B", "C"):
+            raise ValueError("evaluate needs candidate A/B/C and 5 <= h <= 250")
+    req = {"id": uuid.uuid4().hex[:12], "kind": kind, "args": clean, "submitted_at": (timestamp(at) if at else now()).isoformat(),
+           "state": "QUEUED"}
+    folder = root / REQUESTS_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    atomic_json(folder / f"{req['submitted_at'][:19].replace(':', '')}_{req['id']}.json", req)
+    return req
+
+
+def list_requests(root: Path, limit=30) -> list:
+    folder = root / REQUESTS_DIR
+    if not folder.exists():
+        return []
+    out = []
+    for p in sorted(folder.glob("*.json"))[-limit:]:
+        out.append(read_json(p, {"id": p.stem, "state": "UNREADABLE"}))
+    return list(reversed(out))
+
+
+def _run_request(ctx, req: dict) -> dict:
+    from datetime import date as _date
+    kind, args = req["kind"], req.get("args", {})
+    day = _date.fromisoformat(args["date"]) if args.get("date") else now().date()
+    if kind == "prepare":
+        return {"result": job_prepare(ctx, {"key": f"request:{req['id']}", "day": day})}
+    if kind == "fetch_public":
+        from . import sources
+        out = sources.collect(ctx.market, day, pause=ctx.pause)
+        return {"result": {r["source"]: r["result"] for r in out}}
+    if kind == "build_master":
+        from . import master
+        return {"result": master.build_master(ctx.market, day, ctx.cal)}
+    if kind == "panel_build":
+        from .quant import panel as qpanel
+        return {"result": qpanel.build(ctx.market, calendar=ctx.cal)}
+    pol = policy(ctx.root)
+    from .quant import decide as qdecide, evaluate as qevaluate, universe as quniverse
+    from .quant.panel import Panel
+    from .quant.universe import ScreenPolicy
+    cfg = qevaluate.Config(candidate=args.get("candidate", pol["candidate"]), h=int(args.get("h", pol["h"])), W=float(pol["capital"]),
+                           screen=ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=float(pol["capital"])))
+    ri = lambda d: quniverse.rule_inputs_for(ctx.market, d, ctx.cal)  # noqa: E731
+    pn = Panel(ctx.market / "panel.sqlite3")
+    try:
+        if kind == "decide":
+            out = qdecide.latest_decision(pn, cfg, promoted=False, rule_inputs_fn=ri, out_dir=Path("data/runs/decisions"))
+            return {"result": {k: out.get(k) for k in ("day", "action", "reasons")}}
+        out = qevaluate.walk_forward(pn, cfg, out_dir=Path("data/runs/eval"), rule_inputs_fn=ri, progress=lambda *_: None)
+        return {"result": {k: out.get(k) for k in ("trial_id", "folds_done", "n_trades", "net_rupees_total")}}
+    finally:
+        pn.close()
+
+
+def process_requests(ctx, at=None) -> list:
+    """Run queued dashboard requests one at a time in a background thread; results are written back to their files."""
+    import threading
+    folder = ctx.root / REQUESTS_DIR
+    if not folder.exists():
+        return []
+    worker = getattr(ctx, "_request_thread", None)
+    if worker is not None and worker.is_alive():
+        return []
+    queued = [p for p in sorted(folder.glob("*.json")) if read_json(p, {}).get("state") == "QUEUED"]
+    if not queued:
+        return []
+    path = queued[0]
+    req = read_json(path, {})
+    req["state"], req["started_at"] = "RUNNING", (timestamp(at) if at else now()).isoformat()
+    atomic_json(path, req)
+
+    def run():
+        try:
+            out = _run_request(ctx, req)
+            req.update(state="DONE", finished_at=now().isoformat(), **out)
+        except Exception as e:  # recorded, never raised into the scheduler
+            req.update(state="FAILED", finished_at=now().isoformat(), error=f"{type(e).__name__}: {str(e)[:200]}")
+        atomic_json(path, req)
+
+    t = threading.Thread(target=run, daemon=True)
+    ctx._request_thread = t
+    t.start()
+    return [req["id"]]
+
+
 # ---- schedule ------------------------------------------------------------------------------------
 
 def _trading(cal: MarketCalendar, d: date):
@@ -292,6 +445,9 @@ def tick(ctx: Context, at=None, jobs=None) -> dict:
         st["last_gap"] = gap
         st["gaps"] = (st.get("gaps") or [])[-9:] + [gap]
     st["last_tick_at"] = at.isoformat()
+    started = process_requests(ctx, at)
+    if started:
+        st["last_request_started"] = {"id": started[0], "at": at.isoformat()}
     session = login.session_status(ctx.root, at)
     if session["state"] == "AUTHENTICATED" and st.get("auth_invalid") and st.get("auth_invalid_at", "") < (
             session.get("login_at") or ""):
