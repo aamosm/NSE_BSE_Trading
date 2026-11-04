@@ -16,9 +16,9 @@ import webbrowser
 from datetime import datetime, timedelta, time as clock
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import urlsplit
 
-from . import account
+from . import account, login
 from .backtest import compare, load_bars, simulate
 from .audit import audit_dataset
 from .common import IST, atomic_json, money, now, timestamp
@@ -41,58 +41,37 @@ def state_write(root, **updates):
     atomic_json(path, state)
 
 
-APP_FILE = "kite_app.json"  # API key and redirect port only; never the API secret
-REQUEST_TOKEN = re.compile(r"[A-Za-z0-9]{6,64}")
-
-
-ENV_FILE = ".env"  # private: KITE_API_KEY, KITE_API_SECRET, KITE_USER_ID. Never a password or OTP seed.
-FORBIDDEN_ENV = ("PASSWORD", "PASSWD", "PIN", "TOTP", "OTP")
-
-
-def load_app(root):
-    path = root/APP_FILE
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-
-
-def load_env(root):
-    """Read KEY=VALUE lines from the private env file. Login passwords/OTP seeds are refused, not used."""
-    path = root/ENV_FILE
-    env = {}
-    if not path.exists():
-        return env
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip().upper()
-        if any(word in key for word in FORBIDDEN_ENV):
-            raise ValueError(f"{path.name} contains {key}; broker passwords/OTP seeds must not be stored. "
-                             "Remove it: Kite login is done by you in the browser")
-        env[key] = value.strip().strip('"').strip("'")
-    return env
+ENV_FILE = login.ENV_FILE  # private: see login.ALLOWED_ENV. Never a password, PIN or OTP seed.
+load_env = login.load_env
 
 
 class CallbackCatcher:
-    """One-shot loopback listener for Kite's login redirect (the documented redirect flow, not a bypass).
+    """One-shot listener for Kite's login redirect on the registered loopback URL (documented flow).
 
-    It binds 127.0.0.1 only, never logs request lines (they carry the request token) and stops after
-    the first redirect with a well-formed request_token and status=success.
+    Binds 127.0.0.1 only, never logs request lines (they carry the request token), drops idle
+    connections after a few seconds and accepts only the exact registered path with a valid,
+    unexpired, single-use state. Anything else gets a neutral reply and is ignored.
     """
 
-    def __init__(self, port):
+    def __init__(self, port, expected_path="/", states=None):
         result = {}
+        states = states or login.StateBook()
 
         class Handler(BaseHTTPRequestHandler):
+            timeout = 5  # finite read deadline for each browser connection
+
             def do_GET(self):
-                q = parse_qs(urlsplit(self.path).query)
-                token = q.get("request_token", [""])[0]
-                ok = bool(REQUEST_TOKEN.fullmatch(token)) and q.get("status", ["success"])[0] == "success"
+                try:
+                    token = login.check_redirect(self.path, expected_path, states)
+                except login.LoginRejected as e:
+                    token, label = None, str(e)
+                ok = token is not None
                 body = (b"Kite login received. You can close this tab and return to the terminal." if ok
-                        else b"Waiting for the Kite login redirect.")
+                        else ("Waiting for the Kite login redirect (" + label + ").").encode())
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
                 self.send_header("Cache-Control", "no-store")
+                self.send_header("Referrer-Policy", "no-referrer")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
@@ -118,22 +97,30 @@ class CallbackCatcher:
 
 
 def auth(root, no_browser=False, port=None, timeout=300.0):
-    app, env = load_app(root), load_env(root)
-    api_key = env.get("KITE_API_KEY") or app.get("api_key") or getpass.getpass("Kite API key (hidden): ").strip()
-    secret = env.get("KITE_API_SECRET") or getpass.getpass("Kite API secret (hidden; not saved): ").strip()
-    login_url = "https://kite.zerodha.com/connect/login?" + urlencode({"v": 3, "api_key": api_key})
+    """Terminal login. The registered redirect must be this machine's loopback URL (KITE_REDIRECT_URL)."""
+    env = load_env(root)
+    for key in ("KITE_API_KEY", "KITE_API_SECRET", "KITE_USER_ID"):
+        if not env.get(key):
+            raise ValueError(f"{key} is missing from {root / ENV_FILE}; the account check needs all three")
+    redirect = urlsplit(login.redirect_url(env))
+    if redirect.hostname not in ("127.0.0.1", "localhost"):
+        raise ValueError("KITE_REDIRECT_URL points at the server; log in from the phone app instead")
+    states = login.StateBook()
+    state = states.issue()
+    url = login.login_url(env["KITE_API_KEY"], state)
     catcher = None
     if not no_browser:
         try:
-            catcher = CallbackCatcher(int(port or app.get("redirect_port", 8766)))
+            catcher = CallbackCatcher(int(port if port is not None else redirect.port or 80),
+                                      redirect.path or "/", states)
         except OSError:
             print("Could not listen on the redirect port; falling back to pasting the redirected URL.")
     print("Complete Kite login yourself in the browser. No password or OTP is read by this program.")
-    print("If the browser does not open, visit: " + login_url)
+    print("If the browser does not open, visit: " + url)
     token = ""
     try:
         if not no_browser:
-            webbrowser.open(login_url)
+            webbrowser.open(url)
         if catcher:
             print(f"Waiting up to {int(timeout)} s for the redirect to 127.0.0.1:{catcher.port} ...")
             token = catcher.wait(timeout) or ""
@@ -141,22 +128,12 @@ def auth(root, no_browser=False, port=None, timeout=300.0):
         if catcher:
             catcher.close()
     if not token:
-        value = getpass.getpass("Request token / redirected URL (hidden): ").strip()
-        token = parse_qs(urlsplit(value).query).get("request_token", [""])[0] if "://" in value else value
-    if not REQUEST_TOKEN.fullmatch(token):
-        raise ValueError("No well-formed request_token was received; run auth again")
-    session = KiteReadOnly(api_key).exchange_token(token, secret)
-    access_token = session.get("access_token")
-    if not isinstance(access_token, str) or not access_token:
-        raise KiteError("Token response was missing the access token")
-    expected = env.get("KITE_USER_ID")
-    if expected and session.get("user_id") != expected:
-        raise KiteError("The account that logged in is not KITE_USER_ID from the private env file; session not saved")
-    # Provider can invalidate a session earlier; 401/403 also stops collection.
-    tomorrow = now().date() + timedelta(days=1)
-    expires = datetime.combine(tomorrow, clock(6), IST)
-    atomic_json(root/"kite_session.json", {"api_key": api_key, "access_token": access_token, "expires_at": expires.isoformat()})
-    print("Session saved privately. Live order access is absent from this application.")
+        value = getpass.getpass("Redirected URL from the browser address bar (hidden): ").strip()
+        u = urlsplit(value)
+        token = login.check_redirect((u.path or "/") + "?" + u.query, redirect.path or "/", states)
+    saved = login.complete_login(root, env, token)
+    print(f"Session saved privately; it expires {saved['expires_at']}. Live order access is absent "
+          "from this application.")
 
 
 def client(root):

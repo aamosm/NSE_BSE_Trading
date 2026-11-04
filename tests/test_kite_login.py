@@ -9,7 +9,7 @@ from urllib.error import HTTPError
 
 import pytest
 
-from marketlab import cli, kite
+from marketlab import cli, kite, login
 from marketlab.kite import AuthenticationRequired, KiteError, KiteReadOnly, PermissionDenied
 from marketlab.store import Store
 
@@ -32,7 +32,8 @@ class _RaisingOpener:
     (403, {"status": "error", "error_type": "PermissionException", "message": "x"}, PermissionDenied, "plan"),
     (403, {"status": "error"}, AuthenticationRequired, "HTTP 403"),
     (429, {"status": "error", "error_type": "NetworkException", "message": "x"}, KiteError, "NetworkException"),
-    (400, {"status": "error", "error_type": "bad type!", "message": "x"}, KiteError, "HTTP 400;"),
+    (400, {"status": "error", "error_type": "bad type!", "message": "x"}, KiteError, "HTTP 400 (UnknownErrorType)"),
+    (400, {"status": "error", "message": "x"}, KiteError, "HTTP 400;"),
 ])
 def test_errors_are_classified_without_exposing_provider_messages(monkeypatch, code, body, exc, text):
     monkeypatch.setattr(kite, "build_opener", lambda *a: _RaisingOpener(_http_error(code, body)))
@@ -60,7 +61,12 @@ def test_non_object_json_is_a_schema_error_not_a_crash(monkeypatch):
         def __exit__(self, *a):
             return False
 
+        sent = False
+
         def read(self, n):
+            if self.sent:
+                return b""
+            self.sent = True
             return b"[1, 2]"
 
     class Opener:
@@ -78,13 +84,18 @@ def _hit(port, path):
         return r.read().decode()
 
 
-def test_callback_catcher_ignores_noise_and_returns_the_request_token():
-    c = CallbackCatcherPort0()
+def test_callback_catcher_requires_exact_path_and_single_use_state():
+    states = login.StateBook()
+    state = states.issue()
+    c = cli.CallbackCatcher(0, "/kite/callback", states)
     replies = []
 
     def browser():
         replies.append(_hit(c.port, "/favicon.ico"))
-        replies.append(_hit(c.port, "/callback?action=login&type=login&status=success&request_token=Ab12Cd34Ef56"))
+        replies.append(_hit(c.port, "/other?status=success&request_token=Ab12Cd34Ef56&state=" + state))
+        replies.append(_hit(c.port, "/kite/callback?status=success&request_token=Ab12Cd34Ef56&state=" + "x" * 43))
+        replies.append(_hit(c.port, "/kite/callback?action=login&type=login&status=success"
+                                    "&request_token=Ab12Cd34Ef56&state=" + state))
 
     t = threading.Thread(target=browser)
     t.start()
@@ -93,12 +104,16 @@ def test_callback_catcher_ignores_noise_and_returns_the_request_token():
     finally:
         t.join(5)
         c.close()
-    assert replies[0].startswith("Waiting") and replies[1].startswith("Kite login received")
+    assert "LOGIN_WRONG_PATH" in replies[0] and "LOGIN_WRONG_PATH" in replies[1]
+    assert "LOGIN_STATE_INVALID_OR_EXPIRED" in replies[2] and replies[3].startswith("Kite login received")
+    assert not states.consume(state)  # single use
 
 
 def test_callback_catcher_rejects_failed_login_status():
-    c = CallbackCatcherPort0()
-    t = threading.Thread(target=lambda: _hit(c.port, "/?status=failed&request_token=Ab12Cd34Ef56"))
+    states = login.StateBook()
+    state = states.issue()
+    c = cli.CallbackCatcher(0, "/", states)
+    t = threading.Thread(target=lambda: _hit(c.port, "/?status=failed&request_token=Ab12Cd34Ef56&state=" + state))
     t.start()
     try:
         assert c.wait(timeout=2) is None
@@ -107,41 +122,20 @@ def test_callback_catcher_rejects_failed_login_status():
         c.close()
 
 
-def CallbackCatcherPort0():
-    return cli.CallbackCatcher(0)
-
-
-def test_auth_uses_saved_key_redirect_token_and_never_saves_the_secret(tmp_path, monkeypatch):
-    (tmp_path / cli.APP_FILE).write_text(json.dumps({"api_key": "publickey1", "redirect_port": 0}))
-    prompts = []
-    monkeypatch.setattr(cli.getpass, "getpass", lambda p: prompts.append(p) or "the-secret")
-    monkeypatch.setattr(cli.webbrowser, "open", lambda url: None)
-
-    class FakeCatcher:
-        port = 8766
-
-        def __init__(self, port):
-            pass
-
-        def wait(self, timeout):
-            return "Ab12Cd34Ef56"
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(cli, "CallbackCatcher", FakeCatcher)
-    seen = {}
-
-    def fake_exchange(self, token, secret):
-        seen.update(token=token, secret=secret, key=self.api_key)
-        return {"access_token": "access-xyz"}
-
-    monkeypatch.setattr(KiteReadOnly, "exchange_token", fake_exchange)
-    cli.auth(tmp_path)
-    assert seen == {"token": "Ab12Cd34Ef56", "secret": "the-secret", "key": "publickey1"}
-    assert len(prompts) == 1 and "secret" in prompts[0]  # key came from the private app file
-    saved = (tmp_path / "kite_session.json").read_text()
-    assert "the-secret" not in saved and "access-xyz" in saved
+def test_idle_connection_does_not_block_the_catcher():
+    import socket
+    states = login.StateBook()
+    state = states.issue()
+    c = cli.CallbackCatcher(0, "/", states)
+    idle = socket.create_connection(("127.0.0.1", c.port))  # connects, never sends a request
+    t = threading.Thread(target=lambda: _hit(c.port, "/?status=success&request_token=Ab12Cd34Ef56&state=" + state))
+    t.start()
+    try:
+        assert c.wait(timeout=20) == "Ab12Cd34Ef56"
+    finally:
+        t.join(25)
+        idle.close()
+        c.close()
 
 
 class PlanLimitedKite:
@@ -198,24 +192,26 @@ def test_expired_session_stops_collection(tmp_path, monkeypatch):
 
 def _fake_login(monkeypatch, user_id="AB1234"):
     monkeypatch.setattr(cli.webbrowser, "open", lambda url: None)
+    seen = {}
 
     class FakeCatcher:
         port = 8766
 
-        def __init__(self, port):
-            pass
+        def __init__(self, port, path, states):
+            seen.update(port=port, path=path)
+            self.states = states
 
         def wait(self, timeout):
-            return "Ab12Cd34Ef56"
+            # The URL opened in the browser carries a state; simulate Kite echoing it back.
+            return "Ab12Cd34Ef56" if self.states._mem else None
 
         def close(self):
             pass
 
     monkeypatch.setattr(cli, "CallbackCatcher", FakeCatcher)
-    seen = {}
 
     def fake_exchange(self, token, secret):
-        seen.update(secret=secret, key=self.api_key)
+        seen.update(secret=secret, key=self.api_key, token=token)
         return {"access_token": "access-xyz", "user_id": user_id}
 
     monkeypatch.setattr(KiteReadOnly, "exchange_token", fake_exchange)
@@ -227,8 +223,17 @@ def test_auth_reads_private_env_and_checks_the_account(tmp_path, monkeypatch):
     (tmp_path / ".env").write_text("# private\nKITE_API_KEY=envkey\nKITE_API_SECRET='envsecret'\nKITE_USER_ID=AB1234\n")
     seen = _fake_login(monkeypatch)
     cli.auth(tmp_path)
-    assert seen == {"secret": "envsecret", "key": "envkey"}
-    assert "envsecret" not in (tmp_path / "kite_session.json").read_text()
+    assert seen == {"secret": "envsecret", "key": "envkey", "token": "Ab12Cd34Ef56", "port": 8766, "path": "/"}
+    saved = (tmp_path / "kite_session.json").read_text()
+    assert "envsecret" not in saved and "access-xyz" in saved and "AB1234" not in saved
+
+
+def test_auth_uses_the_registered_redirect_port_and_path(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("KITE_API_KEY=k\nKITE_API_SECRET=s\nKITE_USER_ID=AB1234\n"
+                                   "KITE_REDIRECT_URL=http://127.0.0.1:8765/kite/callback\n")
+    seen = _fake_login(monkeypatch)
+    cli.auth(tmp_path)
+    assert seen["port"] == 8765 and seen["path"] == "/kite/callback"
 
 
 def test_auth_refuses_a_different_account(tmp_path, monkeypatch):
@@ -237,6 +242,16 @@ def test_auth_refuses_a_different_account(tmp_path, monkeypatch):
     with pytest.raises(KiteError, match="not KITE_USER_ID"):
         cli.auth(tmp_path)
     assert not (tmp_path / "kite_session.json").exists()
+
+
+@pytest.mark.parametrize("missing", ["KITE_API_KEY", "KITE_API_SECRET", "KITE_USER_ID"])
+def test_auth_requires_key_secret_and_expected_account(tmp_path, monkeypatch, missing):
+    values = {"KITE_API_KEY": "k", "KITE_API_SECRET": "s", "KITE_USER_ID": "AB1234"}
+    del values[missing]
+    (tmp_path / ".env").write_text("".join(f"{k}={v}\n" for k, v in values.items()))
+    _fake_login(monkeypatch)
+    with pytest.raises(ValueError, match=missing):
+        cli.auth(tmp_path)
 
 
 @pytest.mark.parametrize("line", ["KITE_PASSWORD=x", "kite_totp_secret=x", "ZERODHA_PIN=1"])

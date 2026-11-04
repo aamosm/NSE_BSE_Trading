@@ -36,7 +36,15 @@ class PermissionDenied(KiteError):
     """Kite refused an endpoint for this app/account (e.g. quotes or history without the paid data plan)."""
 
 
-_ERROR_TYPE = re.compile(r"[A-Za-z]{1,40}")
+# Kite's documented error_type values (https://kite.trade/docs/connect/v3/exceptions/, checked 5 Nov 2026)
+# plus PermissionException, which the official client library defines and Kite returns for endpoints
+# outside the app's plan. Any other value is reported as UnknownErrorType: provider text is never echoed.
+KITE_ERROR_TYPES = frozenset({
+    "TokenException", "UserException", "OrderException", "InputException", "MarginException",
+    "HoldingException", "NetworkException", "DataException", "GeneralException", "PermissionException",
+})
+READ_DEADLINE = 90.0  # seconds for one complete response, however slowly it trickles in
+CHUNK = 64 * 1024
 
 
 def _error_type(e: HTTPError) -> str:
@@ -46,7 +54,24 @@ def _error_type(e: HTTPError) -> str:
     except Exception:
         return ""
     kind = body.get("error_type", "") if isinstance(body, dict) else ""
-    return kind if isinstance(kind, str) and _ERROR_TYPE.fullmatch(kind) else ""
+    if kind in ("", None):
+        return ""
+    return kind if isinstance(kind, str) and kind in KITE_ERROR_TYPES else "UnknownErrorType"
+
+
+def read_bounded(response, limit=MAX_RESPONSE, deadline=READ_DEADLINE, clock=time.monotonic):
+    """Read a whole response under a size limit and a total deadline (socket timeouts are per read)."""
+    stop, parts, size = clock() + deadline, [], 0
+    while True:
+        if clock() > stop:
+            raise KiteError("Kite response exceeded the read deadline; no automatic retry")
+        part = response.read(CHUNK)
+        if not part:
+            return b"".join(parts)
+        size += len(part)
+        if size > limit:
+            raise KiteError("Provider response exceeded the configured limit")
+        parts.append(part)
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -89,7 +114,7 @@ class KiteReadOnly:
         req = Request(url, data=encoded if method == "POST" else None, headers=headers, method=method)
         try:
             with build_opener(NoRedirect()).open(req, timeout=20) as response:
-                raw = response.read(MAX_RESPONSE + 1)
+                raw = read_bounded(response)
                 encoding = response.headers.get("Content-Encoding", "")
         except HTTPError as e:
             # Provider bodies and URLs can contain sensitive data; only the enumerated error type is used.
@@ -108,8 +133,6 @@ class KiteReadOnly:
             raise KiteError(f"Kite HTTP {e.code}{label}; no automatic retry") from None
         except (URLError, TimeoutError):
             raise KiteError("Kite connection failed; no automatic retry") from None
-        if len(raw) > MAX_RESPONSE:
-            raise KiteError("Provider response exceeded the configured limit")
         if encoding.lower() == "gzip":
             with gzip.GzipFile(fileobj=io.BytesIO(raw)) as zipped:
                 raw = zipped.read(MAX_RESPONSE + 1)
