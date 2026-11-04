@@ -1,5 +1,7 @@
 # Phase 1 plan: cash and MTF accounting
 
+**Status (4 Nov 2026):** implemented in `src/marketlab/ledger/` at the user's direction, before the external GPT review of Phase 0. That review should cover this plan and the code together. Fixtures A–H pass with the exact values below (`tests/test_ledger_fixtures.py`). A mutation check deliberately broke 8 ledger rules and the tests caught all 8, after fixtures G and H and the DP/available-cash tests were added. The first run caught only 4.
+
 Scope: Phase 1 in `prompts/PHASE_PROMPTS.md`, which covers a balanced ledger, cash and MTF lots, funding liability, accrued interest, pledge lifecycle, margin headroom, partial exits, conversion to cash, forced exits and a corporate action. Hand-worked fixtures and a replayable accounting demonstration are required. There is no broker connection and no fill simulation: fills are given as inputs (fill simulation is Phase 3).
 
 ## 1. Interfaces
@@ -148,6 +150,19 @@ Charge abbreviations: STT 0.1% (delivery/MTF); txn 0.00307%; SEBI ₹10/crore; s
 | Split new 2 : old 1, ex-date Mon 9 Nov | lot 20 @ 250, cost **5,000.00**, lot date 4 Nov kept |
 | Sell 20 × 260.00 on Wed 11 Nov (turnover 5,200: charges 5.40 + DP 15.34) | gross **200.00**; net **173.32**, the same as fixture A |
 
+### G. Friday MTF buy: interest starts at Monday settlement
+
+Buy 20 × 400.00 MTF on Fri 6 Nov (settles Mon 9 Nov), sell Wed 11 Nov. Calendar days 9, 10, 11 = 3 × 2.40 = **7.20**. Counting from the trade date would add Sat/Sun and give 12.00.
+
+### H. Partial MTF exit
+
+| Step | Arithmetic | Result |
+| --- | --- | --- |
+| MTF buy 20 × 400.00 on 5 Nov, 25% margin | funded 6,000 | |
+| Sell 5 × 410.00 on Mon 9 Nov | funded repaid 6,000 × 5/20 = **1,500**. Brokerage 0.3% × 2,050 = 6.15 (under the cap); STT 2.05; txn 0.062935→0.06; SEBI 0.00205→0.00; GST 0.18×6.214987=1.1187→1.12 | sell charges **9.38**; DP 15.34; unpledge 17.70; realised gross **50.00** |
+| Remaining lot | 15 shares, cost 6,000.00, funded **4,500.00**, initial margin 1,500.00 | `PARTIALLY_CLOSED` |
+| Interest to 11 Nov | 6–9 Nov on 6,000 (4 × 2.40) + 10–11 Nov on 4,500 (2 × 1.80) | **13.20** |
+
 ## 6. Invariants (property tests)
 
 1. Every journal entry sums to zero, and the trial balance is zero after any event sequence.
@@ -160,7 +175,7 @@ Charge abbreviations: STT 0.1% (delivery/MTF); txn 0.00307%; SEBI ₹10/crore; s
 
 ## 7. Acceptance criteria
 
-- Fixtures A–F reproduce the exact rupee values above.
+- Fixtures A–H reproduce the exact rupee values above.
 - The invariants hold under randomised event sequences (Hypothesis).
 - A replay demo (`python -m marketlab.ledger.demo`) prints, for a synthetic cash + MTF scenario:
   - rule decisions, including one rejected order with its reasons and no ledger effect;

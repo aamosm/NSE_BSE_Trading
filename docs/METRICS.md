@@ -18,13 +18,13 @@ Each metric below is marked with where it stands. **Implemented** means code exi
 | Counterfactuals | Metrics from current-rule replays of older dates carry the counterfactual flag from the charge schedule/rules | Build Guide §10 |
 | Costs | Every return is reported **net of all charges and MTF interest**. Gross numbers are shown only next to the net ones | Brief: "separate costs from returns" |
 
-## 2. Account and ledger metrics (Phase 1, from the ledger)
+## 2. Account and ledger metrics (implemented in `ledger/book.py` unless marked)
 
 | Metric | Definition |
 | --- | --- |
 | Net liquidation estimate (NLV) | Settled cash + sale receivables − purchase payables + Σ(qty × mark) − MTF principal − accrued MTF interest − estimated exit costs (labelled estimate) |
 | Available cash | Settled free cash − payables − reserved cash. Sale receivables are excluded until settlement (conservative ASSUMPTION; Zerodha lets CNC sale proceeds fund same-day buys, MTF sale proceeds only after T+1) |
-| Reserved cash | Cash earmarked by pending entry orders, pending MTF margin calls and the user's buffer |
+| Reserved cash | Cash earmarked by pending entry orders, pending MTF margin calls and the user's buffer. **Not built:** needs Phase 3 order state |
 | Holdings at cost / market value | Per lot: open quantity × average buy price / × mark. Kept separate from cash flows |
 | Unrealised P&L | Market value − cost of open lots (gross; costs already expensed) |
 | Realised P&L | Gross: sale value − FIFO cost. Net: gross − all charges − MTF interest attributed to the closed slice |
@@ -32,7 +32,7 @@ Each metric below is marked with where it stands. **Implemented** means code exi
 | Accrued MTF interest | Σ daily 0.04% × opening funded balance for each chargeable day (day-count rule in PHASE_1_PLAN.md §4) |
 | MTF margin requirement | margin% (VaR + 3/5×ELM, current snapshot) × buy value + MTM loss (buy value − market value, if positive) |
 | MTF headroom | Cash blocked for the position + free cash − requirement. Negative ⇒ `MARGIN_SHORTFALL` |
-| Gross exposure / leverage | Σ market value / NLV; funded principal / NLV |
+| Gross exposure / leverage | Σ market value / NLV; funded principal / NLV. Computable from `Book`; no dedicated function yet |
 | Contributions / withdrawals | Separate equity accounts; excluded from returns |
 | Costs by component | Brokerage, STT, exchange, SEBI, IPFT, stamp, GST, DP, pledge, unpledge, square-off, MTF interest: each its own expense account |
 
@@ -104,8 +104,8 @@ All take **per-period** (not annualised) Sharpe ratios.
 | Cost in bps of turnover | Implemented: `cost_bps_of_turnover` | charges / traded value × 10,000 |
 | Turnover ratio | Implemented: `turnover_ratio` | (buys + sells) / 2 / average NLV over the period |
 | Slippage | Implemented: `slippage_bps` | Fill vs decision price, signed so positive = worse for us |
-| Cost drag | Phase 1 | Gross TWR − net TWR over the same period |
-| MTF carry | Phase 1 | Interest paid / average funded principal; interest as % of net P&L |
+| Cost drag | Not built yet | Gross TWR − net TWR over the same period |
+| MTF carry | Not built yet | Interest paid / average funded principal; interest as % of net P&L |
 | Fill, partial-fill, rejection and cancel rates | Phase 3 | Per order; rejections broken down by reason code |
 | Time to fill, lost acknowledgements, duplicate updates ignored | Phase 3 | From the order event log |
 | Modifications per order (Kite cap 25), API calls/s, /min, /day (10/400/5,000) | Phase 3/7 | From the rate limiter |
@@ -157,8 +157,8 @@ It also reports the trial count, deduplicated effective trials, DSR, PBO, parame
 
 | Metric | Value |
 | --- | --- |
-| Tests executed / passed / failed / skipped | see `docs/HANDOFF.md` for the latest run |
-| Mutation check (rules engine) | 7 of 7 deliberate errors caught |
+| Tests executed / passed / failed / skipped | 211 / 211 / 0 / 0 (rules 159, metrics 26, ledger 26) |
+| Mutation check | Rules engine 7 of 7 caught; ledger 8 of 8 caught (4 of 8 before fixtures G/H were added) |
 | Registered sources / rule citations | 31 sources; >40 citations, all provenance-checked by tests |
 | Open rule items | 15 (RULES_REGISTER.md §10) |
 | Scenario registry (1,200) | PLANNED 1,200; implemented 0; executed 0 |

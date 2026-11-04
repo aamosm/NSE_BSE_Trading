@@ -167,7 +167,12 @@ MIS is outside the default project policy (products: CNC and MTF). The engine st
 | DDPI/POA required; NRIs, minors and custodial participants are ineligible | BROKER_OFFICIAL | same |
 | Client margin = VaR + 3×ELM (F&O stocks) or VaR + 5×ELM (others), capped at 100% | BROKER_OFFICIAL | same |
 | Interest 0.04% per day on the funded amount, from T+1 until sold | BROKER_OFFICIAL | same; ZERODHA/CHARGES |
-| Interest day-count (weekends, holidays, sale day) | **UNKNOWN**. Verify against the MTF ledger statement before Phase 1 fixtures | — |
+| Sale day accrues interest: BTST pays "on the opening balance on T+1", so a T+1 sale is charged one day | BROKER_OFFICIAL (inferred from the BTST statement) | ZERODHA/MTF-FAQ |
+| Interest starts on the buy's settlement date (a Friday buy starts Monday) | ASSUMPTION | — |
+| Whether weekends and holidays accrue interest | **UNKNOWN**. The ledger implements both conventions (calendar days = default, conservative; trading days). The difference was ₹7.20 on ₹6,000 over one weekend + holiday. Verify against a real MTF statement | ZERODHA/MTF-LEDGER |
+| Interest is debited "on specific dates" (unnamed). Ledger accrues a liability and debits at close-out and month start | ASSUMPTION | ZERODHA/MTF-LEDGER |
+| On a sale, funded principal is repaid pro-rata to the quantity sold ("buy value is reversed upon selling") | ASSUMPTION (inferred) | ZERODHA/MTF-LEDGER |
+| MTF sale proceeds are usable only after T+1 settlement; CNC sale proceeds can fund same-day MTF buys | BROKER_OFFICIAL | ZERODHA/MTF-FAQ |
 | Auto-pledged on buy and unpledged on sell. Pledge/unpledge fee ₹15 + GST per ISIN per request (pledge once per buy day) | BROKER_OFFICIAL | same |
 | Pledge confirmation fails on T+1 if the buy was short-delivered | BROKER_OFFICIAL | same |
 | No maximum holding period. BTST allowed (interest on the T+1 opening balance). T1 holdings cannot be sold on a settlement holiday | BROKER_OFFICIAL | same |
@@ -223,7 +228,7 @@ Worked examples tested in `tests/test_charges_mtf_broker.py`:
 4. **ASM stage margins.** Read the NSE ASM framework annexure itself; we have only mirror summaries.
 5. **BSE group definitions** (A, B, X, Z, ZP, P) and BSE price-band and tick rules. Read BSE's own notices.
 6. **MIS cut-off before 3 Aug 2026** (15:20 or 15:25), needed for any intraday replay.
-7. **MTF interest day-count**, sale-day treatment and pledge timing. Reconcile with Zerodha's "MTF ledger entries" article (S22) and a real statement.
+7. **MTF interest weekend/holiday accrual**, debit dates and pledge-fee timing. S22 ("MTF funds statement entries", read 4 Nov 2026) lists entry names but no day-count, so this needs a real statement. Sale-day treatment is now resolved from the FAQ's BTST statement.
 8. **Contract-note rounding** of STT, stamp duty and GST, and whether DP is charged per day or per transaction.
 9. **Debit-balance ₹20 surcharge** and its interaction with MTF.
 10. **Static IP start date conflict** (2025 vs 2026). Moot today, but recorded.
@@ -237,6 +242,6 @@ Worked examples tested in `tests/test_charges_mtf_broker.py`:
 
 Primary: NSE/CMTR/73927 (consolidated, 28 Apr 2026), NSE/CMTR/67133, NSE/SURV/71526, NSE ESM FAQ v1.1, NSE/SURV/75652, NSE/CMTR/68802, SEBI CAS circular (16 Jan 2026, via NSE/CMTR/72394), NSE/CMTR/73362, NSE/CMTR/74969, NCL/CMPT/71904.
 
-Broker official: Zerodha charges, MTF FAQ, CAS article, MIS-blocks article, surveillance-indicators article, GSM stage-2 article, T2T article, RMS XT article, short-delivery article, static-IP article, Kite API FAQ, Kite orders docs, Kite rate-limit docs.
+Broker official: Zerodha charges, MTF FAQ, MTF funds statement entries, CAS article, MIS-blocks article, surveillance-indicators article, GSM stage-2 article, T2T article, RMS XT article, short-delivery article, static-IP article, Kite API FAQ, Kite orders docs, Kite rate-limit docs.
 
 The full registry, with URLs and check dates, is in `src/marketlab/rules/provenance.py`. Downloaded originals were used only as read-only reference and are not stored in the repository.

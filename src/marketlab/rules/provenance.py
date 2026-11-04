@@ -100,6 +100,10 @@ _SOURCES: tuple[Source, ...] = (
     Source("ZERODHA/MTF-FAQ", "FAQs on Margin Trading Facility", "Zerodha", SourceKind.BROKER,
            "https://support.zerodha.com/category/trading-and-markets/margins/margin-trading-facility/articles/"
            "margin-trading-facility-mtf-faqs", None, CHECKED),
+    Source("ZERODHA/MTF-LEDGER", "MTF funds statement entries", "Zerodha", SourceKind.BROKER,
+           "https://support.zerodha.com/category/trading-and-markets/margins/margin-trading-facility/articles/"
+           "mtf-funds-statement-entries", None, CHECKED,
+           "Lists ledger entry names; states interest is debited 'on specific dates' without saying which."),
     Source("ZERODHA/CAS", "What is SEBI's Closing Auction Session (CAS), and how does it affect you?", "Zerodha",
            SourceKind.BROKER, "https://support.zerodha.com/category/trading-and-markets/trading-faqs/general/"
            "articles/closing-auction-session", None, CHECKED),

@@ -14,7 +14,8 @@ Verified on 4 November 2026 by running each tool's `--version`.
 | PostgreSQL client (`psql`) | Not installed |
 | uv | Not installed (not needed) |
 | `ANTHROPIC_API_KEY` | Not set (existence checked, value not printed), so Claude Code is using subscription billing |
-| Project Git repository | Not initialised yet |
+| Project Git repository | Initialised 4 Nov 2026 (branch `main`, local only, no remote) |
+| Reference projects | 20 read-only shallow clones in `C:\Users\d_hru\try\tradebot\reference_bots\` (outside this repository; never installed or run) |
 
 ## Setup (already done once in this folder)
 
@@ -28,7 +29,8 @@ python -m venv .venv
 
 ```powershell
 .venv\Scripts\python -m pytest                 # all tests
-$env:PYTHONPATH = "src"; .venv\Scripts\python -m marketlab.rules.demo   # rule decisions on synthetic orders
+$env:PYTHONPATH = "src"; .venv\Scripts\python -m marketlab.rules.demo    # rule decisions on synthetic orders
+$env:PYTHONPATH = "src"; .venv\Scripts\python -m marketlab.ledger.demo   # full cash + MTF replay: decisions, ledger, metrics
 ```
 
 The runtime package has no third-party dependencies. Times use a fixed +05:30 offset (India has no DST), so no tz database is needed on Windows.

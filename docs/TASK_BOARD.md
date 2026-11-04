@@ -1,6 +1,11 @@
 # Task board
 
-All application milestones are NOT STARTED. Check a milestone only after its acceptance evidence is recorded.
+Check a milestone only after its acceptance evidence is recorded **and** reviewed.
+
+Status on 4 Nov 2026:
+- **Phase 0:** deliverables done; awaiting GPT review.
+- **Phase 1:** implemented with fixtures A–H and invariants; awaiting review. It was started before the Phase 0 review, at the user's direction.
+- **Phases 2–10:** not started.
 
 | Phase | Primary owner | Reviewer | Deliverable |
 | --- | --- | --- | --- |

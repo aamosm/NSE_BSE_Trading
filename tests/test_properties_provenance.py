@@ -11,6 +11,7 @@ from hypothesis import strategies as st
 from marketlab.rules import Exchange, Side, bands, calendar, charges, instruments, sessions, ticks
 from marketlab.rules import broker as broker_rules
 from marketlab.rules import mtf as mtf_rules
+from marketlab.ledger import book as ledger_book
 from marketlab.rules.provenance import SOURCES, Cite, SourceKind, Status
 
 NOW = date(2026, 11, 4)
@@ -69,6 +70,7 @@ def _all_cites() -> list[Cite]:
     found += list(charges.ZERODHA_2026_11_04.cites)
     found += [r_.cite for r_ in instruments.SERIES_RULES.values()]
     found += [c for r in instruments.STAGE_RULES for c in r.r.cites]
+    found += list(ledger_book.LEDGER_CITES)
     return found
 
 
