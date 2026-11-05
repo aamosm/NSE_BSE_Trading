@@ -64,8 +64,13 @@ def _write_once(path: Path, value) -> str:
 
 
 def record(root: Path, body: dict, *, origin: str, decision_id: str | None = None, diagnostics: dict | None = None,
-           runs: Path | None = None) -> dict:
+           runs: Path | None = None, at=None) -> dict:
     """Persist one decision attempt. ``body`` needs ``day`` (ISO date), ``action`` and ``reasons``.
+
+    ``at`` is the decision's own clock: the moment the decision was taken, which stamps both ``generated_at`` and
+    the evidence receipt, so a decision taken for an earlier moment (a scheduler catch-up, a replay) is readable
+    at that moment in the point-in-time store instead of at the wall-clock time of the process that wrote it. A
+    re-used ``decision_id`` keeps the first record's ``generated_at`` (first write wins).
 
     Returns the timeline entry (the same dict that was appended to the evidence store)."""
     if origin not in ORIGINS:
@@ -86,7 +91,7 @@ def record(root: Path, body: dict, *, origin: str, decision_id: str | None = Non
         full["diagnostic_artifact"] = diag_rel
     rel = f"decisions/{did}.json"
     if "generated_at" not in full:
-        full["generated_at"] = now().isoformat()
+        full["generated_at"] = (at or now()).isoformat()
     sha = _write_once(runs / rel, full)
     stored = json.loads((runs / rel).read_text(encoding="utf-8"))  # the first write wins for a re-used id
     from .research import explain
@@ -98,8 +103,8 @@ def record(root: Path, body: dict, *, origin: str, decision_id: str | None = Non
              "artifact": rel, "artifact_sha256": sha, "diagnostic_artifact": stored.get("diagnostic_artifact"),
              "simulated": True, "live_orders": False}
     db = Store(root / "evidence.sqlite3")
-    try:
-        db.append(KIND, f"marketlab:{origin}", stored["day"], entry)
+    try:  # the receipt carries the stored record's own generated_at, so a re-used id does not move in the timeline
+        db.append(KIND, f"marketlab:{origin}", stored["day"], entry, received_at=stored.get("generated_at"))
     finally:
         db.close()
     return entry

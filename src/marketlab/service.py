@@ -510,7 +510,7 @@ def record_decision(ctx, day, action, reasons, symbols=(), late_start=False, ext
     from . import decisions
     body = {"day": day.isoformat(), "action": action, "reasons": list(reasons), "symbols": list(symbols),
             "late_start": bool(late_start), "model_id": None, **(extra or {})}
-    return decisions.record(ctx.root, body, origin="scheduler", decision_id=decisions.scheduled_id(day))
+    return decisions.record(ctx.root, body, origin="scheduler", decision_id=decisions.scheduled_id(day), at=now())
 
 
 def scheduled_decision(ctx, day, late_start=False):

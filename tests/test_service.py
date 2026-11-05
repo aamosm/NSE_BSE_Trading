@@ -171,8 +171,9 @@ def test_pause_only_affects_analysis(tmp_path):
     assert service.tick(c, at(5, 10, 5), {k: ok_job for k in service.JOBS})["analysis"] == "ACTIVE"
 
 
-def test_decision_record_is_idempotent_across_restarts(tmp_path):
+def test_decision_record_is_idempotent_across_restarts(tmp_path, monkeypatch):
     c = ctx(tmp_path)
+    monkeypatch.setattr(service, "now", lambda: at(5, 16, 0))  # the decision's own clock, not the day this test runs
     first = service.scheduled_decision(c, date(2026, 11, 5))
     again = service.scheduled_decision(service.Context(c.root, c.market, ["NSE:AAA"], calendar=CAL, pause=0), date(2026, 11, 5))
     db = Store(c.root / "evidence.sqlite3")
