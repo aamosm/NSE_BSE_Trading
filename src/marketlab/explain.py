@@ -241,8 +241,10 @@ def glossary() -> dict:
         "allocator": {"term": "Allocator", "plain": "Chooses whole-share quantities across the stocks that pass both gates, "
                       "maximising expected net rupees minus a risk penalty (γ/2 × portfolio variance, using correlations "
                       "over 60 sessions), with at most K positions, a per-stock cap, a cash reserve and exact charges."},
-        "K": {"term": "K (positions)", "plain": "The most stocks held at once (2 for ₹10,000 capital under the spec tiers)."},
-        "cap": {"term": "Per-stock cap", "plain": "The most one position may be worth (50% of capital at ₹10,000)."},
+        "K": {"term": "K (positions)", "plain": "The most stocks held at once. The value comes from the selected capital's policy tier; "
+               "for example, the default tier allows 2 positions at ₹10,000."},
+        "cap": {"term": "Per-stock cap", "plain": "The most one position may be worth. It is derived from the selected capital's "
+               "policy tier; for example, the default tier is 50% of capital at ₹10,000."},
         "reserve": {"term": "Cash reserve", "plain": "Capital never invested (20% by default) to absorb costs and gaps."},
         "gamma": {"term": "Risk aversion γ", "plain": "How strongly the allocator penalises variance; 2/W is 'half-Kelly'."},
         "limit_order": {"term": "Limit price (EXEC.v1)", "plain": "Paper orders are limit buys at the decision close × 1.05 "

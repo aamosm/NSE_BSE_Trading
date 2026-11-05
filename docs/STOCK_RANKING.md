@@ -9,6 +9,13 @@ uses the same code as the paper decision (`evaluate.build_dataset` → `decide.f
 frozen promotion rule. That needs about 1,376 sessions of history; the research folder holds 582. A call is a
 structured, fully explained screen, not a recommendation. Paper orders stay off until a model is promoted.
 
+`--capital` is a run parameter, not a fixed ₹10,000 assumption. `marketlab rank
+--capital 30000` refits/ranks the same registered model at ₹30,000 and records
+that capital in the immutable artifact. The Stocks tab can also restate a saved
+ranking at another capital for an indicative, greedy view; newly eligible
+stocks require a fresh rank run because the saved artifact has no forecasts for
+them.
+
 ## The calls
 
 The classes are checked in this order:
@@ -37,7 +44,7 @@ All fields are computed in `quant/ranking.py`; `explain.py` only formats them.
 - **Contributions:** β_j × x_j for every feature. They sum exactly to μ̂ (tested). The common part (intercept plus
   market features) is the same for every stock.
 - **Costs:**
-  - whole shares q = ⌊cap / close⌋;
+  - whole shares q = ⌊per-stock cap / close⌋, where the per-stock cap is derived from the selected capital and policy tier;
   - exact buy and sell charges from the Zerodha schedule (STT rounded to the rupee) plus the ₹15.34 DP charge;
   - slippage both ways (0.10% at ≥ ₹10 crore median traded value, 0.25% below);
   - the limit price and the cash that would be blocked;

@@ -103,3 +103,24 @@ That is a one-instrument diagnostic, not a strategy result. A BSE backtest requi
     .\.venv\Scripts\python.exe -m marketlab import-trades path\to\your_normalized_trades.csv
 
 Only official exchange feed hosts are accepted. Items are stored as unreviewed evidence; nothing turns a headline into a decision. Imported trades from another broker are observations, not a reconciled ledger.
+## Historical candle backfill boundary
+
+Before any Kite candle download, run the offline planner against the current
+instrument CSV and exchange bhavcopy fixtures:
+
+```powershell
+marketlab kite-backfill --dry-run `
+  --instrument-file data\fixtures\instruments_NSE.csv `
+  --bhavcopy data\fixtures\cm01JAN2025bhav.csv.zip
+```
+
+The planner treats bhavcopies as the historical universe and the Kite dump only
+as a source of current tokens. It reports `bhavcopy_only_isins_excluded` for
+securities no longer present in the current instrument dump, preventing
+survivorship-biased Kite instruments from becoming the historical universe.
+The stages are ordered as legacy bhavcopies, holiday circulars, Kite candles,
+index history and ISIN-change files.
+
+The command is deliberately dry-run only. Do not automate Kite login or store a
+password, PIN, TOTP seed, or access token. Any real download requires the owner
+to authenticate manually and review the plan first.

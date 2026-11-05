@@ -345,6 +345,12 @@ def parser():
     a = sub.add_parser("history")
     for name in ("token", "interval", "start", "end", "exchange", "symbol", "isin", "output"):
         a.add_argument("--"+name, required=True, type=int if name=="token" else Path if name=="output" else str)
+    a = sub.add_parser("kite-backfill", help="plan a Kite candle backfill from exchange evidence; dry-run only")
+    a.add_argument("--instrument-file", type=Path, required=True,
+                   help="current Kite instruments CSV obtained by an owner-authenticated read")
+    a.add_argument("--bhavcopy", type=Path, nargs="+", required=True,
+                   help="legacy or UDiFF bhavcopy CSV/ZIP files that define the historical universe")
+    a.add_argument("--dry-run", action="store_true", help="required; do not authenticate or download")
     a = sub.add_parser("news"); a.add_argument("--file", type=Path); a.add_argument("--url")
     a = sub.add_parser("import-trades"); a.add_argument("file", type=Path)
     a = sub.add_parser("backtest"); a.add_argument("file", type=Path); a.add_argument("--output", type=Path)
@@ -420,6 +426,11 @@ def main():
             print(f"Paper analysis {'paused' if args.command == 'pause' else 'resumed'}; collection is unaffected.")
         elif args.command == "history":
             historical(root, args.token, args.interval, args.start, args.end, args.output, args.exchange, args.symbol, args.isin)
+        elif args.command == "kite-backfill":
+            if not args.dry_run:
+                raise ValueError("KITE_BACKFILL_REQUIRES_DRY_RUN: owner review is required before any Kite download")
+            from .kite_backfill import dry_run
+            print(json.dumps(dry_run(args.instrument_file, args.bhavcopy), indent=1))
         elif args.command == "news":
             if bool(args.file) == bool(args.url):
                 raise ValueError("Choose exactly one --file or --url")
