@@ -17,6 +17,7 @@ def exchange_sessions(calendar, start: date, end: date, panel_days: set[date]) -
     own ``basis`` (e.g. history.ObservedCalendar: sessions reconstructed from what the exchange published)."""
     out, basis = [], {}
     label = getattr(calendar, "basis", "CALENDAR")
+    per_day = getattr(calendar, "basis_for", None)
     d = start
     while d <= end:
         covered = calendar.covers(Exchange.NSE, d)
@@ -25,7 +26,7 @@ def exchange_sessions(calendar, start: date, end: date, panel_days: set[date]) -
                 ok = calendar.is_trading_day(Exchange.NSE, d) or calendar.is_special_session(Exchange.NSE, d)
             except RuleUnknown:
                 ok = d in panel_days
-            basis.setdefault(d.year, label)
+            basis.setdefault(d.year, per_day(d) if per_day else label)
         else:
             ok = d in panel_days
             basis[d.year] = "PANEL_ONLY"

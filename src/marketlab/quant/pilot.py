@@ -188,7 +188,7 @@ def base_price_on(view: Panel, isin: str, day: date) -> dict | None:
 
 def mechanical_trace(view: Panel, sessions: list[date], stored: set[date], isin: str, decision_day: date, q: int, h: int,
                      *, execution: ExecutionPolicy = ExecutionPolicy(), median_value: float, end: date | None = None,
-                     index_name="Nifty 50", listed=None, capital: float = 10_000.0) -> dict:
+                     index_name="Nifty 50", listed=None, capital: float = 10_000.0, actions=None) -> dict:
     """An intent of q shares frozen after ``decision_day``'s close, executed and reviewed by the ledger exactly as in
     replay; with no forecast at the expiry review the position exits (EXIT.v1: nothing justifies holding)."""
     k0 = sessions.index(decision_day)
@@ -209,7 +209,10 @@ def mechanical_trace(view: Panel, sessions: list[date], stored: set[date], isin:
         iopen = (idx.get(day) or (None, None))[0]
         f = view.implied_factors(isin, day, day).get(day)
         dv = view.discontinuities(isin, day, day).get(day)
-        led.apply_actions(k, day, {isin: f} if f else {}, day in unchecked, listed, {isin: dv} if dv else None)
+        held = list(led.lots) or [isin]
+        fs = {i: v for i in held if (v := view.implied_factors(i, day, day).get(day))}
+        dd = {i: v[day] for i in held if (v := view.discontinuities(i, day, day)) and day in v}
+        led.apply_actions(k, day, fs, day in unchecked, listed, dd or None, actions)
         led.execute_exits(k, day, have, bars, iopen)
         led.execute_entries(k, day, have, bars, h, iopen)
         led.mark(k, day, {i: b.close for i, b in bars.items()}, have)

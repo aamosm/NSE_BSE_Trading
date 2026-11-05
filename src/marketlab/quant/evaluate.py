@@ -95,7 +95,8 @@ class Dataset:
         return [o for o in self.opportunities if not o["missing"] and o["label"].status == labels.RESOLVED]
 
 
-def build_dataset(view: Panel, cfg: Config, *, calendar, rule_inputs_fn=None, listed_actions=None, progress=None) -> Dataset:
+def build_dataset(view: Panel, cfg: Config, *, calendar, rule_inputs_fn=None, listed_actions=None, progress=None,
+                  actions=None) -> Dataset:
     """The opportunity set first (decision-time only), then features, then labels."""
     panel_days = set(view.sessions())
     if not panel_days:
@@ -141,7 +142,8 @@ def build_dataset(view: Panel, cfg: Config, *, calendar, rule_inputs_fn=None, li
             fmiss += bool(miss)
             lab = labels.forward_return(view, isin, d, cfg.h, sessions=sessions, panel_days=panel_days,
                                         index_name=cfg.index_name,
-                                        listed_action_days=listed_actions(isin) if listed_actions else None, data=data[isin])
+                                        listed_action_days=listed_actions(isin) if listed_actions else None, data=data[isin],
+                                        actions=actions)
             key = lab.status if lab.status == labels.RESOLVED else f"{lab.status}:{lab.reason}"
             counts[key] = counts.get(key, 0) + 1
             b = bars_today[isin]
@@ -222,7 +224,7 @@ def fold_metrics(preds: list[dict], model: forecast.Model, train_y: list[float])
                   "mean_y": sum(y) / len(y), "mean_mu": sum(p["mu_hat"] for p in res) / len(res), **pin, **pin_ref}
 
 
-def run_fold(ds: Dataset, fold: dict, cfg: Config, trial_id: str, view: Panel, listed=None) -> dict:
+def run_fold(ds: Dataset, fold: dict, cfg: Config, trial_id: str, view: Panel, listed=None, actions=None) -> dict:
     s = ds.sessions
     ts, te = fold["test_start"], fold["test_end"]
     test_lo, test_hi = s[ts], s[te]
@@ -259,7 +261,7 @@ def run_fold(ds: Dataset, fold: dict, cfg: Config, trial_id: str, view: Panel, l
     metrics = fold_metrics(preds, model, [o["label"].excess for o in train]) | {"abstained_feature_coverage": abstained}
     policy = cfg.effective_policy()
     excl = {d: ds.universe[d].excluded for d in ds.universe if test_lo <= d <= test_hi}
-    sim_kw = dict(policy=policy, h=cfg.h, index_name=cfg.index_name, exclusions=excl, listed=listed)
+    sim_kw = dict(policy=policy, h=cfg.h, index_name=cfg.index_name, exclusions=excl, listed=listed, actions=actions)
     sim = replay.simulate(view, s, ds.panel_days, ts, te, fcs, execution=cfg.execution, **sim_kw)
     stresses = {}
     for name, ex in (("costs_x2", replace(cfg.execution, charge_multiplier=2.0)),
@@ -520,7 +522,7 @@ def summarize(results: list[dict], cfg: Config, ds: Dataset, trial_id: str) -> d
                     "value. Promotion requires every spec 8.6 criterion (see 'promotion')."}
 
 
-def walk_forward(panel: Panel, cfg: Config, *, runs: Path, calendar, rule_inputs_fn=None, listed_actions=None,
+def walk_forward(panel: Panel, cfg: Config, *, runs: Path, calendar, rule_inputs_fn=None, listed_actions=None, actions=None,
                  progress=print) -> dict:
     """One registered trial. Development: folds over the panel view ending the day before the frozen holdout.
     Holdout (cfg.evaluate_holdout): once per trial, after everything else is final."""
@@ -533,10 +535,10 @@ def walk_forward(panel: Panel, cfg: Config, *, runs: Path, calendar, rule_inputs
     if cfg.evaluate_holdout and registry.holdout_runs(runs, trial_id):
         raise ValueError("HOLDOUT_ALREADY_EVALUATED: the holdout of this trial was opened before")
     view = panel.view(None if cfg.evaluate_holdout else hs - timedelta(days=1))
-    ds = build_dataset(view, cfg, calendar=calendar, rule_inputs_fn=rule_inputs_fn, listed_actions=listed_actions,
+    ds = build_dataset(view, cfg, calendar=calendar, rule_inputs_fn=rule_inputs_fn, listed_actions=listed_actions, actions=actions,
                        progress=progress)
     listed = (lambda isin, d: d in (listed_actions(isin) or set())) if listed_actions else None
-    results = [run_fold(ds, f, cfg, trial_id, view, listed) for f in folds(ds.sessions, cfg, hs)]
+    results = [run_fold(ds, f, cfg, trial_id, view, listed, actions) for f in folds(ds.sessions, cfg, hs)]
     report = summarize(results, cfg, ds, trial_id)
     report.update(candidate_spec=candidates.describe(spec, cfg.ablate), policy=cfg.effective_policy().to_json(),
                   policy_digest=cfg.effective_policy().digest(), execution=cfg.execution.to_json(),

@@ -52,7 +52,7 @@ def test_shell_and_status_are_served_with_strict_headers(server):
     s = json.loads(body)
     assert code == 200 and h["Cache-Control"] == "no-store" and s["live_orders"] is False
     assert s["actual"]["batch"] is None and s["simulated"]["kind"] == "SIMULATED_PAPER"
-    assert s["simulated"]["cash"] is None and s["simulated"]["state"] == "FORWARD_PAPER_LEDGER_NOT_BUILT"  # no constants
+    assert s["simulated"]["cash"] is None and s["simulated"]["state"] == "NO_PAPER_ORDERS_YET"  # rebuilt ledger, no constants
     codes = [b["code"] for b in s["blockers"]]
     assert s["session"]["state"] == "AUTH_REQUIRED" and codes[:2] == ["SCHEDULER_NOT_RUNNING", "AUTH_REQUIRED"]
     assert s["health"]["scheduler"]["status"] == "NEVER_STARTED" and s["health"]["web"] == "REACHABLE"

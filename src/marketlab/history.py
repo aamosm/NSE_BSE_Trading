@@ -32,7 +32,7 @@ from .common import IST, now, timestamp
 from .rules.types import RuleUnknown
 
 PILOT_SOURCES = ("nse_bhavcopy", "nse_indices_close", "nse_sec_list", "nse_reg_indicators")
-DOCUMENT_PREFIXES = ("https://nsearchives.nseindia.com/corporate/",)
+DOCUMENT_PREFIXES = ("https://nsearchives.nseindia.com/corporate/", "https://nsearchives.nseindia.com/content/circulars/")
 MAX_PUBLICATION_LAG = timedelta(days=4)
 
 
@@ -305,3 +305,164 @@ def fetch_document(folder: Path, url: str, *, fetch=sources.http_fetch) -> dict:
 def read_document(folder: Path, url: str) -> bytes | None:
     p = folder / (url.rsplit("/", 1)[-1] + ".gz")
     return gzip.decompress(p.read_bytes()) if p.exists() else None
+
+
+
+# ---- exchange circulars: the year's trading holidays, verified against what was published ------------------
+
+def pdf_text(pdf: bytes) -> str:
+    """Text of a simple PDF (Flate streams, literal strings, WinAnsi): one line per text object. Enough for NSE
+    circulars; a PDF using CID fonts returns little text and the caller must then not trust the parse."""
+    import re
+    import zlib
+
+    def unescape(b: bytes) -> str:
+        out, i = bytearray(), 0
+        while i < len(b):
+            c = b[i]
+            if c == 0x5C and i + 1 < len(b):
+                n = b[i + 1]
+                i += 2
+                if n in b"nrtbf":
+                    out += {110: b"\n", 114: b"\r", 116: b"\t", 98: b"\b", 102: b"\f"}[n]
+                elif 48 <= n <= 55:
+                    j = k = i - 1
+                    while k < len(b) and k < j + 3 and 48 <= b[k] <= 55:
+                        k += 1
+                    out.append(int(b[j:k], 8) & 255)
+                    i = k
+                else:
+                    out.append(n)
+            else:
+                out.append(c)
+                i += 1
+        return out.decode("cp1252", "replace")
+
+    lines = []
+    for head, body in re.findall(rb"<<(.*?)>>\s*stream\r?\n(.*?)\r?\nendstream", pdf, flags=re.S):
+        if b"FlateDecode" in head:
+            try:
+                body = zlib.decompress(body)
+            except zlib.error:
+                continue
+        for bt in re.findall(rb"BT(.*?)ET", body, flags=re.S):
+            parts = []
+            for arr in re.findall(rb"\[(.*?)\]\s*TJ|\((.*?)\)\s*Tj", bt, flags=re.S):
+                seg = arr[0] if arr[0] else b"(" + arr[1] + b")"
+                for s, num in re.findall(rb"\(((?:\\.|[^\\)])*)\)|(-?\d+\.?\d*)", seg):
+                    if s or not num:
+                        parts.append(unescape(s))
+                    elif float(num) < -200:
+                        parts.append(" ")
+            t = "".join(parts)
+            if t.strip():
+                lines.append(t)
+    return "\n".join(lines)
+
+
+DAYS = "Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday"
+
+
+def holidays_from_circular(text: str, year: int) -> dict:
+    """Trading holidays from an NSE trading-holiday circular's text: the weekday table, the weekend table (split at
+    'falling on Saturday / Sunday') and the Muhurat special session. Each row's day name must match its date."""
+    import re
+    flat = re.sub(r"\s+", " ", text)
+    head, _, tail = flat.partition("falling on Saturday")
+    row = re.compile(r"([A-Z][a-z]+ \d{1,2}, " + str(year) + r") (" + DAYS + r") ")
+
+    def table(s):
+        out = {}
+        ms = list(row.finditer(s))
+        for m, nxt in zip(ms, ms[1:] + [None]):
+            d = datetime.strptime(m.group(1), "%B %d, %Y").date()
+            if d.strftime("%A") != m.group(2):
+                raise ValueError(f"circular day name disagrees with the date: {m.group(0)}")
+            desc = s[m.end():nxt.start() if nxt else len(s)]
+            desc = desc.split(" The holidays")[0].split(" National Stock")[0].split(" For and on")[0].strip()
+            out[d] = re.sub(r" \d{1,2}$", "", desc).strip(" -")
+        return out
+    special = {datetime.strptime(m, "%B %d, %Y").date()
+               for m in re.findall(r"Muhurat Trading will be conducted on \w+ ?, ([A-Z][a-z]+ \d{1,2}, \d{4})", flat)}
+    return {"weekday_holidays": table(head), "weekend_holidays": table(tail), "special_sessions": special}
+
+
+def calendar_year_from_circular(text: str, year: int, source_id: str):
+    """CalendarYear built from a stored circular (no dates typed into code). A Muhurat day is a special session
+    whose timetable is not loaded (blocked). Settlement holidays are not in a trading-holiday circular: they are set
+    equal to the trading holidays and cited as an ASSUMPTION."""
+    from .rules.calendar import CalendarYear
+    from .rules.provenance import Cite, Status
+    from .rules.types import Exchange
+    h = holidays_from_circular(text, year)
+    holidays = frozenset(d for d in h["weekday_holidays"] if d.weekday() < 5)
+    if not holidays:
+        raise ValueError("no holidays parsed from the circular")
+    special = frozenset(d for d in h["special_sessions"] if d.year == year)
+    cites = (Cite((source_id,), Status.PRIMARY, f"{len(holidays)} weekday trading holidays for {year}; special sessions "
+                                                f"{sorted(x.isoformat() for x in special)} (timetable not loaded)."),
+             Cite((source_id,), Status.ASSUMPTION, "Settlement holidays assumed equal to trading holidays (clearing "
+                                                   "circular not held)."))
+    return CalendarYear(Exchange.NSE, year, holidays - special, holidays - special, special, frozenset(), (), cites)
+
+
+class CompositeCalendar:
+    """Verified years (a MarketCalendar built from circulars or the holiday API) plus an ObservedCalendar for the
+    rest. Inside a verified year, a weekend session that was published but is in no loaded circular (e.g. a Budget
+    Saturday) is kept as a session and listed in ``observed_only``; such days do not count as verified."""
+
+    def __init__(self, verified, observed: ObservedCalendar):
+        from .rules.types import Exchange
+        self.v, self.o, self._ex = verified, observed, Exchange.NSE
+        self.observed_only = {d for d in observed.sessions if verified.covers(self._ex, d)
+                              and not verified.is_trading_day(self._ex, d) and not verified.is_special_session(self._ex, d)}
+
+    def basis_for(self, d):
+        return "CALENDAR" if self.v.covers(self._ex, d) else ObservedCalendar.basis
+
+    def covers(self, exchange, d):
+        return self.v.covers(exchange, d) or self.o.covers(exchange, d)
+
+    def is_trading_day(self, exchange, d):
+        if self.v.covers(exchange, d):
+            return d in self.observed_only or self.v.is_trading_day(exchange, d)
+        return self.o.is_trading_day(exchange, d)
+
+    def is_special_session(self, exchange, d):
+        return self.v.is_special_session(exchange, d) if self.v.covers(exchange, d) else self.o.is_special_session(exchange, d)
+
+    def session_open(self, exchange, d):
+        if d in self.observed_only:
+            return time(9, 0)
+        return self.v.session_open(exchange, d) if self.v.covers(exchange, d) else self.o.session_open(exchange, d)
+
+    def next_trading_day(self, exchange, d):
+        n = d + timedelta(days=1)
+        while not self.is_trading_day(exchange, n):
+            n += timedelta(days=1)
+        return n
+
+    def previous_trading_day(self, exchange, d):
+        p = d - timedelta(days=1)
+        while not self.is_trading_day(exchange, p):
+            p -= timedelta(days=1)
+        return p
+
+    def cross_check(self) -> dict:
+        """Observed publication against the verified years, weekday by weekday over the observed window."""
+        agree, cal_only, obs_only = 0, [], []
+        d = self.o.start
+        while d <= self.o.end:
+            if self.v.covers(self._ex, d) and d.weekday() < 5:
+                closed_v = not self.v.is_trading_day(self._ex, d)
+                closed_o = d in self.o.closed
+                if closed_v == closed_o and (closed_o or d in self.o.sessions):
+                    agree += 1
+                elif closed_v:
+                    cal_only.append(d.isoformat())
+                else:
+                    obs_only.append(d.isoformat())
+            d += timedelta(days=1)
+        return {"weekdays_agreeing": agree, "closed_per_circular_but_published": cal_only,
+                "published_closure_not_in_circular": obs_only,
+                "observed_only_sessions": sorted(x.isoformat() for x in self.observed_only)}

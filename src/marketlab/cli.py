@@ -377,6 +377,9 @@ def parser():
     a.add_argument("--ablate", nargs="*", default=[]); a.add_argument("--holdout", action="store_true", help="evaluate the locked holdout (once)")
     a.add_argument("--capital", type=float, default=None, help="override the saved policy's capital for this run (recorded)")
     a.add_argument("--bootstrap", type=int, default=50)
+    a = sub.add_parser("actions-import", help="import the NSE corporate-actions CSV downloaded from nseindia.com")
+    a.add_argument("--file", type=Path, required=True)
+    sub.add_parser("actions-feeds", help="load every stored corporate-action RSS vintage into the action registry")
     a = sub.add_parser("freeze-holdout", help="freeze the final holdout start once, after the backfill (never moves)")
     a.add_argument("--sessions", type=int, default=250)
     a = sub.add_parser("decide", help="today's decision from the panel; recorded with a decision id (WAIT until a verified promotion)")
@@ -482,6 +485,26 @@ def main():
                 pn.close()
             print(json.dumps({"day": sc.day.isoformat(), "kept": len(sc.isins), "unverified": sc.unverified, "stats": sc.stats,
                               "rule_inputs": sc.availability, "isins": sc.isins[:100]}, indent=1))
+        elif args.command in ("actions-import", "actions-feeds"):
+            from . import action_registry as ar
+            from .quant.panel import Panel
+            if args.command == "actions-import":
+                st = Store(ar.registry_path(args.market_dir))
+                try:
+                    out = ar.import_nse_csv(st, args.file, received_at=now().isoformat())
+                finally:
+                    st.close()
+            else:
+                out = ar.ingest_stored_feeds(args.market_dir)
+            pp = args.market_dir / "panel.sqlite3"
+            if pp.exists():
+                pn = Panel(pp)
+                try:
+                    idx = ar.load_index(args.market_dir, pn)
+                    out["index"] = idx.summary() if idx else None
+                finally:
+                    pn.close()
+            print(json.dumps(out, indent=1, default=str))
         elif args.command == "freeze-holdout":
             from . import decisions
             from .quant import registry
@@ -518,9 +541,11 @@ def main():
                         raise ValueError("PANEL_NOT_BUILT: run panel-build first")
                     runs = decisions.runs_dir(root)
                     ri = lambda d: quniverse.rule_inputs_for(args.market_dir, d, cal, cfg.availability)  # noqa: E731
+                    from . import action_registry
                     with Experiment(root, panel_path, {"trial": cfg.trial_id(), "holdout": cfg.evaluate_holdout,
                                                        "policy": eff.to_json()}) as trial:
-                        out = qevaluate.walk_forward(pn, cfg, runs=runs, calendar=cal, rule_inputs_fn=ri)
+                        out = qevaluate.walk_forward(pn, cfg, runs=runs, calendar=cal, rule_inputs_fn=ri,
+                                                     actions=action_registry.load_index(args.market_dir, pn))
                         trial.output = Path(out["path"])
                     print(json.dumps({k: out.get(k) for k in ("trial_id", "run_id", "path", "folds_done", "n_trades", "net_rupees_total",
                                                               "folds_positive", "label_counts", "candidate_spec", "policy")}
@@ -532,10 +557,17 @@ def main():
                               "No promotion: the spec 8.6 criteria and the holdout did not all pass (see the reports).")
                 else:
                     ri = lambda d: quniverse.rule_inputs_for(args.market_dir, d, cal, "RECEIPT")  # noqa: E731
+                    from . import action_registry
+                    from .quant import paper
+                    acts = action_registry.load_index(args.market_dir, pn)
                     out = qdecide.run(pn, cfg, root=root, origin="cli", families=pol["families"], rule_inputs_fn=ri,
-                                      calendar=cal, extra={"policy_source": "cli-override" if args.capital is not None else "saved"})
+                                      calendar=cal, extra={"policy_source": "cli-override" if args.capital is not None else "saved"},
+                                      actions=acts)
+                    if pn is not None and pn.sessions():
+                        built = paper.rebuild(pn, cal, root, pn.sessions()[-1], actions=acts)
+                        out["paper_snapshot"] = paper.snapshot(root, built)["status"] if built else "NO_PAPER_ORDERS_YET"
                     print(json.dumps({k: out.get(k) for k in ("decision_id", "day", "action", "reasons", "artifact",
-                                                              "diagnostic_artifact", "policy_digest")}, indent=1, default=str))
+                                                              "diagnostic_artifact", "policy_digest", "paper_snapshot")}, indent=1, default=str))
                     print("Recorded in the decision timeline; the dashboard shows the same decision id.")
             finally:
                 if pn is not None:

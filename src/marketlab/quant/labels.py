@@ -54,11 +54,16 @@ def slippage_for(median_value_20: float) -> float:
 
 def forward_return(panel: Panel, isin: str, decision_day: date, h: int, *, sessions: list[date],
                    panel_days: set[date] | None = None, index_name: str = "Nifty 50",
-                   listed_action_days: set[date] | None = None, data: dict | None = None) -> Label:
+                   listed_action_days: set[date] | None = None, data: dict | None = None, actions=None) -> Label:
     """Label for a decision after the close of ``decision_day``. ``sessions`` are exchange sessions (calendar),
     truncated at the last session the caller may see; ``panel_days`` the sessions actually stored. ``data`` may
-    carry the security's preloaded {"bars": {day: Bar}, "factors": {day: f}} and the panel-wide "unchecked" set
-    and "index" levels (the batch path); the result is identical to the queried path."""
+    carry the security's preloaded {"bars": {day: Bar}, "factors": {day: f}, "disc": {...}} and the panel-wide
+    "unchecked" set and "index" levels (the batch path); the result is identical to the queried path.
+
+    ``actions`` (action_registry.ActionIndex) explains a day with a listed, ratio-consistent split or bonus: its
+    factor is applied exactly once (never also the implied factor of that day), and an ISIN replaced on that ex-date
+    is followed to its successor for the exit price. ``listed_action_days`` is the older interface: days whose
+    exchange-implied factor may be applied."""
     panel_days = panel_days if panel_days is not None else set(panel.sessions())
     i = _index(sessions, decision_day)
     if i is None:
@@ -74,37 +79,54 @@ def forward_return(panel: Panel, isin: str, decision_day: date, h: int, *, sessi
     if any(d not in panel_days for d in window):
         return out(EXCLUDED, "DATA_GAP")  # the horizon is never stretched over a missing session
     bars = data["bars"] if data else {b.day: b for b in panel.bars(isin, entry_day, exit_day)}
-    eb, xb = bars.get(entry_day), bars.get(exit_day)
-    ends = data.get("disc", {}) if data else panel.discontinuities(isin, entry_day, exit_day)
+    eb = bars.get(entry_day)
     if eb is None or not (eb.open > 0) or not (eb.volume > 0):
         return out(EXCLUDED, "NO_TRADE_AT_ENTRY")
-    if xb is None or not (xb.open > 0) or not (xb.volume > 0):
-        if any(k == "IDENTITY_END" for d, v in ends.items() if entry_day < d <= exit_day for k, _, _ in v):
-            return out(EXCLUDED, "IDENTITY_CHANGE")  # the ISIN was replaced (usually a split): not a suspension
-        return out(EXCLUDED, "NO_TRADE_AT_EXIT")
     if data:
         unchecked = any(d in data["unchecked"] for d in sessions[i + 2:i + h + 2])
-        found = {d: f for d, f in data["factors"].items() if entry_day <= d <= exit_day}
-        disc = {d: v for d, v in data.get("disc", {}).items() if entry_day < d <= exit_day}
     else:
         unchecked = bool(panel.unchecked_days(sessions[i + 2], exit_day))
-        found = panel.implied_factors(isin, entry_day, exit_day)
-        disc = {d: v for d, v in panel.discontinuities(isin, entry_day, exit_day).items() if d > entry_day}
     if unchecked:  # (entry, exit]: an ex-date there could not be checked
         return out(EXCLUDED, "ACTION_COVERAGE_UNKNOWN")
-    if any(k == "PRICE_DISCONTINUITY" for v in disc.values() for k, _, _ in v):
-        # the base price is not adjusted on ex-dates, so an action is a price jump of unknown ratio: no label
-        return out(EXCLUDED, "PRICE_DISCONTINUITY_UNEXPLAINED")
-    factor, basis = 1.0, "VERIFIED"
-    for d, f in sorted(found.items()):
-        if d == entry_day:  # the entry bar's own base price is before our entry at the open
-            continue
-        if abs(f - 1) <= UNEXPLAINED_FACTOR_TOLERANCE:
-            continue
-        if listed_action_days is None or d not in listed_action_days:
-            return out(EXCLUDED, "UNEXPLAINED_PRICE_ADJUSTMENT")  # spec 2.4: excluded and counted
-        factor *= f
-        basis = "RECONSTRUCTED"
+    factor, basis, current = 1.0, "VERIFIED", isin
+    # walk (entry, exit] session by session, following a listed ISIN succession
+    k = i + 2
+    while k <= i + h + 1:
+        d = sessions[k]
+        if data and current == isin:
+            f_imp = data["factors"].get(d)
+            dv = data.get("disc", {}).get(d, [])
+        else:
+            f_imp = panel.implied_factors(current, d, d).get(d)
+            dv = panel.discontinuities(current, d, d).get(d, [])
+        listed = actions.factor(current, d) if actions is not None else None
+        if listed is not None:
+            factor *= listed
+            basis = "RECONSTRUCTED_LISTED"
+            ends = [o for kind, _, o in dv if kind == "IDENTITY_END"]
+            la = actions.get(current, d)
+            succ = ends[0] if ends else (la.successor_isin if la else None)
+            if succ:
+                current = succ  # the holding continues as the new ISIN from the ex-date
+        else:
+            if any(kind == "IDENTITY_END" for kind, _, _ in dv):
+                return out(EXCLUDED, "IDENTITY_CHANGE")  # the ISIN was replaced (usually a split): not a suspension
+            if any(kind == "PRICE_DISCONTINUITY" for kind, _, _ in dv):
+                # the base price is not adjusted on ex-dates: an unlisted jump has an unknown ratio, so no label
+                return out(EXCLUDED, "PRICE_DISCONTINUITY_UNEXPLAINED")
+            if f_imp is not None and abs(f_imp - 1) > UNEXPLAINED_FACTOR_TOLERANCE:
+                if listed_action_days is None or d not in listed_action_days:
+                    return out(EXCLUDED, "UNEXPLAINED_PRICE_ADJUSTMENT")  # spec 2.4: excluded and counted
+                factor *= f_imp
+                basis = "RECONSTRUCTED"
+        k += 1
+    if current == isin:
+        xb = bars.get(exit_day)
+    else:
+        xs = panel.bars(current, exit_day, exit_day)
+        xb = xs[0] if xs else None
+    if xb is None or not (xb.open > 0) or not (xb.volume > 0):
+        return out(EXCLUDED, "NO_TRADE_AT_EXIT")
     gross = (xb.open / factor) / eb.open - 1
     gl = math.log1p(gross)
     idx = data["index"] if data else panel.index_levels(index_name, entry_day, exit_day)

@@ -133,7 +133,7 @@ def review_exits(led: Ledger, k: int, day: date, todays: dict, exclusions: dict,
 
 def simulate(view, sessions: list[date], panel_days: set[date], start_k: int, end_k: int, forecasts: dict, *,
              policy: allocate.Policy, execution: ExecutionPolicy = ExecutionPolicy(), h: int = 20,
-             index_name: str = "Nifty 50", exclusions: dict | None = None, listed=None) -> dict:
+             index_name: str = "Nifty 50", exclusions: dict | None = None, listed=None, actions=None) -> dict:
     """Run sessions start_k..end_k. ``forecasts``: {day: {isin: decision-time forecast}} for decision sessions.
     Returns the ledger's trades, events, NAV series and the end-of-period valuation."""
     led = Ledger(policy.W, execution)
@@ -153,7 +153,7 @@ def simulate(view, sessions: list[date], panel_days: set[date], start_k: int, en
             if f is not None:
                 factors[isin] = f
         disc = {i: v[day] for i in held if (v := view.discontinuities(i, day, day)) and day in v}
-        led.apply_actions(k, day, factors, day in unchecked, listed, disc)
+        led.apply_actions(k, day, factors, day in unchecked, listed, disc, actions)
         led.execute_exits(k, day, have, bars, iopen)
         led.execute_entries(k, day, have, bars, h, iopen)
         led.mark(k, day, {i: b.close for i, b in bars.items()}, have)

@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import account, buildinfo, decisions, login, service, webassets
 from .common import IST, now, timestamp
+from .rules.types import RuleUnknown as RuleUnknownError
 from .kite import KiteError
 from .store import Store
 
@@ -40,7 +41,6 @@ RUNS: Path | None = None  # None: runs live beside the private folder (decisions
 KNOWN_LIMITATIONS = [
     ("CORPORATE_ACTIONS_UNVERIFIED", "Exchange-implied factors are unverified against an action history; hypothesis "
                                      "H-CA1 (dividends) is open, so windows with unlisted factors are excluded."),
-    ("FORWARD_PAPER_LEDGER_NOT_BUILT", "Replay simulations use a dated cash ledger; no forward paper ledger exists yet."),
     ("BSE_CALENDAR_UNVERIFIED", "BSE trading calendar not verified; BSE simulations are blocked."),
     ("MIS_LIST_UNAVAILABLE", "Broker intraday eligibility list unavailable; no intraday candidate exists."),
     ("CONTRACT_NOTE_UNRECONCILED", "STT/stamp aggregation not yet reconciled with a real contract note."),
@@ -199,7 +199,7 @@ def health(st: dict, session: dict, actual: dict, cal, at: datetime, promotion: 
         broker = "FRESH" if b_age <= 600 else "OVERDUE"
     usable, cash_reasons = account.fresh_for_cash_decision(actual, at) if actual.get("batch") else (False, ["NO_COMPLETED_BATCH"])
     record, problems = promotion
-    paper_reasons = ([] if record else ["MODEL_NOT_PROMOTED"]) + ["FORWARD_PAPER_LEDGER_NOT_BUILT"]
+    paper_reasons = [] if record else ["MODEL_NOT_PROMOTED"]
     if sched != "ALIVE":
         paper_reasons.insert(0, "SCHEDULER_NOT_RUNNING")
     return {"web": "REACHABLE",
@@ -212,7 +212,23 @@ def health(st: dict, session: dict, actual: dict, cal, at: datetime, promotion: 
             "market": market_session(cal, at),
             "broker": {"status": broker, "expected_now": expected, "last_batch_at": finished, "age_seconds": b_age},
             "actual_cash_usable": {"ok": usable, "reasons": cash_reasons},
-            "paper_decisions": {"eligible": False, "reasons": paper_reasons, "promotion_check": problems}}
+            "paper_decisions": {"eligible": not paper_reasons, "reasons": paper_reasons, "promotion_check": problems}}
+
+
+def _paper_status(market: Path, calendar, root: Path, capital: float) -> dict:
+    """The forward paper account rebuilt from recorded orders and stored files (quant.paper)."""
+    from .quant import paper
+    from .quant.panel import Panel
+    panel_path = market / "panel.sqlite3"
+    pn = Panel(panel_path) if panel_path.exists() else None
+    try:
+        return paper.status(pn, calendar, root, capital)
+    except (ValueError, KeyError, RuleUnknownError) as e:
+        return {"kind": "SIMULATED_PAPER", "state": "REBUILD_FAILED", "error": type(e).__name__, "configured_capital": capital,
+                "cash": None, "positions": None, "pnl": None, "note": "The paper ledger could not be rebuilt; nothing is shown."}
+    finally:
+        if pn is not None:
+            pn.close()
 
 
 def status(root: Path, market: Path, at=None, calendar=None) -> dict:
@@ -306,10 +322,7 @@ def status(root: Path, market: Path, at=None, calendar=None) -> dict:
         "data": {"broker_last_batch_at": finished, "broker_age_seconds": _age_seconds(timestamp(finished), at) if finished else None,
                  "sources": ages},
         "actual": actual,
-        "simulated": {"kind": "SIMULATED_PAPER", "state": "FORWARD_PAPER_LEDGER_NOT_BUILT", "configured_capital": pol["capital"],
-                      "cash": None, "positions": None, "pnl": None,
-                      "note": "No forward paper ledger exists, so there is no simulated cash, position or P&L to show. "
-                              "Replay ledgers from evaluations are in the Evaluation tab. Not your real account."},
+        "simulated": _paper_status(market, calendar, root, pol["capital"]),
         "decisions": timeline, "latest_decision": decision_summary, "events": events, "blockers": blockers,
         "policy": pol, "policy_effective": eff.to_json(), "policy_digest": eff.digest(),
         "budget": {"evidence_bytes": ev_size, "evidence_quota_bytes": QUOTA, "market_files_bytes": _dir_size(market / "raw"),

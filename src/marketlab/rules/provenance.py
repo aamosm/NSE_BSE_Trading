@@ -95,6 +95,8 @@ _SOURCES: tuple[Source, ...] = (
            "https://rhnvrm.github.io/stock-market-circulars/circulars/nse/2026/"
            "nse-2026-01-12-cf2aed00f9317bde-cm-changes-in-settlement-schedule-due-to-trading-and-settlement-"
            "holiday-on-janua", date(2026, 1, 12), CHECKED),
+    Source("NSE/CMTR/65587", "Trading holidays for the calendar year 2025", "NSE", SourceKind.EXCHANGE,
+           "https://nsearchives.nseindia.com/content/circulars/CMTR65587.pdf", date(2024, 12, 13), CHECKED),
     Source("NSE/CMTR/72349", "Live Trading Session on February 01, 2026 - Presentation of Union Budget", "NSE",
            SourceKind.EXCHANGE, "https://nsearchives.nseindia.com/content/circulars/CMTR72349.pdf",
            date(2026, 1, 16), CHECKED),

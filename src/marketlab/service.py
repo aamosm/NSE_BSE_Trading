@@ -226,16 +226,23 @@ def _run_request(ctx, req: dict) -> dict:
     panel_path = ctx.market / "panel.sqlite3"
     pn = Panel(panel_path) if panel_path.exists() else None
     try:
+        from . import action_registry
+        acts = action_registry.load_index(ctx.market, pn)
         if kind == "decide":  # forward decision: rule files received before the decision only
+            from .quant import paper
             ri = lambda d: quniverse.rule_inputs_for(ctx.market, d, ctx.cal, "RECEIPT")  # noqa: E731
             out = qdecide.run(pn, cfg, root=ctx.root, origin="controls", families=pol["families"], rule_inputs_fn=ri,
-                              calendar=ctx.cal, extra={"request_id": req["id"]})
-            return {"result": {k: out.get(k) for k in ("decision_id", "day", "action", "reasons")}}
+                              calendar=ctx.cal, extra={"request_id": req["id"]}, actions=acts)
+            snap = None
+            if pn is not None and pn.sessions():
+                built = paper.rebuild(pn, ctx.cal, ctx.root, pn.sessions()[-1], actions=acts)
+                snap = paper.snapshot(ctx.root, built)["status"] if built else None
+            return {"result": {k: out.get(k) for k in ("decision_id", "day", "action", "reasons")} | {"paper_snapshot": snap}}
         if pn is None:
             raise ValueError("PANEL_NOT_BUILT: build the price panel first")
         ri = lambda d: quniverse.rule_inputs_for(ctx.market, d, ctx.cal, cfg.availability)  # noqa: E731
         out = qevaluate.walk_forward(pn, cfg, runs=decisions.runs_dir(ctx.root), calendar=ctx.cal, rule_inputs_fn=ri,
-                                     progress=lambda *_: None)
+                                     progress=lambda *_: None, actions=acts)
         return {"result": {k: out.get(k) for k in ("trial_id", "run_id", "folds_done", "n_trades", "net_rupees_total")}
                 | {"verdict": (out.get("promotion") or {}).get("verdict")}}
     finally:

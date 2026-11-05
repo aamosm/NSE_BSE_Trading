@@ -35,7 +35,19 @@ else:
                                                                "preceded the collector's one request for the same files."})
     print("manifest sha256", history.write_once(man_path, man), "problems", history.verify_manifest(market, man))
 
-cal = history.ObservedCalendar(market, start, end)
+# Sessions: years with a stored, parsed NSE holiday circular are verified (basis CALENDAR); other years are
+# reconstructed from what the exchange published (OBSERVED_PUBLICATION).
+from marketlab.rules.calendar import MarketCalendar  # noqa: E402
+from marketlab import action_registry  # noqa: E402
+CIRCULARS = {2025: ("NSE/CMTR/65587", "https://nsearchives.nseindia.com/content/circulars/CMTR65587.pdf")}
+years, circular_docs = [], {}
+for y, (sid, url) in CIRCULARS.items():
+    pdf = history.read_document(docs, url)
+    if pdf:
+        years.append(history.calendar_year_from_circular(history.pdf_text(pdf), y, sid))
+        circular_docs[str(y)] = {"source": sid, "url": url, "sha256": __import__("hashlib").sha256(pdf).hexdigest()}
+observed = history.ObservedCalendar(market, start, end)
+cal = history.CompositeCalendar(MarketCalendar(tuple(years)), observed) if years else observed
 built = qpanel.build(market, root / "panel.sqlite3", after=start, calendar=cal)
 pn = qpanel.Panel(root / "panel.sqlite3")
 view = pn.view(end)
@@ -128,7 +140,17 @@ price = sorted((str(d), sym.get(i), i, round(k[1], 4), pilot.classify_factor(k[1
 
 transition = [history.format_transition(market, d) for d in (date(2024, 7, 3), date(2024, 7, 4), date(2024, 7, 5), date(2024, 7, 8))]
 report = {"pilot_id": man["pilot_id"], "manifest_sha256": man["content_sha256"], "window": [start.isoformat(), end.isoformat()],
-          "panel": built | {"content_hash": view.content_hash()}, "calendar": cal.report(), "coverage": cov,
+          "manifests": {mp.name: json.loads(mp.read_text(encoding="utf-8"))["content_sha256"] for mp in sorted(root.glob("manifest*.json"))},
+          "panel": built | {"content_hash": view.content_hash()},
+          "calendar": {"observed": observed.report(), "circulars": circular_docs,
+                       "cross_check": cal.cross_check() if hasattr(cal, "cross_check") else None},
+          "action_registry": (lambda i: i.summary() if i else "NO_RECORDS: import the NSE corporate-actions CSV "
+                              "(marketlab actions-import) to explain splits, bonuses and ISIN successions")(action_registry.load_index(market, view)),
+          "known_schema_variants": [{"source": sid, "key": k, "path": r["path"], "result": r["result"]}
+                                    for mp in sorted(root.glob("manifest*.json"))
+                                    for sid, recs in json.loads(mp.read_text(encoding="utf-8"))["files"].items()
+                                    for k, r in recs.items() if r["result"] == "SCHEMA_CHANGED"],
+          "coverage": cov,
           "corporate_actions": {"count": len(acts), "by_class": pilot._count(a["class"].split(" (")[0] for a in acts),
                                 "split_or_bonus": [a for a in acts if a["class"].startswith("SPLIT_OR_BONUS")][:20],
                                 "infy_factors": infy_factors, "infy_dividend_probe": probe},
@@ -146,7 +168,9 @@ if n > 1:
     report["supersedes"] = {"version": n - 1, "reason": {2: "v1 read availability from already-derived manifest fields (showed "
                             "NO_SERVER_TIME for the Infosys inputs) and predated discontinuity detection: it counted labels "
                             "across unadjusted split/bonus ex-dates as resolved",
-                            3: "v2 used a 0.80/1.25 discontinuity threshold, which also caught closes pinned at a 20% circuit"}.get(n, "rerun")}
+                            3: "v2 used a 0.80/1.25 discontinuity threshold, which also caught closes pinned at a 20% circuit",
+                            4: "extends the window to 8 Jul 2024 (second manifest) and verifies 2025 sessions against NSE "
+                               "circular CMTR65587 instead of observed publication"}.get(n, "rerun")}
 out = root / ("report.json" if n == 1 else f"report-{n}.json")
 print("report", out.name, "sha256", history.write_once(out, report))
 print(json.dumps({"coverage": {k_: v for k_, v in cov.items() if k_ != "missing_sessions"},

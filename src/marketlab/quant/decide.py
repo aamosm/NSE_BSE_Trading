@@ -23,7 +23,7 @@ from .panel import Panel
 
 def run(panel: Panel | None, cfg: evaluate.Config, *, root: Path, origin: str, families: dict | None = None,
         rule_inputs_fn=None, calendar=None, bootstrap: int = 50, decision_id: str | None = None,
-        extra: dict | None = None) -> dict:
+        extra: dict | None = None, actions=None) -> dict:
     """Decide for the latest panel session and persist the record. Returns the timeline entry plus the record."""
     policy = cfg.effective_policy()
     runs = decisions.runs_dir(root)
@@ -55,7 +55,7 @@ def run(panel: Panel | None, cfg: evaluate.Config, *, root: Path, origin: str, f
         return finish("WAIT", reasons + ["INSUFFICIENT_HISTORY"], sessions=len(sessions))
     if calendar is None:
         raise ValueError("a calendar is required to count exchange sessions")
-    ds = evaluate.build_dataset(panel.view(None), cfg, calendar=calendar, rule_inputs_fn=rule_inputs_fn)
+    ds = evaluate.build_dataset(panel.view(None), cfg, calendar=calendar, rule_inputs_fn=rule_inputs_fn, actions=actions)
     u = ds.universe.get(day)
     body["universe"] = ({"kept": len(u.isins), "excluded": u.stats, "unverified": u.unverified,
                          "availability": u.availability} if u else {"kept": 0, "unverified": ["DAY_NOT_A_SESSION"]})
@@ -88,6 +88,9 @@ def run(panel: Panel | None, cfg: evaluate.Config, *, root: Path, origin: str, f
             todays[o["isin"]] = dict(p, ref_close=o["ref_close"], symbol=o["symbol"], median_value=o["median_value"],
                                      _p_above=lambda c, mu=p["mu_hat"], sg=p["sigma_hat"], z=z:
                                      forecast.conformal_probability_above(z, (c - mu) / sg))
+    if promo is not None and model.calibration_n >= forecast.MIN_CALIBRATION:
+        return _paper_decision(panel, cfg, policy, ds, day, todays, model, fc_rows, coverage_missing, calendar, root,
+                               actions, finish)
     plan, intents = {"quantities": {}, "note": "no candidates"}, []
     cands = [replay.candidate_for(i, fc, cfg.execution) for i, fc in todays.items()]
     passing = [c for c in cands if allocate.entry_gate(c, policy)[0]]
@@ -119,3 +122,29 @@ def run(panel: Panel | None, cfg: evaluate.Config, *, root: Path, origin: str, f
                    "plan_status": "DIAGNOSTIC_NOT_PROMOTED" if not promo else "DIAGNOSTIC_LEDGER_MISSING"}
     return finish("WAIT", reasons, diagnostics=diagnostics, model_id=model.target_id, forecasts=len(fc_rows),
                   plan_quantities=plan.get("quantities", {}))
+
+
+def _paper_decision(panel, cfg, policy, ds, day, todays, model, fc_rows, coverage_missing, calendar, root, actions, finish):
+    """With a verified promotion: rebuild the forward paper ledger through today, run EXIT.v1 reviews and the
+    allocator against its real holdings, free cash and pending intents, and record the new orders (PAPER_PLAN).
+    Tomorrow's rebuild executes them at the next stored open under EXEC.v1."""
+    from . import paper
+    from .ledger import Ledger
+    built = paper.rebuild(panel, calendar, root, day, actions=actions, h=cfg.h)
+    led = built["ledger"] if built else Ledger(policy.W, cfg.execution)
+    k = len(ds.sessions) - 1
+    before_intents = set(led.intents)
+    before_exits = {i for i, lot in led.lots.items() if lot.exit_pending}
+    excl = ds.universe[day].excluded if day in ds.universe else {}
+    replay.review_exits(led, k, day, todays, excl, policy, cfg.h, cfg.execution)
+    planned = replay.plan_entries(led, panel, ds.sessions, k, day, todays, policy, cfg.execution)
+    orders = {"intents": [paper.intent_to_json(i) for iid, i in led.intents.items() if iid not in before_intents],
+              "exits": [{"isin": i, "reason": lot.exit_reason} for i, lot in led.lots.items()
+                        if lot.exit_pending and i not in before_exits]}
+    diagnostics = {"model": model.to_json(), "forecasts": fc_rows[:50], "allocation": planned,
+                   "feature_coverage_missing": coverage_missing, "plan_status": "PAPER_ORDERS"}
+    common = dict(diagnostics=diagnostics, model_id=model.target_id, forecasts=len(fc_rows), index_name=cfg.index_name,
+                  ledger_before=paper.state(led) if built else {"note": "first paper decision: no account before it"})
+    if orders["intents"] or orders["exits"]:
+        return finish("PAPER_PLAN", ["COST_AND_RISK_GATES_PASSED"], orders=orders, **common)
+    return finish("WAIT", ["NO_CANDIDATE_PASSES_GATE"], **common)

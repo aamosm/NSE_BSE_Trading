@@ -156,6 +156,7 @@ class Ledger:
         self.ex = execution
         self.cash = self.W  # settled cash, including amounts blocked for pending intents
         self.receivables: list[dict] = []  # unsettled sale proceeds {"amount", "usable_from", "trade"}
+        self.dividends: list[dict] = []  # listed dividends on held units: receivable, payment date unknown
         self.intents: dict[str, Intent] = {}
         self.lots: dict[str, Lot] = {}
         self.trades: list[dict] = []
@@ -198,13 +199,35 @@ class Ledger:
 
     # ---- the open of session k -----------------------------------------------------------------------
     def apply_actions(self, k: int, day: date, factors: dict[str, float], unchecked: bool, listed=None,
-                      discontinuities: dict | None = None):
-        """Ex-date adjustments for lots held overnight into ``day`` (entered before it). ``discontinuities``
-        ({isin: [(kind, ratio, other_isin)]}) flags an unexplained price jump or an ISIN replacement: the units
-        cannot be restated without a listed action, so valuation and exit continuity are unknown."""
+                      discontinuities: dict | None = None, actions=None):
+        """Ex-date adjustments for lots held overnight into ``day`` (entered before it).
+
+        ``actions`` (action_registry.ActionIndex): a listed, ratio-consistent split or bonus restates the units by
+        its factor exactly once and, when the ISIN was replaced on that day, moves the holding to the successor ISIN
+        (so its exit can trade); a listed dividend books units x cash as a receivable (payment date unknown).
+        Without a listed action, ``discontinuities`` ({isin: [(kind, ratio, other_isin)]}) flags an unexplained
+        jump or an ISIN replacement: the units cannot be restated, so valuation and exit continuity are unknown."""
+        renames = []
         for lot in self.lots.values():
             if lot.entry_index >= k:
                 continue
+            la = actions.get(lot.isin, day) if actions is not None else None
+            if la is not None and la.dividend_cash > 0:
+                amount = money(lot.units * la.dividend_cash)
+                self.dividends.append({"isin": lot.isin, "ex_date": day.isoformat(), "amount": amount, "payment_date": None})
+                lot.action_flags.add("DIVIDEND_PAYMENT_DATE_UNKNOWN")
+                self.event("DIVIDEND_RECEIVABLE", day, isin=lot.isin, amount=str(amount), cash_per_share=la.dividend_cash)
+            lf = actions.factor(lot.isin, day) if actions is not None else None
+            if lf is not None:
+                lot.units, lot.factor, lot.last_close = lot.units / lf, lot.factor * lf, lot.last_close * lf
+                lot.action_flags.add("FACTOR_LISTED")
+                self.event("ACTION_APPLIED", day, isin=lot.isin, factor=lf, units=lot.units, listed=True)
+                ends = [o for kind, _, o in (discontinuities or {}).get(lot.isin, []) if kind == "IDENTITY_END"]
+                succ = ends[0] if ends else la.successor_isin
+                if succ:
+                    renames.append((lot.isin, succ))
+                    self.event("ISIN_SUCCESSION", day, isin=lot.isin, successor_isin=succ)
+                continue  # the day's jump or ISIN change is explained by the listed action
             for kind, ratio, other in (discontinuities or {}).get(lot.isin, []):
                 flag = "IDENTITY_CHANGED" if kind == "IDENTITY_END" else "PRICE_DISCONTINUITY_UNEXPLAINED"
                 if flag not in lot.action_flags:
@@ -221,6 +244,10 @@ class Ledger:
             is_listed = bool(listed and listed(lot.isin, day))
             lot.action_flags.add("FACTOR_LISTED" if is_listed else "FACTOR_UNVERIFIED")
             self.event("ACTION_APPLIED", day, isin=lot.isin, factor=f, units=lot.units, listed=is_listed)
+        for old, new in renames:
+            lot = self.lots.pop(old)
+            lot.isin = new
+            self.lots[new] = lot
 
     def execute_exits(self, k: int, day: date, have_session: bool, bars: dict, index_open: float | None):
         for isin, lot in list(self.lots.items()):
@@ -313,7 +340,7 @@ class Ledger:
             else:
                 stale += 1
             value += lot.units * lot.last_close
-        unsettled = sum((r["amount"] for r in self.receivables), D0)
+        unsettled = sum((r["amount"] for r in self.receivables), D0) + sum((x["amount"] for x in self.dividends), D0)
         nav = float(self.cash + unsettled) + value
         self.nav.append({"day": day.isoformat(), "cash_settled": float(self.cash), "blocked": float(self.reserved()),
                          "unsettled": float(unsettled), "positions": round(value, 2), "nav": round(nav, 2),
@@ -342,7 +369,7 @@ class Ledger:
                           "outcome_bounds": [0.0, float(liq)] if blocked else [float(liq), float(liq)],
                           "action_status": ",".join(sorted(lot.action_flags)) or "NONE",
                           "blocked_sessions": lot.blocked_sessions})
-        unsettled = sum((r["amount"] for r in self.receivables), D0)
+        unsettled = sum((r["amount"] for r in self.receivables), D0) + sum((x["amount"] for x in self.dividends), D0)
         nav_liq = self.cash + unsettled + liq_total
         return {"open_positions": opens, "cash_settled": float(self.cash), "unsettled": float(unsettled),
                 "nav_liquidation": float(nav_liq), "nav_liquidation_lower_bound": float(self.cash + unsettled + lower_total),
