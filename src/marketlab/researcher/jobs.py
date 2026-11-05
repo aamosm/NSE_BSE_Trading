@@ -300,16 +300,20 @@ def _run_job(queue, provider, ledger, archive, job, private_values, at, sleep, m
             else:
                 billed = e.result.cost_usd if e.result is not None else None
                 ledger.settle(rid, billed, detail={"error": e.label})
+            # Advance the caller's clock (`at`), not wall-clock now(): run_one takes `at` so queue decisions
+            # (here, whether the retry would land past the job's expiry) replay deterministically.
+            wait = min(e.retry_after or 2 ** attempt, 30)
             retry = e.label in ("RATE_LIMITED", "OVERLOADED") and attempt < max_attempts \
-                and now() + timedelta(seconds=e.retry_after or 2 ** attempt) < job.expiry()
+                and at + timedelta(seconds=wait) < job.expiry()
             if not retry:
-                queue.event(job.job_id, "FAILED", now(), error=e.label, attempts=attempt)
+                queue.event(job.job_id, "FAILED", at, error=e.label, attempts=attempt)
                 return {"result": "FAILED", "job_id": job.job_id, "error": e.label}
-            sleep(min(e.retry_after or 2 ** attempt, 30))
+            sleep(wait)
+            at = at + timedelta(seconds=wait)
             try:
-                rid = ledger.reserve(job.job_id, job.kind, reserve, now())
+                rid = ledger.reserve(job.job_id, job.kind, reserve, at)
             except BudgetExceeded as b:
-                queue.event(job.job_id, "DEFERRED", now(), reason=b.label, until=job.expiry().isoformat())
+                queue.event(job.job_id, "DEFERRED", at, reason=b.label, until=job.expiry().isoformat())
                 return {"result": "DEFERRED", "job_id": job.job_id, "reason": b.label}
     received = now()
     charged = ledger.settle(rid, result.cost_usd, received, {"response_id": result.response_id})
