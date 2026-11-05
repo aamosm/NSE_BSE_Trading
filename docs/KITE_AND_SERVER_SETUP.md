@@ -72,11 +72,16 @@ Files are stored compressed under `data/market/raw/`, and every attempt is recor
 ## E2. Price panel, universe, evaluation (the quant core)
 
     .\.venv\Scripts\python.exe -m marketlab panel-build                                     # actual prices from stored bhavcopies
-    .\.venv\Scripts\python.exe -m marketlab screen --date 2026-11-04                        # dated universe (spec 3.1)
-    .\.venv\Scripts\python.exe -m marketlab evaluate --candidate A --h 20                   # registered trial (after the backfill)
-    .\.venv\Scripts\python.exe -m marketlab decide --candidate A --h 20                     # forecasts + plan; WAIT until promoted
+    .\.venv\Scripts\python.exe -m marketlab screen --date 2026-11-04                        # universe for decisions after that close
+    .\.venv\Scripts\python.exe -m marketlab freeze-holdout                                  # ONCE, after the backfill; never moves
+    .\.venv\Scripts\python.exe -m marketlab evaluate --candidate A --h 20                   # registered trial on the development view
+    .\.venv\Scripts\python.exe -m marketlab decide                                          # saved candidate/horizon/policy; prints the decision id
 
-All of these can also be requested from the dashboard's Controls tab; the scheduler runs them one at a time.
+- `evaluate` refuses to run until the holdout is frozen. Each run writes a new report, `data/runs/eval/<trial>/<run>.json`. `--holdout` evaluates the frozen holdout once per trial, last, and writes a promotion record only if every spec 8.6 criterion passes.
+- `decide` always records a decision, WAIT until a verified promotion exists. The dashboard shows the same id. `--capital` overrides the saved capital for that run, and the override is recorded.
+- Candidates B and C are refused (UNIMPLEMENTED). Horizons other than 20 and 60 for A are refused (UNREGISTERED_HORIZON).
+
+All of these except `freeze-holdout` can also be requested from the dashboard's Controls tab; the scheduler runs them one at a time.
 
 ## F. Historical candles (Kite)
 

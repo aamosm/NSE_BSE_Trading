@@ -1,0 +1,43 @@
+Integrity and replay repair, 5 Nov 2026, branch integrity-replay (from 114589a). Windows 11, Python 3.13.7, pytest 9.2.0.
+Pass/fail only; no account data. Synthetic fixtures; no network.
+
+Targeted test files (final runs, all PASSED):
+  test_decision_integrity   12  durable early WAITs with one id in timeline and latest view; Controls request through the
+                                same recorder; first record wins; B/C and unregistered horizons/ablations refused (policy,
+                                request, CLI, evaluator); 25% cap -> every position <= Rs 2,500 and persisted; trial id
+                                includes the policy; a hand-written promotion file does not open the gate; scheduler
+                                health from the last tick; market/broker/calendar states explicit; listings split; RUNNING
+                                requests of a dead scheduler recovered (file job retried once, decide INTERRUPTED)
+  test_replay_correctness   26  same Monday intent for different Tuesday opens (fill vs REJECTED_GAP, no Monday P&L);
+                                deferral -> ENTRY_FAILED; data-gap session cancels the entry; blocked exit stays with
+                                bounds [0, liquidation]; a future suspension leaves the decision-time universe unchanged;
+                                horizon counts exchange sessions (DATA_GAP, exit not stretched; lookback gap unverified);
+                                entry-session rule files and dated ETF names; features as of D identical with and without
+                                later data; NaN market feature stays missing; flat market q=20 and q=2 and falling market
+                                reconciled (gross - slippage - charges = net, DP once); whole-share recheck (2,100 x 2 at
+                                0.86% rejected); unsettled proceeds T+1 / T+2; bonus doubles units, flagged unless listed;
+                                changing and appending holdout prices leaves development results and hashes identical,
+                                two immutable run files, holdout evaluated once; no run without a frozen holdout; spec 8.6:
+                                PROMOTED only with complete evidence, missing holdout / unverified folds / no trial
+                                registry -> INSUFFICIENT EVIDENCE, concentration or conclusive loss -> REJECT; promotion
+                                record verifies only with untouched reports; live decision uses the replay rows and
+                                records whole-share intents within the reserve; dashboard lists and opens run reports
+  test_quant_pipeline        9  (updated) gross labels with listed factors only; purge by outcome date; report shape;
+                                holdout fold at the frozen date
+  test_quant_core           18  spec worked numbers unchanged (allocation 20/0/0 objective 14.54, gate, exit 11.00 vs 9.54)
+  test_service              22  (updated) scheduled decision idempotent across restarts through the shared recorder
+  test_webapp               14  (updated) derived blockers, no constant paper figures
+  test_webapp_ui             5  (updated) effective policy, B refused, decision view by id, run listing
+  also passed unchanged: test_boundaries, test_integration, test_research, test_kite_login, test_costs_and_decision_time
+
+Dashboard script: node --check PASS; every tab renderer executed against real API JSON (status, config, requests, a
+decision with two diagnostic intents, an evaluation report): no runtime error, no "undefined"/"NaN" text.
+
+Real data, on a COPY of data/market (public exchange files; empty private folder):
+  panel-build PASS (2 sessions, 0 factors, 2 unchecked days); screen 2026-11-04 PASS (INSUFFICIENT_HISTORY);
+  decide PASS (WAIT MODEL_NOT_PROMOTED, INSUFFICIENT_HISTORY, decision id in timeline and latest view, integrity OK);
+  freeze-holdout refused HOLDOUT_TOO_EARLY (calendar: 4 sessions between the 2 stored days); evaluate refused
+  HOLDOUT_NOT_FROZEN; evaluate --candidate B refused UNIMPLEMENTED; dashboard status: scheduler NEVER_STARTED,
+  calendar NSE_API cross-checked, derived blockers.
+
+NOT RUN: historical backfill, any evaluation on real history, the holdout, Fable, any account query or order.

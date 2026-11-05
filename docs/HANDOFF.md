@@ -1,6 +1,69 @@
 # Handoff
 
-Updated 5 November 2026 (late) by Claude Fable 5.1 after the design session; earlier entries by Claude Opus 5.5.
+## Integrity and replay repair (Claude Opus 5.5, 5 Nov 2026)
+
+Branch `integrity-replay` (worktree `C:\Users\d_hru\try\tradebot\marketlab-integrity`), made from `114589a`, the commit GPT reviewed (`MarketLab_Quant_Guild_Review.md`). `cash-research-reset` has not been touched. Nothing has been pushed.
+
+| Commit | Checkpoint |
+| --- | --- |
+| `4bde0d5` | A: dashboard and decision integrity |
+| `574226d` | B: replay correctness |
+| (docs commit) | this section, `docs/SPEC_ERRATA.md`, validation record, setup commands |
+
+**A. Decisions and the dashboard (what changed)**
+- Every decision attempt is recorded through `decisions.record`, under one `decision_id`. This covers the scheduler's daily check, `marketlab decide` and Controls → Decide, and includes early WAITs. The full record is `runs/decisions/<id>.json`, written once. The evidence timeline and the dashboard's "latest decision" carry the same id and the record's SHA-256. Diagnostics computed without a promotion go to `runs/diagnostics/<id>.json`.
+- Candidates dispatch through `quant/candidates.py`. B and C are refused as UNIMPLEMENTED everywhere. Horizons (A: 20, 60) and ablations are limited to the spec 8.5 registry. Reports name the feature builder, its columns and the event records used (0).
+- The effective policy (`Policy.from_owner`) reaches the allocator in decisions and evaluations. K and the cap follow the spec 5.4 tier unless the owner sets them, and the risk multiplier sets γ. The policy is persisted with every decision and included in the trial id. A 25% cap makes every position ≤ ₹2,500.
+- `--promoted` is gone. Only a verified record in `runs/promotions` can produce PAPER_PLAN: it must re-hash its development and holdout reports and match the policy digest. None exists, so every decision is WAIT.
+- Health is derived from timestamps. The dashboard shows the scheduler's last tick against its interval, any current silence, the market session, whether broker reads are due, cash usability and paper eligibility. An unchecked calendar cross-check is shown as unchecked. STALE and SESSION_UNKNOWN account sections are never shown as "none today", and each section has its own receipt time. The paper card has no constant figures, blockers are derived, and listings are split into recent and upcoming with their route.
+- A request left RUNNING by a dead scheduler becomes INTERRUPTED. File and panel jobs are retried once under the same id; decide and evaluate are not.
+
+**B. Replay (what changed)**
+- Sessions come from the calendar. A missing stored session is a data gap: the label is DATA_GAP (never stretched), a fill on it is cancelled and an exit on it is blocked. Years without a calendar are PANEL_ONLY.
+- The screen builds the opportunity set first, from the entry session's rule files and that day's names. Labels attached afterwards never remove an opportunity.
+- Labels are gross. Unlisted implied factors and unchecked days exclude a window. Costs are counted once, at the whole-share quantity, with exact charges.
+- Ledger and EXEC.v1 (`quant/ledger.py`, `quant/replay.py`):
+  - intents are frozen after the close; funds are blocked at a limit of C_D × 1.05;
+  - outcomes are a fill, REJECTED_GAP, FILL_DEFERRED then ENTRY_FAILED after 3 deferrals, or CANCELLED_DATA_GAP;
+  - EXIT.v1 reviews with re-forecasts; a blocked exit carries outcome bounds;
+  - T+1 unsettled proceeds, corporate actions on units held, daily NAV, and liquidation value at the fold end.
+- The live decision uses the replay dataset's own rows. A NaN feature stays missing, so the decision abstains.
+- The holdout is frozen once (`freeze-holdout`). Development runs see the panel only up to the day before it. Every run writes a new immutable report, and the holdout can be evaluated once per trial.
+- Every spec 8.6 criterion is computed: PBO, DSR on N_eff, MinTRL, concentration, stresses, calibration, attribution and holdout. Missing evidence gives INSUFFICIENT EVIDENCE.
+- Spec inconsistencies resolved here, listed in `docs/SPEC_ERRATA.md`: slippage was double-counted, and the market order became a limit order.
+
+**Verify (targeted; synthetic fixtures, no network, no account)**
+
+    .\.venv\Scripts\python.exe -m pytest tests/test_decision_integrity.py tests/test_replay_correctness.py tests/test_quant_pipeline.py tests/test_quant_core.py tests/test_service.py tests/test_webapp.py tests/test_webapp_ui.py -q
+
+Run it from the worktree. The venv's editable install points at the main checkout, so run pytest from the worktree root, where `pythonpath = src` takes precedence. Results are in `docs/validation/2026-11-05_integrity_replay.txt`.
+
+**Hand-traceable cases (all in `tests/test_replay_correctness.py`)**
+
+| Case | Expected result |
+| --- | --- |
+| Flat market, 20 × ₹250 → ₹260 | buy ₹5,005.00, sell ₹5,194.80, gross ₹200.00, slippage ₹10.20, charges ₹26.48 (DP ₹15.34). Net ₹163.32 = 200 − 10.20 − 26.48 |
+| Same move, 2 shares | net ₹1.52 (0.30%) |
+| Falling market (stock −1%, index −5%) | active log return +4.12%, net −₹86.41 |
+| Whole-share check, ₹2,100 a share at μ̃ 0.86% | the gate at ₹5,000 passes; 2 shares have a net edge of 0.0821% < 0.10%, so no trade |
+
+**Remaining blockers**
+1. **Backfill not done.** A first development fold needs 750 + 125 + 250 sessions plus 251 sessions of feature history. Then run `freeze-holdout`, once.
+2. **Rule files and calendar years before 2025/2022/2026 do not exist locally.** Historical folds are therefore eligibility-unverified or PANEL_ONLY, and cannot support promotion until REG1_IND and sec_list archives and per-year NSE holiday lists are loaded.
+3. **No corporate-action history.** Every window with an implied factor is excluded until listed actions exist (H-CA1 is still open).
+4. **No forward paper ledger.** A promoted plan would still be WAIT (FORWARD_PAPER_LEDGER_NOT_BUILT). The replay ledger is the smallest complete version, and the forward one should reuse it.
+5. Not addressed on this branch:
+   - the collector still writes schema-failing HTTP 200 payloads to the canonical path (review: quarantine and atomic promote);
+   - the research validator does not prove that amount, unit and period match the cited passage;
+   - sale-proceeds timing (E4) and the 5% limit (E3) are defaults that need the owner's or GPT's confirmation.
+6. Real-data check, run on a copy of `data/market` only:
+   - `panel-build`, `screen` and `decide` work: `decide` gives a persisted WAIT with an id;
+   - `freeze-holdout` refuses (HOLDOUT_TOO_EARLY): the calendar shows 4 sessions between the 2 stored days, so 2 days are missing;
+   - `evaluate` refuses (HOLDOUT_NOT_FROZEN); candidate B refuses (UNIMPLEMENTED).
+
+---
+
+Earlier entries follow. They were updated on 5 November 2026 (late) by Claude Fable 5.1 after the design session, with entries before that by Claude Opus 5.5.
 - **Branch:** `cash-research-reset`, on top of `3513d33`. Pushing to GitHub is the owner's call.
 - **Privacy:** no account identifiers, tokens or balances appear in this file. The research-provider key that was pasted into chat has been **removed** from the env file; the provider itself was removed by owner decision.
 
