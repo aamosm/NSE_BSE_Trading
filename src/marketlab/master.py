@@ -126,7 +126,9 @@ class Inputs:
         if rec is None:
             return None
         self.used[spec_id] = {"key": key.isoformat(), "sha256": rec["payload"]["sha256"],
-                              "received_at": rec["available_at"]}
+                              "received_at": rec.get("received_at") or rec["available_at"],
+                              "server_last_modified": rec["payload"].get("last_modified"),
+                              "published_at": rec.get("published_at")}
         return read_raw(self.market, spec_id, key)
 
     def snapshot(self, spec_id):

@@ -80,11 +80,12 @@ class Store:
     def as_of(self, kind, subject, cutoff):
         """Documents first known (and published) by ``cutoff``, oldest first. For point-in-time research."""
         t = timestamp(cutoff)
-        rows = self.db.execute(
-            "SELECT id,payload,available_at FROM observations WHERE kind=? AND subject=?", (kind, subject)).fetchall()
+        rows = self.db.execute("SELECT id,payload,available_at,published_at,received_at FROM observations "
+                               "WHERE kind=? AND subject=?", (kind, subject)).fetchall()
         rows = [r for r in rows if timestamp(r[2]) <= t]
         rows.sort(key=lambda r: (timestamp(r[2]), r[0]))
-        return [{"id": r[0], "payload": json.loads(r[1]), "available_at": r[2]} for r in rows]
+        return [{"id": r[0], "payload": json.loads(r[1]), "available_at": r[2], "published_at": r[3], "received_at": r[4]}
+                for r in rows]
 
     def latest(self, kind, subject, cutoff=None, *, batch_id=None):
         """The current state: the document with the latest receipt at or before ``cutoff``.

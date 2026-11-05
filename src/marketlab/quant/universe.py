@@ -46,12 +46,14 @@ def rule_inputs_for(market: Path, day: date, calendar=None, availability: str = 
     previous session, or None.
 
     RECEIPT (forward decisions): only files this system received before the session opened.
-    RECONSTRUCTED (historical replay, spec 2.1): files stored at any time, used as if available at their documented
-    publication time (after the previous close, before ``day`` opens); every result is labelled as such."""
+    RECONSTRUCTED (historical replay, spec 2.1): files stored at any time (local receipt may be years later), admitted
+    only when the server's Last-Modified time, recorded at receipt, is before ``day``'s session opens. A file without
+    that evidence is not used: original availability unknown. Every result is labelled RECONSTRUCTED."""
+    from datetime import datetime
     from .. import sources
-    from ..common import now
+    from ..common import IST, now, timestamp
     from ..master import Inputs, parse_reg_indicators, parse_sec_list
-    from ..rules.types import RuleUnknown
+    from ..rules.types import Exchange, RuleUnknown
     if availability not in ("RECEIPT", "RECONSTRUCTED"):
         raise ValueError("availability must be RECEIPT or RECONSTRUCTED")
     if calendar is None:
@@ -60,14 +62,28 @@ def rule_inputs_for(market: Path, day: date, calendar=None, availability: str = 
         inp = Inputs(market, day, calendar, cutoff=now() if availability == "RECONSTRUCTED" else None)
     except RuleUnknown:
         return None
-    out = {"series": {}, "band": {}, "reg": {}, "have_band": False, "have_reg": False, "availability": availability}
+    out = {"series": {}, "band": {}, "reg": {}, "have_band": False, "have_reg": False, "availability": availability,
+           "evidence": {}}
+    opens = datetime.combine(day, calendar.session_open(Exchange.NSE, day), IST) if availability == "RECONSTRUCTED" else None
+
+    def admissible(spec_id) -> bool:
+        if availability != "RECONSTRUCTED":
+            return True
+        u = inp.used.get(spec_id) or {}
+        ok = bool(u.get("published_at")) and timestamp(u["published_at"]) <= opens
+        out["evidence"][spec_id] = {"server_last_modified": u.get("server_last_modified"), "admitted": ok}
+        return ok
     band_raw = inp.dated("nse_sec_list")
+    if band_raw and not admissible("nse_sec_list"):
+        band_raw = None
     if band_raw:
         out["have_band"] = True
         for (sym, ser), v in parse_sec_list(band_raw).items():
             out["series"][sym] = ser
             out["band"][sym] = None if v["band"] is None else float(v["band"])
     reg_raw = inp.dated("nse_reg_indicators")
+    if reg_raw and not admissible("nse_reg_indicators"):
+        reg_raw = None
     if reg_raw:
         out["have_reg"] = True
         for (sym, ser), v in parse_reg_indicators(reg_raw).items():

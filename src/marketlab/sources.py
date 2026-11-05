@@ -96,6 +96,14 @@ REGISTER: tuple[SourceSpec, ...] = (
                "End of day. Actual traded (unadjusted) prices; PrvsClsgPric on an ex-date is the adjusted base.",
                RIGHTS_UNVERIFIED, "All NSE CM instruments traded that day. UDiFF format.",
                "Untraded securities are absent; no bid/ask depth.", "WORKS"),
+    SourceSpec("nse_bhavcopy_legacy", "prices", "NSE",
+               "https://nsearchives.nseindia.com/content/historical/EQUITIES/{yyyy}/{MON}/cm{dd}{MON}{yyyy}bhav.csv.zip",
+               "zip", True, ("SYMBOL", "SERIES", "OPEN", "HIGH", "LOW", "CLOSE", "LAST", "PREVCLOSE", "TOTTRDQTY",
+                             "TOTTRDVAL", "TIMESTAMP", "TOTALTRADES", "ISIN"),
+               "End of day (pre-UDiFF format). Last-Modified 5 Jul 2024 17:33 IST observed; the same day also has a "
+               "UDiFF file (format overlap).", RIGHTS_UNVERIFIED,
+               "NSE CM equities in the legacy CSV; no security name, instrument type or FinInstrmId columns.",
+               "Not published on non-trading days; end date of publication not yet established.", "WORKS"),
     SourceSpec("nse_bhavdata_full", "prices", "NSE",
                "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{ddmmyyyy}.csv", "csv", True,
                ("SYMBOL", "SERIES", "DATE1", "CLOSE_PRICE", "TTL_TRD_QNTY", "DELIV_QTY", "DELIV_PER"),
@@ -158,7 +166,12 @@ BY_ID = {s.id: s for s in REGISTER}
 
 
 def url_for(spec: SourceSpec, day: date) -> str:
-    return spec.url.format(yyyymmdd=day.strftime("%Y%m%d"), ddmmyyyy=day.strftime("%d%m%Y"), ddmmyy=day.strftime("%d%m%y"))
+    return spec.url.format(yyyymmdd=day.strftime("%Y%m%d"), ddmmyyyy=day.strftime("%d%m%Y"), ddmmyy=day.strftime("%d%m%y"),
+                           yyyy=day.strftime("%Y"), MON=day.strftime("%b").upper(), dd=day.strftime("%d"))
+
+
+def quarantine_path(market: Path, spec: SourceSpec, key: date, sha: str) -> Path:
+    return market / "raw" / spec.id / "_quarantine" / f"{key.isoformat()}.{sha[:12]}.{spec.ext}.gz"
 
 
 def raw_path(market: Path, spec: SourceSpec, key: date) -> Path:
@@ -267,9 +280,13 @@ def collect(market: Path, day: date, ids=None, *, fetch=http_fetch, pause=PAUSE_
             record = {"url": url, "key": key.isoformat(), "http_status": status}
             if status == 200 and body:
                 ok = schema_ok(spec, body)
-                _write_gz(path, body)
-                record.update(result="STORED" if ok else "SCHEMA_CHANGED", sha256=hashlib.sha256(body).hexdigest(),
-                              bytes=len(body), path=path.relative_to(market).as_posix(), last_modified=modified)
+                sha = hashlib.sha256(body).hexdigest()
+                # A payload that fails the schema check never takes the canonical path: it is quarantined, so a later
+                # valid download for the same key is still fetched and promoted (review of 114589a).
+                target = path if ok else quarantine_path(market, spec, key, sha)
+                _write_gz(target, body)
+                record.update(result="STORED" if ok else "SCHEMA_CHANGED", sha256=sha,
+                              bytes=len(body), path=target.relative_to(market).as_posix(), last_modified=modified)
             elif status == 404:
                 record.update(result="NOT_PUBLISHED")
             else:

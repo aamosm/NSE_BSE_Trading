@@ -13,8 +13,10 @@ from ..rules.types import Exchange, RuleUnknown
 
 
 def exchange_sessions(calendar, start: date, end: date, panel_days: set[date]) -> tuple[list[date], dict[int, str]]:
-    """(sessions in [start, end], {year: CALENDAR | PANEL_ONLY})."""
+    """(sessions in [start, end], {year: CALENDAR | OBSERVED_PUBLICATION | PANEL_ONLY}). A calendar may declare its
+    own ``basis`` (e.g. history.ObservedCalendar: sessions reconstructed from what the exchange published)."""
     out, basis = [], {}
+    label = getattr(calendar, "basis", "CALENDAR")
     d = start
     while d <= end:
         covered = calendar.covers(Exchange.NSE, d)
@@ -23,7 +25,7 @@ def exchange_sessions(calendar, start: date, end: date, panel_days: set[date]) -
                 ok = calendar.is_trading_day(Exchange.NSE, d) or calendar.is_special_session(Exchange.NSE, d)
             except RuleUnknown:
                 ok = d in panel_days
-            basis.setdefault(d.year, "CALENDAR")
+            basis.setdefault(d.year, label)
         else:
             ok = d in panel_days
             basis[d.year] = "PANEL_ONLY"
