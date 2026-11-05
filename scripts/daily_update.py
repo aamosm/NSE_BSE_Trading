@@ -21,14 +21,16 @@ def run(root: Path, market: Path, *, day: date | None = None, capital: float | N
         dry_run: bool = False, bootstrap: int = 50) -> dict:
     day = day or now().date()
     out_path = root / "runs" / "daily_update" / f"{day.isoformat()}.json"
-    if out_path.exists():
-        return json.loads(out_path.read_text(encoding="utf-8"))
+    if out_path.exists():  # idempotent: a completed run is the day's answer
+        done = json.loads(out_path.read_text(encoding="utf-8"))
+        if done.get("status") == "COMPLETE":
+            return done
     if dry_run:
-        result = {"status": "DRY_RUN", "day": day.isoformat(), "acquire": "NOT_ATTEMPTED",
-                  "panel": "NOT_ATTEMPTED", "ranking": "NOT_ATTEMPTED", "forward": "NOT_ATTEMPTED"}
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_json(out_path, result)
-        return result
+        # A dry run never writes the day's artifact: doing so would make the evening's real run short-circuit
+        # on a record of work that was never done.
+        return {"status": "DRY_RUN", "day": day.isoformat(), "acquire": "NOT_ATTEMPTED",
+                "panel": "NOT_ATTEMPTED", "ranking": "NOT_ATTEMPTED", "forward": "NOT_ATTEMPTED",
+                "would_write": str(out_path)}
 
     source_ids = [s.id for s in sources.REGISTER if s.dated and s.status == "WORKS"]
     acquired = sources.collect(market, day, source_ids)

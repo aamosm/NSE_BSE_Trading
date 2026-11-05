@@ -1,5 +1,6 @@
 import csv
 import importlib.util
+import json
 import zipfile
 from pathlib import Path
 
@@ -63,3 +64,19 @@ def test_daily_update_dry_run_is_idempotent(tmp_path):
     assert first == second
     assert first["status"] == "DRY_RUN"
     assert "daily_update DRY_RUN" in module.summary(first)
+    # A dry run leaves no day artifact: one would make the evening's real run short-circuit on work never done.
+    assert not (tmp_path / "private" / "runs" / "daily_update" / "2026-11-05.json").exists()
+
+
+def test_daily_update_only_short_circuits_on_a_completed_run(tmp_path):
+    spec = importlib.util.spec_from_file_location("daily_update", Path(__file__).parents[1] / "scripts" / "daily_update.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    day = __import__("datetime").date(2026, 11, 5)
+    out = tmp_path / "private" / "runs" / "daily_update" / "2026-11-05.json"
+    out.parent.mkdir(parents=True)
+    out.write_text(json.dumps({"status": "DRY_RUN", "day": "2026-11-05"}), encoding="utf-8")
+    assert module.run(tmp_path / "private", tmp_path / "market", day=day, dry_run=True)["status"] == "DRY_RUN"
+    out.write_text(json.dumps({"status": "COMPLETE", "day": "2026-11-05", "ranking": {"counts": {}}}), encoding="utf-8")
+    done = module.run(tmp_path / "private", tmp_path / "market", day=day)  # no network: the stored run is returned
+    assert done["status"] == "COMPLETE"
