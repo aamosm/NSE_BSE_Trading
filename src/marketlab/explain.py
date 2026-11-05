@@ -523,7 +523,9 @@ def day_summary(ranking: dict) -> list[str]:
     stocks, counts, pol = r.get("stocks", []), r.get("counts", {}), r.get("policy", {})
     if not stocks:
         return ["No ranking yet."]
-    fc = [s for s in stocks if s.get("forecast")]
+    # Both keys: a card restated at another capital keeps its forecast but loses its gates when the new capital
+    # prices the stock out (one share above half the capital), and the gate counts below must not count those.
+    fc = [s for s in stocks if s.get("forecast") and s.get("gates")]
     out = []
     buys, quals = counts.get("BUY_CANDIDATE", 0), counts.get("QUALIFIES", 0)
     if buys:

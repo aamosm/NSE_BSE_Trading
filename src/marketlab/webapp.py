@@ -523,7 +523,8 @@ def _stock_row(s: dict) -> dict:
     fc, c, g, f = s.get("forecast") or {}, s.get("costs") or {}, s.get("gates") or {}, s.get("features") or {}
     row.update(mu_shrunk=fc.get("mu_shrunk"), mu_hat=fc.get("mu_hat"), q10=fc.get("q10"), q90=fc.get("q90"),
                p_positive=fc.get("p_positive"), sigma_hat=fc.get("sigma_hat"), cost=c.get("cost_fraction"),
-               net_edge=g.get("net_edge"), selected_q=(s.get("allocation") or {}).get("q"),
+               net_edge=g.get("net_edge"), threshold=g.get("threshold"), q=c.get("q"), position=c.get("value"),
+               selected_q=(s.get("allocation") or {}).get("q"),
                vol_20=f.get("vol_20"), mom_12_1=f.get("mom_12_1"), ret_20=f.get("ret_20"), range_250=f.get("range_250"),
                headline=explain.CLASS_INFO[s["class"]]["title"] + ": " + explain.reason_text((s.get("reasons") or ["-"])[0]))
     return row

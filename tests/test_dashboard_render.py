@@ -45,14 +45,17 @@ def test_every_view_renders_against_real_api_responses(tmp_path, monkeypatch):
         fixtures["/api/stock"] = get("/api/stock?isin=" + s["isin"])
         fixtures["/api/ai/estimate"] = get("/api/ai/estimate?isin=" + s["isin"])
         fixtures["__isin_symbol"] = s["symbol"]
+        restated = get("/api/stocks?capital=30000")  # the restated branch: other capital, no refit
+        assert restated["ranking"]["restated"]["capital"] == 30000.0
     finally:
         srv.shutdown()
         srv.server_close()
     (tmp_path / "app.js").write_text(webassets.APP_JS, encoding="utf-8")
-    (tmp_path / "fx.json").write_text(json.dumps(fixtures), encoding="utf-8")
-    out = subprocess.run([NODE, str(STUB), str(tmp_path / "app.js"), str(tmp_path / "fx.json")], capture_output=True, text=True,
-                         timeout=120, encoding="utf-8")
-    report = out.stdout + out.stderr
-    assert out.returncode == 0, report
-    for view in ("stocks", "stock_sheet", "how", "overview", "controls", "decision", "evaluation", "data"):
-        assert f"RENDER_OK {view} " in report, report
+    for name, fx in (("fx.json", fixtures), ("fx_restated.json", fixtures | {"/api/stocks": restated})):
+        (tmp_path / name).write_text(json.dumps(fx), encoding="utf-8")
+        out = subprocess.run([NODE, str(STUB), str(tmp_path / "app.js"), str(tmp_path / name)], capture_output=True, text=True,
+                             timeout=120, encoding="utf-8")
+        report = out.stdout + out.stderr
+        assert out.returncode == 0, report
+        for view in ("stocks", "stock_sheet", "how", "overview", "controls", "decision", "evaluation", "data"):
+            assert f"RENDER_OK {view} " in report, report

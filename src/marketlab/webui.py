@@ -132,7 +132,7 @@ const CLASS_ORDER = ["BUY_CANDIDATE", "QUALIFIES", "HOLD_OFF", "HIGH_RISK", "AVO
 const CLASS_ICON = { BUY_CANDIDATE: "▲", QUALIFIES: "●", HOLD_OFF: "○", HIGH_RISK: "!", AVOID: "✕", NO_FORECAST: "?", INELIGIBLE: "–" };
 const CLASS_FILL = { BUY_CANDIDATE: "var(--good)", QUALIFIES: "var(--s3)", HOLD_OFF: "var(--line2)", HIGH_RISK: "var(--warn)", AVOID: "var(--bad)", NO_FORECAST: "var(--muted)", INELIGIBLE: "var(--line)" };
 let STOCKS = null, CLASSES = {};
-const SV = { show: new Set(["BUY_CANDIDATE", "QUALIFIES", "HOLD_OFF", "HIGH_RISK", "AVOID", "NO_FORECAST"]), q: "", sort: "rank", limit: 150 };
+const SV = { show: new Set(["BUY_CANDIDATE", "QUALIFIES", "HOLD_OFF", "HIGH_RISK", "AVOID", "NO_FORECAST"]), q: "", sort: "rank", limit: 150, capital: null };
 function classTitle(c) { return (CLASSES[c] && CLASSES[c].title) || c; }
 function badge(c) { const b = el("span", null, "badge cls-" + c); b.append(el("span", CLASS_ICON[c] || "", "ic"), el("span", classTitle(c))); return b; }
 const SORTS = {
@@ -146,9 +146,73 @@ const SORTS = {
   liq: ["Most traded", (a, b) => (b.median_value_20 ?? -1) - (a.median_value_20 ?? -1)],
   symbol: ["Symbol A-Z", (a, b) => String(a.symbol).localeCompare(String(b.symbol))],
 };
+function capitalBar(r) {
+  // Read the same day at another capital: the server restates costs, gates and calls from the stored forecasts.
+  const c = card("Capital used for these calls"), row = el("div", null, "toolbar");
+  const inp = el("input"); inp.type = "number"; inp.min = "1000"; inp.max = "100000000"; inp.step = "1000";
+  inp.value = String(Math.round((r.policy || {}).W || 10000)); inp.setAttribute("aria-label", "Capital in rupees");
+  const go = el("button", "Apply", "button small primary"); go.type = "button";
+  const apply = async () => {
+    const w = Number(inp.value);
+    if (!(w >= 1000 && w <= 100000000)) { alert("Capital must be between ₹1,000 and ₹10,00,00,000."); return; }
+    go.disabled = true; go.textContent = "Recomputing…";
+    SV.capital = w; STOCKS = await get("/api/stocks?capital=" + encodeURIComponent(w)); renderStocks();
+  };
+  go.addEventListener("click", apply);
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") apply(); });
+  row.append(inp, go);
+  for (const w of [3000, 10000, 30000, 100000]) {
+    const b = el("button", money(w), "button small"); b.type = "button";
+    b.addEventListener("click", () => { inp.value = String(w); apply(); });
+    row.append(b);
+  }
+  c.append(row);
+  const re = r.restated;
+  if (re) {
+    c.append(el("p", "Restated from the " + money(re.from_capital) + " ranking of " + re.from_day + ": quantities, exact charges, gates and calls recomputed at " + money(re.capital) + ". The model was not refitted and the forecasts are unchanged.", "muted"));
+    const notes = [];
+    if (re.priced_out) notes.push(re.priced_out + " stocks no longer fit (one share costs more than half this capital)");
+    if (re.newly_eligible_needs_run) notes.push(re.newly_eligible_needs_run + " stocks would now be eligible but carry no forecast in this file — run `marketlab rank --capital " + Math.round(re.capital) + "` to rank them");
+    notes.push("selection here is greedy by net edge, not the correlation-aware allocator");
+    const ul = el("ul"); for (const x of notes) ul.append(el("li", x)); c.append(ul);
+  } else {
+    c.append(el("p", "These calls were computed at " + money((r.policy || {}).W) + ", the capital saved in Controls. Change it above to see the same day at another amount — only costs, whole-share quantities and the gates move, never the forecast.", "muted"));
+  }
+  return c;
+}
+function topTen(r, pol) {
+  // Items x attributes of different kinds -> a table (the forecast itself is charted per stock in the sheet).
+  const c = card("Today's top 10 by expected return (unvalidated)");
+  const ranked = STOCKS.stocks.filter(s => s.rank).sort((a, b) => a.rank - b.rank).slice(0, 10);
+  if (!ranked.length) { c.append(el("p", "No stock has a forecast today, so there is nothing to rank.", "muted")); return c; }
+  c.append(el("p", "The model's own order, best expected return first, out of " + (ranked[0].rank_of || 0) + " stocks with a forecast. The call in the second column is what the gates make of it: a stock can top this list and still be one you should not buy. Figures are returns against the Nifty 50 over " + r.h + " sessions, at " + money(pol.cap_rupees) + " per position.", "muted"));
+  const w = el("div", null, "table"), tb = el("table"), hr = el("tr");
+  for (const [h, cl] of [["#", "n"], ["Stock", ""], ["Call", ""], ["Forecast μ̃", "n"], ["₹ vs index (10–90%)", "n"], ["Shares", "n opt"], ["Cost", "n"], ["Gap to buy gate", "n"]]) hr.append(el("th", h, cl || null));
+  tb.append(hr);
+  for (const s of ranked) {
+    const tr = el("tr", null, "click"); tr.tabIndex = 0;
+    const sc = el("td"); sc.append(el("span", s.symbol, "sym"), el("span", s.name || "", "nm"));
+    const cc = el("td"); cc.append(badge(s.class));
+    const v = s.position || 0;
+    const lo = (s.q10 != null && s.cost != null) ? v * (s.q10 - s.cost) : null, hi = (s.q90 != null && s.cost != null) ? v * (s.q90 - s.cost) : null;
+    const rng = el("td", lo == null ? "—" : money(Math.round(lo)) + " to " + money(Math.round(hi)), "n");
+    if (lo != null) tipOn(rng, ["Net of all costs, against the Nifty 50", "8 of 10 months land in this band", "A worse month than the low figure happens 1 time in 10"]);
+    const gap = (s.net_edge != null && s.threshold != null) ? s.net_edge - pol.min_edge : null;
+    const gc = el("td", gap == null ? "—" : pct(gap), "n " + (gap != null && gap >= 0 ? "good" : "bad"));
+    if (gap != null) tipOn(gc, ["How far the net edge is from the minimum edge of " + pct(pol.min_edge), gap >= 0 ? "Clears the edge gate" : "Short by " + pct(-gap) + " — the cost of trading is larger than the expected gain"]);
+    tr.append(el("td", s.rank, "n"), sc, cc, el("td", s.mu_shrunk == null ? "—" : pct(s.mu_shrunk), "n"), rng,
+      el("td", s.q == null ? "—" : s.q, "n opt"), el("td", s.cost == null ? "—" : pct(s.cost), "n"), gc);
+    tr.addEventListener("click", () => openStock(s.isin));
+    tr.addEventListener("keydown", (e) => { if (e.key === "Enter") openStock(s.isin); });
+    tb.append(tr);
+  }
+  w.append(tb); c.append(w);
+  c.append(el("p", "Click a row for the full working. These are not recommendations: the model behind them is unvalidated, and on most days no stock clears the gates.", "muted"));
+  return c;
+}
 async function renderStocks(force) {
   const t = tab("stocks");
-  if (!STOCKS || force) { t.append(el("p", "Loading the ranking…", "muted")); STOCKS = await get("/api/stocks"); t.replaceChildren(); }
+  if (!STOCKS || force) { t.append(el("p", "Loading the ranking…", "muted")); STOCKS = await get("/api/stocks" + (SV.capital ? "?capital=" + encodeURIComponent(SV.capital) : "")); t.replaceChildren(); }
   const d = STOCKS; CLASSES = d.classes || {};
   if (!d.ranking) {
     const c = card("No ranking yet"); c.append(el("p", d.hint || "Run the ranking first.", "muted"));
@@ -169,6 +233,8 @@ async function renderStocks(force) {
   }
   if (r.status !== "RANKED") { const n = el("div", null, "notice bad"); n.append(el("strong", "No forecasts today: " + r.status), el("span", "Only eligibility is shown.")); t.append(n); }
   if (d.summary && d.summary.length) { const sc = card("Today in plain words"); const ul = el("ul"); for (const x of d.summary) ul.append(el("li", x)); sc.append(ul); t.append(sc); }
+  t.append(capitalBar(r));
+  t.append(topTen(r, pol));
   const tiles = el("div", null, "tiles");
   for (const c of CLASS_ORDER) {
     const b = el("button", null, "tile" + (SV.show.has(c) ? "" : " off")); b.type = "button";
