@@ -54,6 +54,29 @@ class Policy:
             return Policy(W, K=4, cap_fraction=0.35)
         return Policy(W, K=10, cap_fraction=0.20)
 
+    @staticmethod
+    def from_owner(saved: dict) -> "Policy":
+        """The effective policy for the owner's saved settings: K and the per-stock cap default to the spec 5.4 tier
+        for the capital when not set (None); the risk multiplier m gives gamma = 2 / (m W) (spec 5.1)."""
+        W = float(saved["capital"])
+        tier = Policy.for_capital(W)
+        m = float(saved.get("risk_multiplier") or 1.0)
+        K = tier.K if saved.get("K") is None else int(saved["K"])
+        cap = tier.cap_fraction if saved.get("cap_fraction") is None else float(saved["cap_fraction"])
+        reserve = 0.20 if saved.get("reserve_fraction") is None else float(saved["reserve_fraction"])
+        return Policy(W, reserve_fraction=reserve, cap_fraction=cap, K=K, gamma=2.0 / (m * W))
+
+    def to_json(self) -> dict:
+        return {"W": self.W, "reserve_fraction": self.reserve_fraction, "cap_fraction": self.cap_fraction, "K": self.K,
+                "gamma": self.risk_aversion(), "min_edge": self.min_edge, "tail_limit": self.tail_limit,
+                "sector_cap_fraction": self.sector_cap_fraction, "hysteresis_rupees": self.hysteresis_rupees,
+                "cap_rupees": round(self.cap_fraction * self.W, 2), "reserve_rupees": round(self.reserve_fraction * self.W, 2)}
+
+    def digest(self) -> str:
+        import hashlib
+        import json
+        return hashlib.sha256(json.dumps(self.to_json(), sort_keys=True).encode()).hexdigest()[:12]
+
 
 def break_even(value: float) -> float:
     """Round-trip cost as a fraction of position value: 0.2225% + 15.34 / V."""

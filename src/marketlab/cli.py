@@ -373,12 +373,13 @@ def parser():
     sub.add_parser("panel-build", help="build the daily price panel from stored bhavcopies and index files")
     a = sub.add_parser("screen", help="dated universe screen (spec 3.1)"); a.add_argument("--date", type=date.fromisoformat, required=True)
     a = sub.add_parser("evaluate", help="purged walk-forward for one registered trial (spec 8)")
-    a.add_argument("--candidate", default="A"); a.add_argument("--h", type=int, default=20)
+    a.add_argument("--candidate", default=None); a.add_argument("--h", type=int, default=None)
     a.add_argument("--ablate", nargs="*", default=[]); a.add_argument("--holdout", action="store_true", help="evaluate the locked holdout (once)")
-    a.add_argument("--capital", type=float, default=10000.0); a.add_argument("--bootstrap", type=int, default=50)
-    a = sub.add_parser("decide", help="today's forecasts and paper plan from the panel (WAIT until promoted)")
-    a.add_argument("--candidate", default="A"); a.add_argument("--h", type=int, default=20)
-    a.add_argument("--capital", type=float, default=10000.0); a.add_argument("--promoted", action="store_true")
+    a.add_argument("--capital", type=float, default=None, help="override the saved policy's capital for this run (recorded)")
+    a.add_argument("--bootstrap", type=int, default=50)
+    a = sub.add_parser("decide", help="today's decision from the panel; recorded with a decision id (WAIT until a verified promotion)")
+    a.add_argument("--candidate", default=None); a.add_argument("--h", type=int, default=None)
+    a.add_argument("--capital", type=float, default=None, help="override the saved policy's capital for this run (recorded)")
     p.add_argument("--market-dir", type=Path, default=Path("data/market"))
     return p
 
@@ -478,27 +479,43 @@ def main():
             print(json.dumps({"day": sc.day.isoformat(), "kept": len(sc.isins), "unverified": sc.unverified, "stats": sc.stats,
                               "isins": sc.isins[:100]}, indent=1))
         elif args.command in ("evaluate", "decide"):
-            from .quant import decide as qdecide, evaluate as qevaluate, universe as quniverse
+            from . import decisions
+            from .quant import candidates, decide as qdecide, evaluate as qevaluate, universe as quniverse
             from .quant.panel import Panel
             from .quant.universe import ScreenPolicy
-            pn = Panel(args.market_dir / "panel.sqlite3")
-            cfg = qevaluate.Config(candidate=args.candidate, h=args.h, W=args.capital, bootstrap=args.bootstrap if args.command == "evaluate" else 50,
+            pol = service.policy(root)
+            if args.capital is not None:
+                pol = dict(pol, capital=float(args.capital))
+            eff = service.effective_policy(root, pol)
+            cand, h = args.candidate or pol["candidate"], args.h or int(pol["h"])
+            cfg = qevaluate.Config(candidate=cand, h=h, W=eff.W, bootstrap=args.bootstrap if args.command == "evaluate" else 50,
                                    ablate=tuple(args.ablate) if args.command == "evaluate" else (), evaluate_holdout=getattr(args, "holdout", False),
-                                   screen=ScreenPolicy(W=args.capital))
+                                   screen=ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=eff.W), policy=eff)
             ri = lambda d: quniverse.rule_inputs_for(args.market_dir, d)  # noqa: E731
+            panel_path = args.market_dir / "panel.sqlite3"
+            pn = Panel(panel_path) if panel_path.exists() else None
             try:
                 if args.command == "evaluate":
-                    with Experiment(root, args.market_dir / "panel.sqlite3", {"trial": cfg.trial_id(), "holdout": cfg.evaluate_holdout}) as trial:
-                        out = qevaluate.walk_forward(pn, cfg, out_dir=Path("data/runs/eval"), rule_inputs_fn=ri)
-                        trial.output = Path("data/runs/eval") / (out["trial_id"] + ".json")
-                    print(json.dumps({k: out[k] for k in ("trial_id", "folds_done", "n_trades", "net_rupees_total", "folds_positive",
-                                                          "coverage_80_mean", "brier_skill_mean", "pooled", "label_exclusions")}, indent=1, default=str))
+                    candidates.require(cand, h, cfg.ablate)  # UNIMPLEMENTED / unregistered trials stop before any work
+                    if pn is None:
+                        raise ValueError("PANEL_NOT_BUILT: run panel-build first")
+                    out_dir = decisions.runs_dir(root) / "eval"
+                    with Experiment(root, panel_path, {"trial": cfg.trial_id(), "holdout": cfg.evaluate_holdout,
+                                                       "policy": eff.to_json()}) as trial:
+                        out = qevaluate.walk_forward(pn, cfg, out_dir=out_dir, rule_inputs_fn=ri)
+                        trial.output = out_dir / (out["trial_id"] + ".json")
+                    print(json.dumps({k: out.get(k) for k in ("trial_id", "folds_done", "n_trades", "net_rupees_total", "folds_positive",
+                                                              "coverage_80_mean", "brier_skill_mean", "pooled", "label_exclusions",
+                                                              "candidate_spec", "policy")}, indent=1, default=str))
                 else:
-                    out = qdecide.latest_decision(pn, cfg, promoted=args.promoted, rule_inputs_fn=ri, out_dir=Path("data/runs/decisions"))
-                    print(json.dumps({k: out.get(k) for k in ("day", "action", "reasons", "universe", "plan", "policy")}, indent=1, default=str))
-                    print(f"forecasts: {len(out.get('forecasts', []))} (saved under data/runs/decisions)")
+                    out = qdecide.run(pn, cfg, root=root, origin="cli", families=pol["families"], rule_inputs_fn=ri,
+                                      extra={"policy_source": "cli-override" if args.capital is not None else "saved"})
+                    print(json.dumps({k: out.get(k) for k in ("decision_id", "day", "action", "reasons", "artifact",
+                                                              "diagnostic_artifact", "policy_digest")}, indent=1, default=str))
+                    print("Recorded in the decision timeline; the dashboard shows the same decision id.")
             finally:
-                pn.close()
+                if pn is not None:
+                    pn.close()
         elif args.command == "verify-calendar":
             print(json.dumps(sources.verify_nse_calendar(args.market_dir, args.year), indent=1))
         elif args.command == "build-master":

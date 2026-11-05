@@ -48,13 +48,14 @@ def test_read_endpoints_degrade_gracefully_without_data(server):
     assert call(base, "/api/data")[1] == {"sources": {}, "panel": None, "master": [], "missing_recent": {}}
     assert call(base, "/api/universe")[1] == {"error": "PANEL_NOT_BUILT"}
     assert call(base, "/api/evaluation")[1] == {"reports": []}
-    assert call(base, "/api/decision")[1] == {"decision": None, "available": []}
+    assert call(base, "/api/decision")[1] == {"decision": None, "available": [], "diagnostics": None}
     code, r = call(base, "/api/research")
     assert code == 200 and r["provider"] == "none"
     code, c = call(base, "/api/config")
     assert code == 200 and c["policy"]["capital"] == 10000.0 and "evaluate" in c["request_kinds"]
     s = call(base, "/api/status")[1]
-    assert s["policy"]["K"] == 2 and s["latest_decision"] is None and s["live_orders"] is False
+    assert s["policy"]["K"] is None and s["policy_effective"]["K"] == 2 and s["policy_effective"]["cap_rupees"] == 5000.0
+    assert s["latest_decision"] is None and s["live_orders"] is False and c["candidates"]["B"]["implemented"] is False
 
 
 def test_policy_edits_are_validated_and_bounded(server):
@@ -67,8 +68,12 @@ def test_policy_edits_are_validated_and_bounded(server):
         code, r = call(base, "/api/config", "POST", ACT, json.dumps(bad).encode())
         assert code == 400 and "error" in r, bad
     assert call(base, "/api/config", "POST", ACT, b"not json")[0] == 400
-    code, r = call(base, "/api/config", "POST", ACT, json.dumps({"families": {"B": True, "Z": True}}).encode())
-    assert code == 200 and r["policy"]["families"] == {"A": True, "B": True, "C": False}
+    code, r = call(base, "/api/config", "POST", ACT, json.dumps({"families": {"B": True}}).encode())
+    assert code == 400 and "UNIMPLEMENTED" in r["error"]  # family B has no evidence path
+    code, r = call(base, "/api/config", "POST", ACT, json.dumps({"families": {"A": False, "Z": True}}).encode())
+    assert code == 200 and r["policy"]["families"] == {"A": False, "B": False, "C": False}
+    code, r = call(base, "/api/config", "POST", ACT, json.dumps({"K": None, "cap_fraction": 0.25}).encode())
+    assert code == 200 and r["policy"]["K"] is None and service.effective_policy(root).cap_fraction == 0.25
 
 
 def test_requests_are_queued_for_the_scheduler_and_executed_there(server, monkeypatch):
@@ -106,15 +111,16 @@ def test_evaluation_and_decision_views_read_run_files(server):
     (tmp / "runs" / "eval" / "A.h20.abc.json").write_text(json.dumps({"trial_id": "A.h20.abc", "folds_done": 2, "n_trades": 5,
                                                                       "net_rupees_total": -12.5, "folds": [{"simulation": {"trades": list(range(300))}}],
                                                                       "pooled": {"sharpe_per_trade": -0.1}}))
-    (tmp / "runs" / "decisions").mkdir()
-    (tmp / "runs" / "decisions" / "2026-11-05_A_h20.json").write_text(json.dumps({"day": "2026-11-05", "action": "WAIT",
-                                                                                 "reasons": ["MODEL_NOT_PROMOTED"], "forecasts": [1, 2],
-                                                                                 "plan": {"quantities": {}}}))
+    from marketlab import decisions
+    entry = decisions.record(root, {"day": "2026-11-05", "action": "WAIT", "reasons": ["MODEL_NOT_PROMOTED"], "forecasts": 2,
+                                    "candidate": "A", "h": 20}, origin="cli", diagnostics={"forecasts": [1, 2]})
     reps = call(base, "/api/evaluation")[1]["reports"]
     assert reps[0]["trial_id"] == "A.h20.abc" and reps[0]["net_rupees_total"] == -12.5
     full = call(base, "/api/evaluation?trial=A.h20.abc")[1]
     assert len(full["folds"][0]["simulation"]["trades"]) == 200  # capped
     assert call(base, "/api/evaluation?trial=../../etc")[1] == {"error": "NOT_FOUND"}
     d = call(base, "/api/decision")[1]
-    assert d["decision"]["action"] == "WAIT" and d["available"] == ["2026-11-05_A_h20.json"]
-    assert call(base, "/api/status")[1]["latest_decision"]["forecasts"] == 2
+    assert d["decision"]["action"] == "WAIT" and d["available"] == [entry["decision_id"]] and d["diagnostics"]["forecasts"] == [1, 2]
+    st = call(base, "/api/status")[1]
+    assert st["latest_decision"]["decision_id"] == st["decisions"][0]["decision_id"] == entry["decision_id"]
+    assert st["latest_decision"]["forecasts"] == 2 and st["latest_decision"]["integrity"] == "OK"

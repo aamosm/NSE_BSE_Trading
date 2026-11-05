@@ -91,7 +91,7 @@ dd{margin:0;text-align:right;font-variant-numeric:tabular-nums;overflow-wrap:any
 .table{width:100%;overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{text-align:left;padding:5px 4px;border-bottom:1px solid var(--line);white-space:nowrap}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 .item{border-top:1px solid var(--line);padding:8px 0}.item:first-child{border-top:0}
-.state-STALE,.state-SESSION_UNKNOWN,.st-QUEUED,.st-RUNNING{color:var(--warn)}.state-MISSING,.state-UNAVAILABLE,.state-MALFORMED,.st-FAILED{color:var(--bad)}.st-DONE{color:var(--ok)}
+.state-STALE,.state-SESSION_UNKNOWN,.st-QUEUED,.st-RUNNING{color:var(--warn)}.state-MISSING,.state-UNAVAILABLE,.state-MALFORMED,.st-FAILED,.st-INTERRUPTED{color:var(--bad)}.st-DONE{color:var(--ok)}
 svg.chart{width:100%;height:auto;display:block;margin:6px 0}svg text{fill:var(--muted);font-size:10px}
 .pos{color:var(--ok)}.neg{color:var(--bad)}
 form.policy{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}
@@ -161,49 +161,80 @@ async function post(path, body) {
 }
 
 // ---- overview ------------------------------------------------------------------------------------
+const SCHED_TEXT = { ALIVE: "alive", MISSED_HEARTBEATS: "missed heartbeats", NEVER_STARTED: "never started" };
+const BROKER_TEXT = { FRESH: "fresh", OVERDUE: "overdue", IDLE_BY_SCHEDULE: "idle by schedule", AUTH_REQUIRED: "login needed", NO_BATCH_YET: "no batch yet", UNKNOWN_CALENDAR: "calendar unknown" };
+function when(t) { return t ? String(t).replace("T", " ").slice(0, 16) : "unknown"; }
+function sectionLine(sec, fmt) {
+  // per-section state with its own receipt time; STALE and SESSION_UNKNOWN are never shown as today's or as zero
+  if (!sec || !sec.state || sec.state === "MISSING") return "not in the latest batch (unknown)";
+  if (sec.state === "UNAVAILABLE" || sec.state === "MALFORMED") return sec.state.toLowerCase() + " (unknown, not zero)";
+  const at = " · received " + when(sec.received_at);
+  if (sec.state === "OK") return fmt(sec) + at;
+  if (sec.state === "STALE") return "not today's: " + fmt(sec) + at;
+  if (sec.state === "SESSION_UNKNOWN") return "session day unknown: " + fmt(sec) + at;
+  return sec.state + at;
+}
 function renderOverview(s) {
-  const svc = s.service, ses = s.session;
-  const kind = svc.state === "RUNNING" ? "ok" : svc.state === "AUTH_REQUIRED" ? "warn" : svc.state === "NOT_STARTED" ? "warn" : "bad";
-  const schedOld = svc.scheduler_age_seconds == null || svc.scheduler_age_seconds > 300;
-  $("#chips").replaceChildren(chip("Service: " + svc.state, kind), chip("Kite: " + ses.state + (ses.invalidated ? " (invalidated)" : ""), ses.state === "AUTHENTICATED" && !ses.invalidated ? "ok" : "warn"),
-    chip("Analysis: " + svc.analysis, svc.analysis === "ACTIVE" ? "ok" : "warn"), chip("Scheduler: " + (schedOld ? "not running (" + age(svc.scheduler_age_seconds) + ")" : age(svc.scheduler_age_seconds)), schedOld ? "warn" : "ok"),
-    chip("Live orders: none", "ok"));
+  const hl = s.health, sc = hl.scheduler, ses = s.session, pd = hl.paper_decisions;
+  $("#chips").replaceChildren(chip("Web: reachable", "ok"),
+    chip("Scheduler: " + (SCHED_TEXT[sc.status] || sc.status) + (sc.age_seconds != null ? " (" + age(sc.age_seconds) + ")" : ""), sc.status === "ALIVE" ? "ok" : "bad"),
+    chip("Market: " + hl.market.status.replaceAll("_", " ").toLowerCase(), "ok"),
+    chip("Kite: " + ses.state + (ses.invalidated ? " (invalidated)" : ""), ses.state === "AUTHENTICATED" && !ses.invalidated ? "ok" : "warn"),
+    chip("Broker data: " + (BROKER_TEXT[hl.broker.status] || hl.broker.status), hl.broker.status === "FRESH" || hl.broker.status === "IDLE_BY_SCHEDULE" ? "ok" : "warn"),
+    chip("Paper decisions: " + (pd.eligible ? "eligible" : "not eligible"), pd.eligible ? "ok" : "warn"),
+    chip("Analysis: " + s.service.analysis, s.service.analysis === "ACTIVE" ? "ok" : "warn"), chip("Live orders: none", "ok"));
   const t = tab("overview"), g = el("div", null, "grid"); t.append(g);
-  const h = card("Health"); g.append(h);
-  const cal = svc.calendar || {};
-  h.append(dl([["Last broker collection", s.data.broker_last_batch_at ? age(s.data.broker_age_seconds) : "never"],
-    ["Kite session", ses.state === "AUTHENTICATED" ? "valid until " + ses.expires_at : (ses.reason || ses.state)],
-    ["Scheduler updated", svc.updated_at || "not started"], ["Last gap", svc.last_gap ? svc.last_gap.minutes + " min ending " + svc.last_gap.to : "none"],
+  const h = card("Health (derived now from timestamps)"); g.append(h);
+  const cal = s.service.calendar || {};
+  h.append(dl([["Scheduler last seen", sc.last_seen ? when(sc.last_seen) + " (" + age(sc.age_seconds) + ")" : "never"],
+    ["Scheduler state", sc.reported_state ? sc.reported_state + (sc.reported_state_current ? "" : " (as last reported; not current)") : "never reported"],
+    ["Current silence", sc.current_silence_seconds != null ? age(sc.current_silence_seconds) + " without a tick" : "none"],
+    ["Last recorded gap", sc.last_recorded_gap ? sc.last_recorded_gap.minutes + " min ending " + when(sc.last_recorded_gap.to) : "none recorded"],
+    ["Market session", hl.market.status + " (" + hl.market.day + ")"],
+    ["Broker batch", hl.broker.last_batch_at ? when(hl.broker.last_batch_at) + " (" + age(hl.broker.age_seconds) + ")" : "never"],
+    ["Broker reads due now", hl.broker.expected_now == null ? "unknown (calendar)" : hl.broker.expected_now ? "yes" : "no"],
+    ["Kite session", ses.state === "AUTHENTICATED" ? "valid until " + when(ses.expires_at) : (ses.reason || ses.state)],
     ["Calendar source", (cal.source || "unknown") + (cal.years ? " (" + cal.years.join(", ") + ")" : "")],
-    ["Calendar discrepancies", cal.discrepancies && Object.keys(cal.discrepancies).length ? Object.keys(cal.discrepancies).join(", ") : "none"]]));
-  const jobs = Object.entries(svc.jobs || {});
-  if (jobs.length) h.append(el("h3", "Last job results"), table(["Job", "At", "Result"], jobs.map(([k, v]) => [k, v.at, v.result + (v.error ? " (" + v.error + ")" : "")])));
+    ["Calendar cross-check", !cal.discrepancies_checked ? "not checked (no NSE holiday-API vintage)" : (cal.discrepancies && Object.keys(cal.discrepancies).length ? "differences in " + Object.keys(cal.discrepancies).join(", ") : "checked: no differences")],
+    ["Paper decisions", pd.eligible ? "eligible" : "not eligible: " + pd.reasons.join(", ")]]));
+  h.append(el("p", sc.gap_note, "muted"));
+  const jobs = Object.entries(s.service.jobs || {});
+  if (jobs.length) h.append(el("h3", "Last job results" + (sc.reported_state_current ? "" : " (as last reported)")), table(["Job", "At", "Result"], jobs.map(([k, v]) => [k, when(v.at), v.result + (v.error ? " (" + v.error + ")" : "")])));
   const a = card("Your Zerodha account", "actual"); a.querySelector("h2").prepend(el("span", "ACTUAL", "tag actual-tag")); g.append(a);
   const sec = s.actual.sections || {};
-  if (!s.actual.batch) a.append(el("p", "No completed broker collection yet.", "muted"));
+  if (!s.actual.batch) a.append(el("p", "No completed broker collection yet: every account figure is unknown.", "muted"));
   else {
     const hd = sec.holdings || {}, f = sec.funds || {}, p = sec.positions || {}, tr = sec.trades || {};
-    a.append(dl([["Holdings", hd.count != null ? hd.count + " stocks" + (hd.state !== "OK" ? " (" + hd.state + ")" : "") : (hd.state || "unknown")],
-      ["Invested", money(hd.totals && hd.totals.invested)], ["Current value", money(hd.totals && hd.totals.value)], ["Unrealised P&L (before selling costs)", money(hd.totals && hd.totals.pnl)],
-      ["Cash", f.cash != null ? money(f.cash) : (f.state || "unknown")], ["Positions today", p.count != null ? p.count : (p.state || "unknown")],
-      ["Trades", tr.state === "OK" ? tr.fills + " fills today" : tr.state === "STALE" ? "none today (last: " + tr.session_date + ")" : (tr.state || "unknown")]]));
+    a.append(dl([["Batch finished", when(s.actual.batch.finished_at) + " (" + s.actual.batch.status + ")"],
+      ["Holdings", sectionLine(hd, x => x.count + " stocks")],
+      ["Invested / value", hd.state === "OK" ? money(hd.totals && hd.totals.invested) + " / " + money(hd.totals && hd.totals.value) : "see holdings state"],
+      ["Cash", sectionLine(f, x => money(x.cash))],
+      ["Cash usable for a decision", hl.actual_cash_usable.ok ? "yes" : "no: " + hl.actual_cash_usable.reasons.join(", ")],
+      ["Positions", sectionLine(p, x => x.count + " open")],
+      ["Trade book", sectionLine(tr, x => x.fills + " fills" + (x.session_date ? " for " + x.session_date : ""))]]));
     if (hd.rows && hd.rows.length) a.append(table(["Stock", "Qty", "Avg", "Last", "P&L"], hd.rows.map(r => [r.symbol, r.quantity, r.average_price, r.last_price, r.pnl]), [1, 2, 3, 4]));
   }
   const m = s.simulated, sb = card("Paper account", "simulated"); sb.querySelector("h2").prepend(el("span", "SIMULATED", "tag sim-tag")); g.append(sb);
-  sb.append(dl([["Starting cash", money(m.starting_cash)], ["Cash", money(m.cash)], ["Positions", m.positions.length], ["P&L", money(m.pnl)]]), el("p", m.note, "muted"));
+  sb.append(dl([["State", m.state], ["Configured paper capital", money(m.configured_capital)], ["Cash", m.cash == null ? "none (no ledger)" : money(m.cash)],
+    ["Positions", m.positions == null ? "none (no ledger)" : m.positions.length], ["P&L", m.pnl == null ? "none (no ledger)" : money(m.pnl)]]), el("p", m.note, "muted"));
   const ld = card("Latest decision"); g.append(ld);
-  if (!s.latest_decision) ld.append(el("p", "No decision run yet (Controls → Decide).", "muted"));
-  else { const d = s.latest_decision; ld.append(dl([["Session", d.day], ["Action", d.action], ["Reasons", (d.reasons || []).join(", ") || "none"], ["Candidate / horizon", d.candidate + " / " + d.h + " sessions"], ["Forecasts produced", d.forecasts], ["Planned quantities", Object.keys(d.plan || {}).length ? JSON.stringify(d.plan) : "none"]])); }
-  const dec = card("Decision timeline", "wide"); g.append(dec);
+  if (!s.latest_decision) ld.append(el("p", "No decision recorded yet (Controls → Decide, the CLI, or the scheduler's daily check).", "muted"));
+  else { const d = s.latest_decision, pol = d.policy || {}; ld.append(dl([["Decision id", d.decision_id], ["Origin", d.origin], ["Session", d.day], ["Action", d.action], ["Reasons", (d.reasons || []).join(", ") || "none"],
+    ["Candidate / horizon", (d.candidate || "?") + " / " + (d.h || "?") + " sessions"], ["Policy used", pol.W ? "cap " + money(pol.cap_rupees) + ", K " + pol.K + ", reserve " + money(pol.reserve_rupees) + ", γ " + num(pol.gamma, 6) : "not recorded"],
+    ["Promotion", d.promotion_id || "none (WAIT)"], ["Forecasts (diagnostic)", d.forecasts == null ? "none" : d.forecasts], ["Record integrity", d.integrity]])); }
+  const dec = card("Decision timeline (same ids as above)", "wide"); g.append(dec);
   if (!s.decisions.length) dec.append(el("p", "No decisions recorded yet.", "muted"));
-  for (const x of s.decisions) { const it = el("div", null, "item"); it.append(el("strong", x.action + " · " + x.day + (x.late_start ? " (late start)" : "")), el("p", x.explanation), el("p", "Reasons: " + (x.reasons || []).join(", ") + " · model: " + (x.model_id || "none") + " · simulated", "muted")); dec.append(it); }
-  const e = card("Upcoming corporate actions and listings"); g.append(e); const ev = s.events;
+  for (const x of s.decisions) { const it = el("div", null, "item"); it.append(el("strong", x.action + " · " + x.day + " · " + (x.origin || "legacy") + (x.late_start ? " (late start)" : "")), el("p", x.explanation), el("p", "Id: " + (x.decision_id || "legacy record without id") + " · reasons: " + (x.reasons || []).join(", ") + " · simulated", "muted")); dec.append(it); }
+  const e = card("Calendar inputs: corporate actions and listings (not signals)"); g.append(e); const ev = s.events;
   e.append(el("h3", "Ex-dates in the next 14 days"));
   e.append(ev.corporate_actions.length ? table(["Ex-date", "Company", "Purpose"], ev.corporate_actions.map(r => [r.ex_date, r.company, r.purpose])) : el("p", "None in the stored NSE feed.", "muted"));
-  e.append(el("h3", "Listings within 14 days"));
-  e.append(ev.new_listings.length ? table(["Date", "Symbol", "Name"], ev.new_listings.map(r => [r.listing_date, r.symbol, r.name])) : el("p", "None in the stored NSE equity list.", "muted"));
+  e.append(el("h3", "Upcoming listings (next 14 days)"));
+  e.append(ev.listings_upcoming.length ? table(["Date", "Symbol", "Series", "Route", "Name"], ev.listings_upcoming.map(r => [r.listing_date, r.symbol, r.series, r.route, r.name])) : el("p", "None in the stored NSE equity list.", "muted"));
+  e.append(el("h3", "Recent listings (last 14 days)"));
+  e.append(ev.listings_recent.length ? table(["Date", "Symbol", "Series", "Route", "Name"], ev.listings_recent.map(r => [r.listing_date, r.symbol, r.series, r.route, r.name])) : el("p", "None in the stored NSE equity list.", "muted"));
+  e.append(el("p", "ROUTE_UNVERIFIED: the equity list cannot distinguish an IPO from a migration, relisting or cross-listing.", "muted"));
   const b = card("What blocks decisions"); g.append(b);
-  for (const x of s.blockers) { const it = el("div", null, "item"); it.append(el("strong", x.code), el("p", x.text)); b.append(it); }
+  for (const x of s.blockers) { const it = el("div", null, "item"); it.append(el("strong", x.code + " · " + (x.basis || "").toLowerCase().replaceAll("_", " ")), el("p", x.text)); b.append(it); }
   const u = s.budget, mb = n => (n / 1048576).toFixed(1) + " MB", bc = card("Storage and running costs"); g.append(bc);
   bc.append(dl([["Evidence database", mb(u.evidence_bytes) + " of " + mb(u.evidence_quota_bytes)], ["Exchange files", mb(u.market_files_bytes)], ["Catalog", mb(u.catalog_bytes)], ["Price panel", mb(u.panel_bytes || 0)]]));
   bc.append(table(["Recurring item", "Cost", "State"], u.recurring.map(r => [r.item, r.cost, r.state])));
@@ -249,22 +280,27 @@ async function renderUniverse(dateStr) {
 async function renderForecasts() {
   const t = tab("forecasts"); t.append(el("p", "Loading…", "muted"));
   const r = await get("/api/decision"); t.replaceChildren();
-  if (!r.decision) { t.append(card("Forecasts").appendChild(el("p", "No decision run yet (Controls → Decide). Forecasts are research diagnostics until a candidate is promoted.", "muted")).parentNode); return; }
-  const d = r.decision, g = el("div", null, "grid"); t.append(g);
-  const h = card("Decision for " + d.day); g.append(h);
-  h.append(dl([["Action", d.action], ["Reasons", (d.reasons || []).join(", ") || "none"], ["Candidate / horizon", d.candidate + " / " + d.h], ["Generated", d.generated_at], ["Universe kept", d.universe ? d.universe.kept : "unknown"], ["Unverified", d.universe && d.universe.unverified.length ? d.universe.unverified.join(", ") : "none"]]));
-  const m = d.model || {}, mc = card("Model"); g.append(mc);
+  if (!r.decision) { t.append(card("Forecasts").appendChild(el("p", "No decision recorded yet (Controls → Decide). Forecasts are research diagnostics until a candidate has a verified promotion.", "muted")).parentNode); return; }
+  const d = r.decision, x = r.diagnostics || {}, g = el("div", null, "grid"); t.append(g);
+  const h = card("Decision " + d.decision_id); g.append(h);
+  h.append(dl([["Session", d.day], ["Origin", d.origin], ["Action", d.action], ["Reasons", (d.reasons || []).join(", ") || "none"], ["Candidate / horizon", d.candidate + " / " + d.h], ["Generated", when(d.generated_at)],
+    ["Universe kept", d.universe ? d.universe.kept : "not reached"], ["Unverified", d.universe && d.universe.unverified.length ? d.universe.unverified.join(", ") : "none"], ["Integrity", d.integrity]]));
+  if (d.candidate_spec) h.append(el("p", "Feature builder " + d.candidate_spec.feature_builder + "; columns: " + d.candidate_spec.feature_columns.join(", ") + "; event records used: " + d.candidate_spec.event_records_used, "muted"));
+  const pol = d.policy || {}, pc = card("Effective policy used"); g.append(pc);
+  pc.append(dl([["Capital", money(pol.W)], ["Per-stock cap", pct(pol.cap_fraction, 0) + " = " + money(pol.cap_rupees)], ["Positions K", pol.K], ["Cash reserve", money(pol.reserve_rupees)], ["Risk aversion γ", num(pol.gamma, 6)], ["Minimum edge / tail limit", pct(pol.min_edge) + " / " + pct(pol.tail_limit)], ["Digest", d.policy_digest]]));
+  if (!x.model) { g.append(card("Diagnostics").appendChild(el("p", "This decision stopped before any forecast (" + (d.reasons || []).join(", ") + ").", "muted")).parentNode); return; }
+  const m = x.model, mc = card("Model (diagnostic: " + x.plan_status + ")"); g.append(mc);
   const zq = m.z_quantiles || {};
   mc.append(dl([["Target", m.target_id], ["Lambda", m.lam], ["Training rows", m.n_train], ["Training dates", (m.train || []).join(" → ")], ["Calibration residuals", m.calibration_n], ["z quantiles (10/50/90)", [zq["0.1"], zq["0.5"], zq["0.9"]].map(v => num(v, 2)).join(" / ")], ["Bootstrap refits", m.bootstraps]]));
-  const pl = card("Allocation plan (" + money(d.policy && d.policy.W) + ", K=" + (d.policy && d.policy.K) + ")"); g.append(pl);
-  const q = (d.plan && d.plan.quantities) || {}, vals = (d.plan && d.plan.values) || {};
-  pl.append(Object.keys(q).length ? table(["ISIN", "Quantity", "Value"], Object.keys(q).map(k => [k, q[k], money(vals[k])]), [1, 2]) : el("p", (d.plan && d.plan.note) || "No position passes the gate: " + JSON.stringify((d.plan && d.plan.rejected) || {}).slice(0, 300), "muted"));
+  const pl = card("Hypothetical plan (diagnostic, not a decision)"); g.append(pl);
+  const q = (x.plan && x.plan.quantities) || {}, vals = (x.plan && x.plan.values) || {};
+  pl.append(Object.keys(q).length ? table(["ISIN", "Quantity", "Value"], Object.keys(q).map(k => [k, q[k], money(vals[k])]), [1, 2]) : el("p", (x.plan && x.plan.note) || "No position passes the gate: " + JSON.stringify((x.plan && x.plan.rejected) || {}).slice(0, 300), "muted"));
   const fc = card("Forecasts (gross excess return over the horizon; shrunk mean drives decisions)", "wide"); g.append(fc);
-  const rows = (d.forecasts || []).filter(f => f.mu_shrunk != null);
+  const rows = (x.forecasts || []).filter(f => f.mu_shrunk != null);
   fc.append(barChart(rows.slice(0, 20).map(f => ({ label: f.symbol || f.isin, value: f.mu_shrunk })), { fmt: v => pct(v) }));
-  fc.append(table(["Symbol", "Close", "μ̂", "se", "μ̃ shrunk", "q10", "q50", "q90", "P(>0)", "σ̂", "Slippage"],
+  fc.append(table(["Symbol", "Close", "μ̂", "se", "μ̃ shrunk", "q10", "q50", "q90", "P(excess>0)", "σ̂", "Slippage"],
     rows.map(f => [f.symbol || f.isin, f.close, pct(f.mu_hat), pct(f.se), pct(f.mu_shrunk), pct(f.q10), pct(f.q50), pct(f.q90), num(f.p_positive, 3), pct(f.sigma_hat), pct(f.slippage)]), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
-  const ab = (d.forecasts || []).filter(f => f.abstain); if (ab.length) fc.append(el("p", ab.length + " securities abstained: " + ab[0].abstain, "muted"));
+  const ab = (x.forecasts || []).filter(f => f.abstain); if (ab.length) fc.append(el("p", ab.length + " securities abstained: " + ab[0].abstain, "muted"));
 }
 
 // ---- evaluation ----------------------------------------------------------------------------------
@@ -322,35 +358,40 @@ async function renderControls() {
   const paused = st.service.analysis === "PAUSED";
   const pb = el("button", paused ? "Resume paper analysis" : "Pause paper analysis", "button primary"); pb.type = "button";
   pb.addEventListener("click", async () => { await post("/api/analysis/" + (paused ? "resume" : "pause")); renderControls(); });
-  an.append(el("p", "Pausing stops new WAIT/plan records; data collection continues.", "muted"), pb);
+  an.append(el("p", "Pausing stops new decision records; data collection continues.", "muted"), pb);
   const lg = el("a", "Log in to Kite", "button"); lg.href = "/login/start"; an.append(el("p", "Login opens Zerodha's own page; your password is typed there, never here.", "muted"), lg);
-  const pc = card("Policy (bounded; stored in data/private/policy.json)", "wide"); g.append(pc);
-  const f = el("form", null, "policy"); const P = cfg.policy, B = cfg.bounds;
-  const fields = [["capital", "Capital ₹"], ["K", "Max positions K"], ["cap_fraction", "Per-stock cap (fraction)"], ["reserve_fraction", "Cash reserve (fraction)"], ["v_min_crore", "Min median traded value (₹ crore)"], ["h", "Horizon (sessions)"], ["risk_multiplier", "Risk multiplier (1 = half-Kelly)"]];
+  const pc = card("Policy (bounded; stored in the private folder; persisted with every decision)", "wide"); g.append(pc);
+  const f = el("form", null, "policy"); const P = cfg.policy, B = cfg.bounds, E = cfg.policy_effective, N = cfg.nullable || [];
+  const fields = [["capital", "Capital ₹"], ["K", "Max positions K"], ["cap_fraction", "Per-stock cap (fraction)"], ["reserve_fraction", "Cash reserve (fraction)"], ["v_min_crore", "Min median traded value (₹ crore)"], ["risk_multiplier", "Risk multiplier (1 = half-Kelly)"]];
   const inputs = {};
-  for (const [k, label] of fields) { const l = el("label", label + " [" + B[k][0] + "–" + B[k][1] + "]"); const i = el("input"); i.type = "number"; i.step = "any"; i.value = P[k]; inputs[k] = i; l.append(i); f.append(l); }
-  const cl = el("label", "Candidate"); const cs = el("select"); for (const c of ["A", "B", "C"]) { const o = el("option", c); o.value = c; cs.append(o); } cs.value = P.candidate; cl.append(cs); f.append(cl);
-  const sl = el("label", "Watchlist symbols (comma-separated; optional)"); const si = el("input"); si.value = (P.symbols || []).join(","); sl.append(si); f.append(sl);
+  for (const [k, label] of fields) { const l = el("label", label + " [" + B[k][0] + "–" + B[k][1] + "]" + (N.includes(k) ? "; empty = spec default (" + E[k] + ")" : "")); const i = el("input"); i.type = "number"; i.step = "any"; i.value = P[k] == null ? "" : P[k]; inputs[k] = i; l.append(i); f.append(l); }
+  const cl = el("label", "Candidate"); const cs = el("select");
+  for (const [c, info] of Object.entries(cfg.candidates)) { const o = el("option", c + (info.implemented ? "" : " (not implemented)")); o.value = c; o.disabled = !info.implemented; cs.append(o); } cs.value = P.candidate; cl.append(cs); f.append(cl);
+  const hl = el("label", "Horizon (registered for the candidate)"); const hs = el("select");
+  const fillH = () => { hs.replaceChildren(); for (const h of cfg.candidates[cs.value].horizons) { const o = el("option", h + " sessions"); o.value = h; hs.append(o); } hs.value = String(P.h); };
+  fillH(); cs.addEventListener("change", fillH); hl.append(hs); f.append(hl);
+  const sl = el("label", "Watchlist symbols (" + ((cfg.unsupported || {}).symbols || "") + ")"); const si = el("input"); si.value = (P.symbols || []).join(","); sl.append(si); f.append(sl);
   const fam = el("label", "Families enabled"); const fs = el("div", null, "row"); const famBoxes = {};
-  for (const k of ["A", "B", "C"]) { const lab = el("label", k); const cb = el("input"); cb.type = "checkbox"; cb.checked = !!P.families[k]; famBoxes[k] = cb; lab.prepend(cb); fs.append(lab); } fam.append(fs); f.append(fam);
+  for (const k of ["A", "B", "C"]) { const info = cfg.candidates[k]; const lab = el("label", k + (info.implemented ? "" : " (not implemented)")); const cb = el("input"); cb.type = "checkbox"; cb.checked = !!P.families[k]; cb.disabled = !info.implemented; famBoxes[k] = cb; lab.prepend(cb); fs.append(lab); } fam.append(fs); f.append(fam);
   const save = el("button", "Save policy", "button primary"); save.type = "button"; const msg = el("p", "", "muted");
   save.addEventListener("click", async () => {
-    const body = {}; for (const k in inputs) body[k] = Number(inputs[k].value); body.candidate = cs.value;
+    const body = {}; for (const k in inputs) body[k] = inputs[k].value === "" && N.includes(k) ? null : Number(inputs[k].value); body.candidate = cs.value; body.h = Number(hs.value);
     body.symbols = si.value.split(",").map(x => x.trim().toUpperCase()).filter(Boolean); body.families = { A: famBoxes.A.checked, B: famBoxes.B.checked, C: famBoxes.C.checked };
-    try { await post("/api/config", body); msg.textContent = "Saved."; } catch (e) { msg.textContent = "Refused: " + e.message; }
+    try { await post("/api/config", body); msg.textContent = "Saved."; renderControls(); } catch (e) { msg.textContent = "Refused: " + e.message; }
   });
   pc.append(f, el("div", null, "actions").appendChild(save).parentNode, msg);
+  pc.append(el("h3", "Effective policy the next decision will use (digest " + cfg.policy_digest + ")"),
+    dl([["Per-stock cap", money(E.cap_rupees) + " (" + pct(E.cap_fraction, 0) + ")"], ["Positions K", E.K], ["Cash reserve", money(E.reserve_rupees)], ["Risk aversion γ", num(E.gamma, 6)], ["Minimum edge", pct(E.min_edge)], ["Tail limit", pct(E.tail_limit)]]));
   const rc = card("Run a job (executed by the scheduler process, one at a time)", "wide"); g.append(rc);
   const dateIn = el("input"); dateIn.type = "date"; const dl1 = el("label", "Date for file jobs"); dl1.append(dateIn);
-  const hIn = el("input"); hIn.type = "number"; hIn.value = P.h; const hl = el("label", "Horizon for evaluate"); hl.append(hIn);
-  const jobs = [["prepare", "Prepare today's rule inputs"], ["fetch_public", "Fetch official files for date"], ["build_master", "Build security master for date"], ["panel_build", "Build price panel"], ["decide", "Decide (forecast + plan)"], ["evaluate", "Evaluate (walk-forward)"]];
-  const rrow = el("div", null, "row"); rrow.append(dl1, hl);
+  const jobs = [["prepare", "Prepare today's rule inputs"], ["fetch_public", "Fetch official files for date"], ["build_master", "Build security master for date"], ["panel_build", "Build price panel"], ["decide", "Decide (saved candidate and horizon)"], ["evaluate", "Evaluate (saved candidate and horizon)"]];
+  const rrow = el("div", null, "row"); rrow.append(dl1);
   for (const [k, label] of jobs) { const b = el("button", label, "button"); b.type = "button"; b.addEventListener("click", async () => {
-    const args = {}; if (dateIn.value && (k === "fetch_public" || k === "build_master" || k === "prepare")) args.date = dateIn.value; if (k === "evaluate") { args.candidate = cs.value; args.h = Number(hIn.value); }
+    const args = {}; if (dateIn.value && (k === "fetch_public" || k === "build_master" || k === "prepare")) args.date = dateIn.value;
     try { await post("/api/request", { kind: k, args }); renderControls(); } catch (e) { alert("Refused: " + e.message); } }); rrow.append(b); }
-  rc.append(rrow, el("p", "The scheduler (marketlab run) picks requests up within a minute. If it is not running, requests wait.", "muted"));
+  rc.append(rrow, el("p", "The scheduler (marketlab run) picks requests up within a minute. If it is not running, requests wait. A request interrupted by a restart is shown as INTERRUPTED (file jobs are retried once).", "muted"));
   const rl = card("Requests", "wide"); g.append(rl);
-  rl.append(rq.requests.length ? table(["Submitted", "Kind", "Args", "State", "Result / error"], rq.requests.map(r => [r.submitted_at, r.kind, JSON.stringify(r.args || {}), r.state, r.error || (r.result == null ? "" : JSON.stringify(r.result).slice(0, 200))]), [], { 3: v => "st-" + v }) : el("p", "none", "muted"));
+  rl.append(rq.requests.length ? table(["Submitted", "Kind", "Args", "State", "Attempt", "Result / error"], rq.requests.map(r => [when(r.submitted_at), r.kind, JSON.stringify(r.args || {}), r.state, r.attempt || 0, r.error || (r.result == null ? "" : JSON.stringify(r.result).slice(0, 200))]), [4], { 3: v => "st-" + v }) : el("p", "none", "muted"));
 }
 
 // ---- shell ---------------------------------------------------------------------------------------
@@ -370,7 +411,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 SERVICE_WORKER = r"""
 "use strict";
-const SHELL = "marketlab-shell-v2";
+const SHELL = "marketlab-shell-v3";
 const ASSETS = ["/", "/app.js", "/app.css", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png"];
 self.addEventListener("install", e => e.waitUntil(caches.open(SHELL).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting())));
 self.addEventListener("activate", e => e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== SHELL).map(k => caches.delete(k)))).then(() => self.clients.claim())));

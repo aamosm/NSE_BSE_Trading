@@ -208,5 +208,15 @@ def explain(proposal):
         "SUBMISSION_BEFORE_DECISION": "The submission time is earlier than the decision time.",
         "REVALIDATION_REQUIRED": "Too much time passed between the decision and submission; decide again.",
         "BSE_FEE_GROUP_UNKNOWN": "The BSE group (which sets exchange charges) is not known from listing data.",
+        "MODEL_NOT_PROMOTED": "No candidate has a verified promotion record (spec 8.6), so the decision is WAIT.",
+        "INSUFFICIENT_HISTORY": "The price panel is too short to fit or evaluate a model.",
+        "INSUFFICIENT_RESOLVED_LABELS": "Too few past decisions have resolved outcomes to fit a model.",
+        "INSUFFICIENT_CALIBRATION": "Too few calibration residuals to state a forecast distribution.",
+        "NO_CANDIDATE_PASSES_GATE": "No security clears costs, the tail limit and the caps at a whole-share quantity.",
+        "FEATURE_COVERAGE": "A required feature is missing for the decision session.",
+        "PANEL_NOT_BUILT": "The price panel has not been built from stored exchange files.",
+        "UNIMPLEMENTED_CANDIDATE": "The requested candidate has no registered implementation.",
+        "FAMILY_DISABLED_BY_OWNER": "The owner disabled this research family in Controls.",
+        "FORWARD_PAPER_LEDGER_NOT_BUILT": "No forward paper ledger exists to receive a plan.",
     }
     return " ".join(meanings.get(x, "Unknown reason: " + x) for x in proposal["reasons"])

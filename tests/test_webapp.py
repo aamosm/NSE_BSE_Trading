@@ -52,7 +52,10 @@ def test_shell_and_status_are_served_with_strict_headers(server):
     s = json.loads(body)
     assert code == 200 and h["Cache-Control"] == "no-store" and s["live_orders"] is False
     assert s["actual"]["batch"] is None and s["simulated"]["kind"] == "SIMULATED_PAPER"
-    assert s["session"]["state"] == "AUTH_REQUIRED" and s["blockers"][0]["code"] == "AUTH_REQUIRED"
+    assert s["simulated"]["cash"] is None and s["simulated"]["state"] == "FORWARD_PAPER_LEDGER_NOT_BUILT"  # no constants
+    codes = [b["code"] for b in s["blockers"]]
+    assert s["session"]["state"] == "AUTH_REQUIRED" and codes[:2] == ["SCHEDULER_NOT_RUNNING", "AUTH_REQUIRED"]
+    assert s["health"]["scheduler"]["status"] == "NEVER_STARTED" and s["health"]["web"] == "REACHABLE"
 
 
 def test_login_round_trip_saves_session_and_state_is_single_use(server):

@@ -14,13 +14,13 @@ from __future__ import annotations
 import json
 import math
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as clock, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import account, login, service, webassets
-from .common import now, timestamp
+from . import account, decisions, login, service, webassets
+from .common import IST, now, timestamp
 from .kite import KiteError
 from .store import Store
 
@@ -35,17 +35,23 @@ STATIC = {
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; "
        "manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 QUOTA = 256 * 1024 * 1024
-RUNS = Path("data/runs")
-BLOCKERS = [
-    ("NO_PROMOTED_MODEL", "No candidate has passed the promotion rule (spec 8.6); every decision is WAIT."),
-    ("PRICE_HISTORY_SHORT", "Exchange price history held only from 30 Oct 2026; the backfill (2016 onward) is pending."),
-    ("CORPORATE_ACTIONS_UNVERIFIED", "Exchange-implied factors are used; hypothesis H-CA1 (dividends) is unverified."),
-    ("PAPER_LEDGER_NOT_BUILT", "The simulated cash ledger with reservations is not built yet."),
+RUNS: Path | None = None  # None: runs live beside the private folder (decisions.runs_dir); tests may override
+# Known limitations that no data in this process can clear (each is listed with basis KNOWN_LIMITATION).
+KNOWN_LIMITATIONS = [
+    ("CORPORATE_ACTIONS_UNVERIFIED", "Exchange-implied factors are unverified against an action history; hypothesis "
+                                     "H-CA1 (dividends) is open, so windows with unlisted factors are excluded."),
+    ("FORWARD_PAPER_LEDGER_NOT_BUILT", "Replay simulations use a dated cash ledger; no forward paper ledger exists yet."),
     ("BSE_CALENDAR_UNVERIFIED", "BSE trading calendar not verified; BSE simulations are blocked."),
     ("MIS_LIST_UNAVAILABLE", "Broker intraday eligibility list unavailable; no intraday candidate exists."),
     ("CONTRACT_NOTE_UNRECONCILED", "STT/stamp aggregation not yet reconciled with a real contract note."),
 ]
+FIRST_FOLD_SESSIONS = 750 + 125 + 250  # training + one test fold + the locked holdout (spec 8.1-8.2)
+SCHEDULER_INTERVAL = 60  # seconds, unless the scheduler state records its own interval
 MAX_BODY = 8192
+
+
+def _runs(root: Path) -> Path:
+    return RUNS if RUNS is not None else decisions.runs_dir(root)
 
 
 def _age_seconds(t, at):
@@ -77,9 +83,20 @@ def _jsonable(x):
     return str(x)  # Decimal -> exact string
 
 
+def listing_route(series: str, name: str) -> str:
+    """What the equity list can and cannot say about how a security arrived."""
+    s, n = (series or "").upper(), (name or "").upper()
+    if s == "RE" or "RIGHTS" in n:
+        return "RIGHTS_ENTITLEMENT"
+    if s in ("SM", "ST", "SZ"):
+        return "SME_SEGMENT"
+    return "ROUTE_UNVERIFIED"  # IPO, migration, relisting or cross-listing cannot be told apart from this file
+
+
 def upcoming(market: Path, at: datetime, days=14) -> dict:
+    """Calendar inputs only: ex-dates and listing dates are not signals or expected profit."""
     from . import master, sources
-    out = {"corporate_actions": [], "new_listings": [], "source": {}}
+    out = {"corporate_actions": [], "listings_recent": [], "listings_upcoming": [], "source": {}}
     found = sources.latest_vintage(market, "nse_rss_corporate_actions", at)
     if found:
         import xml.etree.ElementTree as ET
@@ -100,12 +117,16 @@ def upcoming(market: Path, at: datetime, days=14) -> dict:
     if found:
         raw = sources.read_raw(market, "nse_equity_list", found[0])
         for r in master.parse_equity_list(raw) if raw else []:
-            if r["listing_date"] and abs((r["listing_date"] - at.date()).days) <= days:
-                out["new_listings"].append({"symbol": r["symbol"], "name": r["name"][:120],
-                                            "listing_date": r["listing_date"].isoformat(), "series": r["series"]})
-        out["source"]["new_listings"] = found[0].isoformat()
+            ld = r["listing_date"]
+            if not ld or abs((ld - at.date()).days) > days:
+                continue
+            row = {"symbol": r["symbol"], "name": r["name"][:120], "listing_date": ld.isoformat(), "series": r["series"],
+                   "route": listing_route(r["series"], r["name"])}
+            out["listings_upcoming" if ld > at.date() else "listings_recent"].append(row)
+        out["source"]["listings"] = found[0].isoformat()
     out["corporate_actions"].sort(key=lambda r: r["ex_date"])
-    out["new_listings"].sort(key=lambda r: r["listing_date"], reverse=True)
+    out["listings_recent"].sort(key=lambda r: r["listing_date"], reverse=True)
+    out["listings_upcoming"].sort(key=lambda r: r["listing_date"])
     return out
 
 
@@ -116,22 +137,111 @@ def _latest_file(folder: Path, suffix=".json"):
     return files[-1] if files else None
 
 
-def status(root: Path, market: Path, at=None) -> dict:
-    """Overview: actual account and simulated figures are separate top-level keys."""
+def market_session(cal, at: datetime) -> dict:
+    """The exchange session state now, from the loaded calendar; UNKNOWN when the year is not loaded."""
+    from .rules.types import Exchange, RuleUnknown
+    d, t = at.date(), at.time()
+    try:
+        if not cal.covers(Exchange.NSE, d):
+            return {"status": "UNKNOWN_CALENDAR", "day": d.isoformat()}
+        trading = cal.is_trading_day(Exchange.NSE, d)
+        special = cal.is_special_session(Exchange.NSE, d)
+        opens = cal.session_open(Exchange.NSE, d) if trading else None
+    except RuleUnknown:
+        return {"status": "SPECIAL_SESSION_TIMETABLE_UNKNOWN", "day": d.isoformat()}
+    if not trading:
+        return {"status": "NO_SESSION", "day": d.isoformat()}
+    if special:
+        return {"status": "SPECIAL_SESSION_DAY", "day": d.isoformat(), "opens": opens.isoformat()}
+    state = "BEFORE_OPEN" if t < opens else "OPEN" if t < clock(15, 30) else "CLOSED"  # regular NSE timings
+    return {"status": state, "day": d.isoformat(), "opens": opens.isoformat()}
+
+
+def broker_expected(cal, at: datetime) -> bool | None:
+    """Is a broker batch due now (the scheduler's read window)? None when the calendar cannot say."""
+    trading = service._trading(cal, at.date())
+    if trading is None:
+        return None
+    if not trading:
+        return False
+    try:
+        opens = cal.session_open(service.Exchange.NSE, at.date())
+    except service.RuleUnknown:
+        return None
+    return (datetime.combine(at.date(), opens, IST) - service.BROKER_LEAD).time() <= at.time() <= clock(16, 30)
+
+
+def health(st: dict, session: dict, actual: dict, cal, at: datetime, promotion: tuple) -> dict:
+    """Separate signals, each derived from timestamps now rather than from a saved state word."""
+    updated = st.get("updated_at")
+    interval = int(st.get("interval_seconds") or SCHEDULER_INTERVAL)
+    age = _age_seconds(timestamp(updated), at) if updated else None
+    if age is None:
+        sched = "NEVER_STARTED"
+    elif age <= 3 * interval:
+        sched = "ALIVE"
+    else:
+        sched = "MISSED_HEARTBEATS"
+    silence = age if (age is not None and age > service.GAP_THRESHOLD.total_seconds()) else None
+    finished = (actual.get("batch") or {}).get("finished_at")
+    b_age = _age_seconds(timestamp(finished), at) if finished else None
+    expected = broker_expected(cal, at)
+    auth_ok = session["state"] == "AUTHENTICATED" and not st.get("auth_invalid")
+    if expected is None:
+        broker = "UNKNOWN_CALENDAR"
+    elif not expected:
+        broker = "IDLE_BY_SCHEDULE"
+    elif not auth_ok:
+        broker = "AUTH_REQUIRED"
+    elif b_age is None:
+        broker = "NO_BATCH_YET"
+    else:
+        broker = "FRESH" if b_age <= 600 else "OVERDUE"
+    usable, cash_reasons = account.fresh_for_cash_decision(actual, at) if actual.get("batch") else (False, ["NO_COMPLETED_BATCH"])
+    record, problems = promotion
+    paper_reasons = ([] if record else ["MODEL_NOT_PROMOTED"]) + ["FORWARD_PAPER_LEDGER_NOT_BUILT"]
+    if sched != "ALIVE":
+        paper_reasons.insert(0, "SCHEDULER_NOT_RUNNING")
+    return {"web": "REACHABLE",
+            "scheduler": {"status": sched, "last_seen": updated, "age_seconds": age, "interval_seconds": interval,
+                          "reported_state": st.get("state"), "reported_state_current": sched == "ALIVE",
+                          "current_silence_seconds": silence,
+                          "last_recorded_gap": st.get("last_gap"),
+                          "gap_note": "Gaps are recorded on the tick after a silence; a silence still in progress is "
+                                      "current_silence_seconds."},
+            "market": market_session(cal, at),
+            "broker": {"status": broker, "expected_now": expected, "last_batch_at": finished, "age_seconds": b_age},
+            "actual_cash_usable": {"ok": usable, "reasons": cash_reasons},
+            "paper_decisions": {"eligible": False, "reasons": paper_reasons, "promotion_check": problems}}
+
+
+def status(root: Path, market: Path, at=None, calendar=None) -> dict:
+    """Overview: actual account and simulated figures are separate top-level keys; health is derived now."""
+    from . import sources
+    from .quant import registry
     at = timestamp(at) if at else now()
     st = service.read_json(root / service.STATE_FILE, {})
     session = login.session_status(root, at)
     evidence = root / "evidence.sqlite3"
-    actual, decisions = {"batch": None, "sections": {}}, []
+    actual = {"batch": None, "sections": {k: {"state": "MISSING"} for k in account.KINDS}}
     ev_size = 0
     if evidence.exists():
         db = Store(evidence)
         try:
             actual = account.account_view(db, at)
-            decisions = [d["payload"] | {"recorded_at": d["received_at"]} for d in db.recent("paper_decision", 30)]
             ev_size = db.size_bytes()
         finally:
             db.close()
+    timeline = decisions.timeline(root, 30)
+    if calendar is None:
+        calendar, cal_report = sources.load_calendar(market)
+    else:
+        cal_report = {"source": "SUPPLIED"}
+    cal_report = dict(cal_report)
+    cal_report["discrepancies_checked"] = cal_report.get("source") == "NSE_API"
+    pol = service.policy(root)
+    eff = service.effective_policy(root, pol)
+    promotion = registry.verified_promotion(_runs(root), pol["candidate"], int(pol["h"]), eff.digest())
     ages = {}
     catalog = market / "catalog.sqlite3"
     if catalog.exists():
@@ -143,40 +253,65 @@ def status(root: Path, market: Path, at=None) -> dict:
         finally:
             db.close()
     finished = (actual.get("batch") or {}).get("finished_at")
-    blockers = [{"code": c, "text": t} for c, t in BLOCKERS]
+    hl = health(st, session, actual, calendar, at, promotion)
+    blockers = []
+    if hl["scheduler"]["status"] != "ALIVE":
+        blockers.append({"code": "SCHEDULER_NOT_RUNNING", "basis": "DERIVED",
+                         "text": "No scheduler tick in the last " + str(3 * hl["scheduler"]["interval_seconds"]) +
+                                 " s; saved states and job results are as last reported."})
     if session["state"] != "AUTHENTICATED" or st.get("auth_invalid"):
-        blockers.insert(0, {"code": "AUTH_REQUIRED", "text": "Kite login needed for broker data today."})
+        blockers.append({"code": "AUTH_REQUIRED", "basis": "DERIVED", "text": "Kite login needed for broker data today."})
     for provider, b in (st.get("breakers") or {}).items():
-        blockers.insert(0, {"code": "SOURCE_FAILING", "text": f"{provider} failing; retry after {b.get('open_until')}."})
+        blockers.append({"code": "SOURCE_FAILING", "basis": "LAST_REPORTED",
+                         "text": f"{provider} failing; retry after {b.get('open_until')}."})
+    if promotion[0] is None:
+        blockers.append({"code": "NO_PROMOTED_MODEL", "basis": "DERIVED",
+                         "text": f"No verified promotion record for candidate {pol['candidate']} at h = {pol['h']} under "
+                                 "the effective policy; every decision is WAIT."})
+    panel_sessions = None
+    if (market / "panel.sqlite3").exists():
+        import sqlite3
+        con = sqlite3.connect(market / "panel.sqlite3")
+        try:
+            panel_sessions = con.execute("SELECT count(*) FROM sessions").fetchone()[0]
+        except sqlite3.Error:
+            panel_sessions = None
+        finally:
+            con.close()
+    if not panel_sessions or panel_sessions < FIRST_FOLD_SESSIONS:
+        blockers.append({"code": "PRICE_HISTORY_SHORT", "basis": "DERIVED",
+                         "text": f"The price panel holds {panel_sessions or 0} sessions; a first development fold needs "
+                                 f"{FIRST_FOLD_SESSIONS} exchange sessions plus 251 sessions of feature history."})
+    blockers += [{"code": c, "basis": "KNOWN_LIMITATION", "text": t} for c, t in KNOWN_LIMITATIONS]
     try:
         events = upcoming(market, at)
     except (OSError, ValueError) as e:
-        events = {"corporate_actions": [], "new_listings": [], "error": type(e).__name__}
+        events = {"corporate_actions": [], "listings_recent": [], "listings_upcoming": [], "error": type(e).__name__}
     updated = st.get("updated_at")
-    latest_decision = _latest_file(RUNS / "decisions")
+    latest = decisions.latest(root, _runs(root))
     decision_summary = None
-    if latest_decision:
-        try:
-            d = json.loads(latest_decision.read_text(encoding="utf-8"))
-            decision_summary = {k: d.get(k) for k in ("day", "action", "reasons", "candidate", "h", "generated_at")}
-            decision_summary["forecasts"] = len(d.get("forecasts", []))
-            decision_summary["plan"] = (d.get("plan") or {}).get("quantities", {})
-        except (ValueError, OSError):
-            decision_summary = {"error": "unreadable"}
+    if latest:
+        decision_summary = {k: latest.get(k) for k in ("decision_id", "origin", "day", "action", "reasons", "candidate", "h",
+                                                     "generated_at", "recorded_at", "integrity", "policy_digest",
+                                                     "promotion_id", "forecasts", "plan_quantities", "diagnostic_artifact")}
+        decision_summary["policy"] = latest.get("policy")
     return _jsonable({
-        "at": at, "live_orders": False,
-        "service": {"state": st.get("state", "NOT_STARTED"), "analysis": st.get("analysis", "ACTIVE"), "updated_at": updated,
-                    "scheduler_age_seconds": _age_seconds(timestamp(updated), at) if updated else None,
+        "at": at, "live_orders": False, "health": hl,
+        "service": {"state": st.get("state", "NOT_STARTED"), "state_is_current": hl["scheduler"]["status"] == "ALIVE",
+                    "analysis": st.get("analysis", "ACTIVE"), "updated_at": updated,
+                    "scheduler_age_seconds": hl["scheduler"]["age_seconds"],
                     "jobs": st.get("jobs", {}), "heartbeat": st.get("heartbeat"), "last_alert": st.get("last_alert"),
-                    "last_gap": st.get("last_gap"), "calendar": st.get("calendar"), "breakers": st.get("breakers", {})},
+                    "last_gap": st.get("last_gap"), "calendar": cal_report, "breakers": st.get("breakers", {})},
         "session": {k: v for k, v in session.items() if k in ("state", "reason", "expires_at")} | ({"invalidated": True} if st.get("auth_invalid") else {}),
         "data": {"broker_last_batch_at": finished, "broker_age_seconds": _age_seconds(timestamp(finished), at) if finished else None,
                  "sources": ages},
         "actual": actual,
-        "simulated": {"kind": "SIMULATED_PAPER", "starting_cash": "10000.00", "cash": "10000.00", "positions": [], "pnl": "0.00",
-                      "state": "PAPER_LEDGER_NOT_BUILT", "note": "No simulated trade has been made. These figures are not your real account."},
-        "decisions": decisions, "latest_decision": decision_summary, "events": events, "blockers": blockers,
-        "policy": service.policy(root),
+        "simulated": {"kind": "SIMULATED_PAPER", "state": "FORWARD_PAPER_LEDGER_NOT_BUILT", "configured_capital": pol["capital"],
+                      "cash": None, "positions": None, "pnl": None,
+                      "note": "No forward paper ledger exists, so there is no simulated cash, position or P&L to show. "
+                              "Replay ledgers from evaluations are in the Evaluation tab. Not your real account."},
+        "decisions": timeline, "latest_decision": decision_summary, "events": events, "blockers": blockers,
+        "policy": pol, "policy_effective": eff.to_json(), "policy_digest": eff.digest(),
         "budget": {"evidence_bytes": ev_size, "evidence_quota_bytes": QUOTA, "market_files_bytes": _dir_size(market / "raw"),
                    "catalog_bytes": catalog.stat().st_size if catalog.exists() else 0,
                    "panel_bytes": (market / "panel.sqlite3").stat().st_size if (market / "panel.sqlite3").exists() else 0,
@@ -243,14 +378,14 @@ def data_coverage(market: Path, calendar=None) -> dict:
     return out
 
 
-def universe_view(market: Path, day: date | None = None) -> dict:
+def universe_view(market: Path, day: date | None = None, root: Path | None = None) -> dict:
     panel_path = market / "panel.sqlite3"
     if not panel_path.exists():
         return {"error": "PANEL_NOT_BUILT"}
     from . import sources
     from .quant.panel import Panel
     from .quant.universe import ScreenPolicy, rule_inputs_for, screen
-    pol = service.policy(Path("data/private"))
+    pol = service.policy(root or Path("data/private"))
     pn = Panel(panel_path)
     try:
         sessions = pn.sessions()
@@ -272,8 +407,8 @@ def universe_view(market: Path, day: date | None = None) -> dict:
                       "policy": {"v_min_crore": pol["v_min_crore"], "capital": pol["capital"]}})
 
 
-def evaluation_view(trial: str | None = None) -> dict:
-    folder = RUNS / "eval"
+def evaluation_view(trial: str | None = None, root: Path | None = None) -> dict:
+    folder = (_runs(root) if root is not None else (RUNS or Path("data/runs"))) / "eval"
     if not folder.exists():
         return {"reports": []}
     if trial:
@@ -299,15 +434,23 @@ def evaluation_view(trial: str | None = None) -> dict:
     return {"reports": reports}
 
 
-def decision_view() -> dict:
-    p = _latest_file(RUNS / "decisions")
-    if not p:
-        return {"decision": None, "available": []}
-    try:
-        d = json.loads(p.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        return {"decision": None, "error": "unreadable"}
-    return {"decision": d, "available": [q.name for q in sorted((RUNS / "decisions").glob("*.json"))][-30:]}
+def decision_view(root: Path, decision_id: str | None = None) -> dict:
+    """One decision record by id (default: the newest in the timeline) with its diagnostics, if any."""
+    runs = _runs(root)
+    ids = [e["decision_id"] for e in decisions.timeline(root, 30) if e.get("decision_id")]
+    if not ids and decision_id is None:
+        return {"decision": None, "available": [], "diagnostics": None}
+    d = decisions.load(root, decision_id or ids[0], runs)
+    if d is None:
+        return {"decision": None, "available": ids, "error": "NOT_FOUND", "diagnostics": None}
+    diag = None
+    rel = d.get("diagnostic_artifact")
+    if rel and (runs / rel).exists():
+        try:
+            diag = json.loads((runs / rel).read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            diag = {"error": "unreadable"}
+    return {"decision": d, "available": ids, "diagnostics": diag}
 
 
 def research_view(root: Path, market: Path) -> dict:
@@ -410,17 +553,24 @@ def make_handler(app: App):
                     return self._json(200, _jsonable(data_coverage(app.market)))
                 if path == "/api/universe":
                     d = q.get("date", [None])[0]
-                    return self._json(200, universe_view(app.market, date.fromisoformat(d) if d else None))
+                    return self._json(200, universe_view(app.market, date.fromisoformat(d) if d else None, app.root))
                 if path == "/api/evaluation":
-                    return self._json(200, _jsonable(evaluation_view(q.get("trial", [None])[0])))
+                    return self._json(200, _jsonable(evaluation_view(q.get("trial", [None])[0], app.root)))
                 if path == "/api/decision":
-                    return self._json(200, _jsonable(decision_view()))
+                    return self._json(200, _jsonable(decision_view(app.root, q.get("id", [None])[0])))
                 if path == "/api/research":
                     return self._json(200, _jsonable(research_view(app.root, app.market)))
                 if path == "/api/requests":
                     return self._json(200, _jsonable(requests_view(app.root)))
                 if path == "/api/config":
-                    return self._json(200, {"policy": service.policy(app.root), "bounds": service.POLICY_BOUNDS,
+                    from .quant import candidates
+                    pol = service.policy(app.root)
+                    eff = service.effective_policy(app.root, pol)
+                    return self._json(200, {"policy": pol, "policy_effective": eff.to_json(), "policy_digest": eff.digest(),
+                                            "bounds": service.POLICY_BOUNDS, "nullable": sorted(service.NULLABLE),
+                                            "unsupported": service.UNSUPPORTED_POLICY_KEYS,
+                                            "candidates": {k: {"implemented": v.implemented, "horizons": list(v.horizons),
+                                                               "reason": v.reason} for k, v in candidates.REGISTRY.items()},
                                             "request_kinds": sorted(service.REQUEST_KINDS)})
             except (OSError, ValueError, KeyError) as e:
                 return self._json(500, {"error": type(e).__name__})

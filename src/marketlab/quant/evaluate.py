@@ -20,7 +20,7 @@ from ..metrics.selection import deflated_sharpe_ratio, min_track_record_length, 
 from ..metrics.performance import moments
 from ..rules.charges import ZERODHA_2026_11_04 as SCHEDULE, Fill, TradeKind, day_charges
 from ..rules.types import Exchange, Side
-from . import allocate, features, forecast, labels, monitor
+from . import allocate, candidates, features, forecast, labels, monitor
 from .linalg import shrunk_correlation, spearman
 from .panel import Panel
 from .universe import ScreenPolicy, screen
@@ -42,10 +42,23 @@ class Config:
     seed: int = 0
     index_name: str = "Nifty 50"
     screen: ScreenPolicy = ScreenPolicy()
+    policy: allocate.Policy | None = None  # the owner's effective policy; None = the spec 5.4 tier for W
+
+    def __post_init__(self):
+        if self.policy is not None and abs(self.policy.W - self.W) > 1e-9:
+            raise ValueError("Config.W and the effective policy's capital differ")
+
+    def effective_policy(self) -> allocate.Policy:
+        return self.policy if self.policy is not None else allocate.Policy.for_capital(self.W)
+
+    def execution_json(self) -> dict:
+        return {"entry_rule": "OPEN_NEXT_SESSION.v1", "slippage_per_side": {"liquid": labels.SLIPPAGE_LIQUID,
+                                                                            "other": labels.SLIPPAGE_OTHER}}
 
     def trial_id(self) -> str:
         body = json.dumps({"c": self.candidate, "h": self.h, "train": self.train_sessions, "test": self.test_sessions,
-                           "ablate": sorted(self.ablate), "lam": list(self.lam_grid), "W": self.W}, sort_keys=True)
+                           "ablate": sorted(self.ablate), "lam": list(self.lam_grid), "W": self.W,
+                           "policy": self.effective_policy().digest()}, sort_keys=True)
         return f"{self.candidate}.h{self.h}." + hashlib.sha256(body.encode()).hexdigest()[:10]
 
 
@@ -177,8 +190,10 @@ def _exact_round_trip(entry_value: Decimal, exit_value: Decimal, d_entry: date, 
 
 def paper_simulation(ds: Dataset, preds: list[dict], cfg: Config, fold: dict) -> dict:
     """Decisions each test session with the gate + allocator + EXIT.v1; fills at the next open with slippage;
-    exact charges. Positions are held for h sessions then reviewed. Returns net rupees and trade records."""
-    policy = allocate.Policy.for_capital(cfg.W)
+    exact charges. Positions are held for h sessions then reviewed. Returns net rupees and trade records.
+    The allocator receives the effective policy of the configuration (owner caps, K, reserve, risk multiplier)."""
+    from dataclasses import replace
+    policy = cfg.effective_policy()
     s = ds.sessions
     by_day: dict[date, list[dict]] = {}
     for p in preds:
@@ -228,7 +243,7 @@ def paper_simulation(ds: Dataset, preds: list[dict], cfg: Config, fold: dict) ->
                 corr = shrunk_correlation(logr, 0.5) if len(cands) > 1 else [[1.0]]
                 held_value = sum(pos["q"] * pos["entry_price"] for pos in positions.values())
                 avail = cash - policy.reserve_fraction * cfg.W
-                sub_policy = allocate.Policy(cfg.W, K=policy.K - len(positions), cap_fraction=policy.cap_fraction)
+                sub_policy = replace(policy, K=policy.K - len(positions))
                 out = allocate.plan(cands, corr, sub_policy, max(0.0, avail - 0.0 * held_value))
                 for code in {v[0] for v in out["rejected"].values() if v}:
                     rejected_counts[code] = rejected_counts.get(code, 0) + 1
@@ -278,11 +293,15 @@ def _max_dd(curve: list[float]) -> float:
 
 
 def walk_forward(panel: Panel, cfg: Config, *, out_dir: Path, rule_inputs_fn=None, progress=print) -> dict:
+    spec = candidates.require(cfg.candidate, cfg.h, cfg.ablate)  # B/C and unregistered trials stop here
     ds = build_dataset(panel, cfg, rule_inputs_fn=rule_inputs_fn, progress=progress)
     trial_id = cfg.trial_id()
     fs = folds(ds.sessions, cfg)
     results = [run_fold(ds, f, cfg, trial_id) for f in fs]
     report = summarize(results, cfg, ds, trial_id)
+    report["candidate_spec"] = candidates.describe(spec, cfg.ablate)
+    report["policy"] = cfg.effective_policy().to_json()
+    report["policy_digest"] = cfg.effective_policy().digest()
     out_dir.mkdir(parents=True, exist_ok=True)
     report = jsonable(report)
     atomic_json(out_dir / f"{trial_id}.json", report)
@@ -314,7 +333,7 @@ def summarize(results: list[dict], cfg: Config, ds: Dataset, trial_id: str) -> d
     bss = [r["metrics"]["brier_skill"] for r in done if not math.isnan(r["metrics"]["brier_skill"])]
     return {"trial_id": trial_id, "generated_at": now().isoformat(),
             "config": {f.name: (list(getattr(cfg, f.name)) if isinstance(getattr(cfg, f.name), tuple) else getattr(cfg, f.name))
-                       for f in fields(cfg) if f.name != "screen"},
+                       for f in fields(cfg) if f.name not in ("screen", "policy")},
             "sessions": [ds.sessions[0].isoformat(), ds.sessions[-1].isoformat()] if ds.sessions else [],
             "rows": len(ds.rows), "label_exclusions": ds.label_exclusions,
             "unverified_days": len(ds.unverified_days), "folds": results, "net_rupees_by_fold": net_by_fold,

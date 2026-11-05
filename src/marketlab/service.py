@@ -9,14 +9,16 @@ Each job runs at most once per due window, records its outcome, and failures ope
 circuit breaker with exponential back-off (no tight retry loops). A single-instance lock prevents
 duplicate schedulers. There is no order capability anywhere in this process.
 
-Paper analysis is a placeholder until a validated model exists: each trading day it records one WAIT
-decision with reason MODEL_NOT_VALIDATED, assembled from reason codes, so the timeline is honest.
+Paper analysis: each trading day the scheduler records one decision through ``decisions.record`` (the same
+recorder the CLI and the Controls tab use). Without a verified promotion record it is a WAIT with reason
+MODEL_NOT_PROMOTED; the gate is never opened by a flag.
 """
 from __future__ import annotations
 
 import json
 import os
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import date, datetime, time as clock, timedelta
 from pathlib import Path
@@ -86,12 +88,20 @@ def set_paused(root: Path, paused: bool, at=None) -> dict:
 # ---- owner policy (bounded, validated) and job requests from the dashboard ---------------------------------
 
 POLICY_FILE = "policy.json"
-POLICY_DEFAULTS = {"capital": 10000.0, "K": 2, "cap_fraction": 0.5, "reserve_fraction": 0.2, "v_min_crore": 5.0, "h": 20,
-                   "candidate": "A", "symbols": [], "families": {"A": True, "B": False, "C": False}, "risk_multiplier": 1.0}
+# K and cap_fraction default to None: the spec 5.4 tier for the capital applies until the owner sets a value.
+POLICY_DEFAULTS = {"capital": 10000.0, "K": None, "cap_fraction": None, "reserve_fraction": 0.2, "v_min_crore": 5.0,
+                   "h": 20, "candidate": "A", "symbols": [], "families": {"A": True, "B": False, "C": False},
+                   "risk_multiplier": 1.0}
 POLICY_BOUNDS = {"capital": (1000.0, 1e8), "K": (1, 10), "cap_fraction": (0.05, 1.0), "reserve_fraction": (0.0, 0.9),
                  "v_min_crore": (0.1, 1000.0), "h": (5, 250), "risk_multiplier": (0.25, 1.0)}
+NULLABLE = {"K", "cap_fraction"}
+# Stored but not read by any job yet: the scheduler collects broker data for its --symbols argument.
+UNSUPPORTED_POLICY_KEYS = {"symbols": "stored only; the scheduler uses its --symbols argument"}
 REQUEST_KINDS = {"prepare", "fetch_public", "build_master", "panel_build", "decide", "evaluate"}
 REQUESTS_DIR = "requests"
+IDEMPOTENT_REQUESTS = {"prepare", "fetch_public", "build_master", "panel_build"}
+MAX_REQUEST_ATTEMPTS = 2
+PROCESS_TOKEN = uuid.uuid4().hex  # identifies this scheduler process in request files (restart detection)
 
 
 def policy(root: Path) -> dict:
@@ -106,13 +116,24 @@ def policy(root: Path) -> dict:
     return out
 
 
+def effective_policy(root: Path, saved: dict | None = None):
+    """The allocator policy the next decision or evaluation will use (persisted with each of them)."""
+    from .quant.allocate import Policy
+    return Policy.from_owner(saved or policy(root))
+
+
 def set_policy(root: Path, updates: dict) -> dict:
-    """Validate and store owner policy edits. Unknown keys and out-of-range values are refused."""
+    """Validate and store owner policy edits. Unknown keys, out-of-range values, unimplemented candidates and
+    families, and horizons outside the candidate's registered trials are refused."""
     import re
+    from .quant import candidates
     current = policy(root)
     for k, v in updates.items():
         if k not in POLICY_DEFAULTS:
             raise ValueError(f"unknown policy key {k}")
+        if k in NULLABLE and v is None:
+            current[k] = None  # back to the spec default for the capital
+            continue
         if k in POLICY_BOUNDS:
             lo, hi = POLICY_BOUNDS[k]
             try:
@@ -123,8 +144,9 @@ def set_policy(root: Path, updates: dict) -> dict:
                 raise ValueError(f"{k} must be between {lo} and {hi}")
             current[k] = num
         elif k == "candidate":
-            if v not in ("A", "B", "C"):
+            if v not in candidates.REGISTRY:
                 raise ValueError("candidate must be A, B or C")
+            candidates.require(v)  # B and C: UNIMPLEMENTED
             current[k] = v
         elif k == "symbols":
             if not isinstance(v, list) or len(v) > 50 or not all(isinstance(x, str) and re.fullmatch(r"[A-Z0-9&.-]{1,20}", x) for x in v):
@@ -133,7 +155,12 @@ def set_policy(root: Path, updates: dict) -> dict:
         elif k == "families":
             if not isinstance(v, dict):
                 raise ValueError("families must be an object")
-            current["families"] = {f: bool(v.get(f, current["families"][f])) for f in current["families"]}
+            fam = {f: bool(v.get(f, current["families"][f])) for f in current["families"]}
+            for f, on in fam.items():
+                if on and not candidates.REGISTRY[f].implemented:
+                    raise ValueError(f"UNIMPLEMENTED: family {f} cannot be enabled: {candidates.REGISTRY[f].reason}")
+            current["families"] = fam
+    candidates.require(current["candidate"], int(current["h"]))  # e.g. A is registered for h = 20 and 60 only
     current["changed_at"] = now().isoformat()
     atomic_json(root / POLICY_FILE, current)
     return current
@@ -148,13 +175,14 @@ def submit_request(root: Path, kind: str, args: dict | None = None, at=None) -> 
     clean = {}
     if "date" in args:
         clean["date"] = date.fromisoformat(str(args["date"])).isoformat()
-    if kind == "evaluate":
-        clean["candidate"] = str(args.get("candidate", "A"))[:1]
-        clean["h"] = int(args.get("h", 20))
-        if not 5 <= clean["h"] <= 250 or clean["candidate"] not in ("A", "B", "C"):
-            raise ValueError("evaluate needs candidate A/B/C and 5 <= h <= 250")
+    if kind in ("evaluate", "decide"):
+        from .quant import candidates
+        pol = policy(root)
+        clean["candidate"] = str(args.get("candidate", pol["candidate"]))[:1]
+        clean["h"] = int(args.get("h", pol["h"]))
+        candidates.require(clean["candidate"], clean["h"])  # Unimplemented (a ValueError) -> HTTP 400
     req = {"id": uuid.uuid4().hex[:12], "kind": kind, "args": clean, "submitted_at": (timestamp(at) if at else now()).isoformat(),
-           "state": "QUEUED"}
+           "state": "QUEUED", "attempt": 0}
     folder = root / REQUESTS_DIR
     folder.mkdir(parents=True, exist_ok=True)
     atomic_json(folder / f"{req['submitted_at'][:19].replace(':', '')}_{req['id']}.json", req)
@@ -188,21 +216,61 @@ def _run_request(ctx, req: dict) -> dict:
         from .quant import panel as qpanel
         return {"result": qpanel.build(ctx.market, calendar=ctx.cal)}
     pol = policy(ctx.root)
+    from . import decisions
     from .quant import decide as qdecide, evaluate as qevaluate, universe as quniverse
     from .quant.panel import Panel
     from .quant.universe import ScreenPolicy
     cfg = qevaluate.Config(candidate=args.get("candidate", pol["candidate"]), h=int(args.get("h", pol["h"])), W=float(pol["capital"]),
-                           screen=ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=float(pol["capital"])))
+                           screen=ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=float(pol["capital"])),
+                           policy=effective_policy(ctx.root, pol))
     ri = lambda d: quniverse.rule_inputs_for(ctx.market, d, ctx.cal)  # noqa: E731
-    pn = Panel(ctx.market / "panel.sqlite3")
+    panel_path = ctx.market / "panel.sqlite3"
+    pn = Panel(panel_path) if panel_path.exists() else None
     try:
         if kind == "decide":
-            out = qdecide.latest_decision(pn, cfg, promoted=False, rule_inputs_fn=ri, out_dir=Path("data/runs/decisions"))
-            return {"result": {k: out.get(k) for k in ("day", "action", "reasons")}}
-        out = qevaluate.walk_forward(pn, cfg, out_dir=Path("data/runs/eval"), rule_inputs_fn=ri, progress=lambda *_: None)
+            out = qdecide.run(pn, cfg, root=ctx.root, origin="controls", families=pol["families"], rule_inputs_fn=ri,
+                              extra={"request_id": req["id"]})
+            return {"result": {k: out.get(k) for k in ("decision_id", "day", "action", "reasons")}}
+        if pn is None:
+            raise ValueError("PANEL_NOT_BUILT: build the price panel first")
+        out = qevaluate.walk_forward(pn, cfg, out_dir=decisions.runs_dir(ctx.root) / "eval", rule_inputs_fn=ri,
+                                     progress=lambda *_: None)
         return {"result": {k: out.get(k) for k in ("trial_id", "folds_done", "n_trades", "net_rupees_total")}}
     finally:
-        pn.close()
+        if pn is not None:
+            pn.close()
+
+
+def recover_requests(ctx, at=None) -> list[str]:
+    """RUNNING requests whose worker is gone (a previous scheduler process, or a dead thread in this one) are
+    marked INTERRUPTED. Idempotent file and panel jobs are re-queued under the same request id (at most
+    MAX_REQUEST_ATTEMPTS starts); decisions and evaluations are not re-run automatically: resubmit them."""
+    folder = ctx.root / REQUESTS_DIR
+    if not folder.exists():
+        return []
+    worker = getattr(ctx, "_request_thread", None)
+    alive = worker is not None and worker.is_alive()
+    when = (timestamp(at) if at else now()).isoformat()
+    out = []
+    for p in sorted(folder.glob("*.json")):
+        req = read_json(p, {})
+        if req.get("state") != "RUNNING":
+            continue
+        if req.get("worker") == PROCESS_TOKEN and alive:
+            continue
+        reason = "SCHEDULER_RESTARTED" if req.get("worker") != PROCESS_TOKEN else "WORKER_THREAD_ENDED"
+        history = list(req.get("history", [])) + [{"state": "INTERRUPTED", "at": when, "reason": reason,
+                                                   "started_at": req.get("started_at"), "worker_pid": req.get("worker_pid")}]
+        req["history"] = history
+        if req.get("kind") in IDEMPOTENT_REQUESTS and int(req.get("attempt", 1)) < MAX_REQUEST_ATTEMPTS:
+            req["state"] = "QUEUED"
+        else:
+            req.update(state="INTERRUPTED", finished_at=when,
+                       error=f"{reason}: the worker stopped before finishing; not retried automatically "
+                             "(decisions and evaluations are immutable records; resubmit to run again)")
+        atomic_json(p, req)
+        out.append(req["id"])
+    return out
 
 
 def process_requests(ctx, at=None) -> list:
@@ -214,12 +282,14 @@ def process_requests(ctx, at=None) -> list:
     worker = getattr(ctx, "_request_thread", None)
     if worker is not None and worker.is_alive():
         return []
+    recover_requests(ctx, at)
     queued = [p for p in sorted(folder.glob("*.json")) if read_json(p, {}).get("state") == "QUEUED"]
     if not queued:
         return []
     path = queued[0]
     req = read_json(path, {})
-    req["state"], req["started_at"] = "RUNNING", (timestamp(at) if at else now()).isoformat()
+    req.update(state="RUNNING", started_at=(timestamp(at) if at else now()).isoformat(), worker=PROCESS_TOKEN,
+               worker_pid=os.getpid(), attempt=int(req.get("attempt", 0)) + 1)
     atomic_json(path, req)
 
     def run():
@@ -364,7 +434,7 @@ def job_prepare(ctx, args):
             built += 1
             ctx.catalog_append("instrument_snapshot", name, {"snapshot": master.snapshot_json(snap), "provenance": prov})
     if not control(ctx.root)["analysis_paused"]:
-        record_decision(ctx, args["day"], "WAIT", ["MODEL_NOT_VALIDATED"], symbols=ctx.symbols, late_start=late)
+        scheduled_decision(ctx, args["day"], late_start=late)
     return f"OK:master={summary['listings']},snapshots={built},blocked={len(blocked)}" + (",late" if late else "")
 
 
@@ -390,16 +460,34 @@ class JobFailed(RuntimeError):
     pass
 
 
-def record_decision(ctx, day, action, reasons, symbols=(), late_start=False):
-    from .research import explain
-    entry = {"day": day.isoformat(), "action": action, "reasons": reasons, "symbols": list(symbols),
-             "explanation": explain({"reasons": reasons}), "model_id": None, "simulated": True, "live_orders": False,
-             "late_start": bool(late_start)}
-    db = Store(ctx.root / "evidence.sqlite3")
+def record_decision(ctx, day, action, reasons, symbols=(), late_start=False, extra=None):
+    """The scheduler's daily record: one id per session (a restart re-uses it), via the shared recorder."""
+    from . import decisions
+    body = {"day": day.isoformat(), "action": action, "reasons": list(reasons), "symbols": list(symbols),
+            "late_start": bool(late_start), "model_id": None, **(extra or {})}
+    return decisions.record(ctx.root, body, origin="scheduler", decision_id=decisions.scheduled_id(day))
+
+
+def scheduled_decision(ctx, day, late_start=False):
+    """Gate order of spec 5.2 for the configured candidate: an unimplemented candidate, a disabled family or the
+    absence of a verified promotion record each give a WAIT without fitting anything; with a verified promotion
+    the full decision is queued as a request (it can take minutes and must not block the tick)."""
+    from . import decisions
+    from .quant import candidates, registry
+    pol = policy(ctx.root)
+    eff = effective_policy(ctx.root, pol)
+    extra = {"candidate": pol["candidate"], "h": pol["h"], "policy": eff.to_json(), "policy_digest": eff.digest()}
     try:
-        db.append("paper_decision", "marketlab:analysis", day.isoformat(), entry)
-    finally:
-        db.close()
+        spec = candidates.require(pol["candidate"], int(pol["h"]))
+    except candidates.Unimplemented:
+        return record_decision(ctx, day, "WAIT", ["UNIMPLEMENTED_CANDIDATE"], ctx.symbols, late_start, extra)
+    if not pol["families"].get(spec.family, False):
+        return record_decision(ctx, day, "WAIT", ["FAMILY_DISABLED_BY_OWNER"], ctx.symbols, late_start, extra)
+    promo, problems = registry.verified_promotion(decisions.runs_dir(ctx.root), pol["candidate"], int(pol["h"]), eff.digest())
+    if promo is None:
+        return record_decision(ctx, day, "WAIT", ["MODEL_NOT_PROMOTED"], ctx.symbols, late_start,
+                               extra | {"promotion_check": problems})
+    return submit_request(ctx.root, "decide", {"candidate": pol["candidate"], "h": pol["h"]})
 
 
 # ---- tick ----------------------------------------------------------------------------------------
@@ -485,6 +573,9 @@ def tick(ctx: Context, at=None, jobs=None) -> dict:
                                                                            if st.get("auth_invalid") else {})
     st["updated_at"] = at.isoformat()
     st["calendar"] = ctx.calendar_report
+    st["interval_seconds"] = getattr(ctx, "interval", None)
+    st["process"] = {"pid": os.getpid(), "token": PROCESS_TOKEN[:8], "root": str(ctx.root.resolve()),
+                     "market": str(ctx.market.resolve())}
     st["live_orders"] = False
     if previous != st["state"]:
         alert(ctx, st["state"] if st["state"] != "RUNNING" else ("RECOVERED" if previous else None))
@@ -527,6 +618,7 @@ def heartbeat(ctx, st, at):
 
 
 def run_forever(ctx: Context, interval=60, iterations=None, sleep=time.sleep):
+    ctx.interval = interval
     with single_instance(ctx.root / LOCK_FILE):
         n = 0
         while iterations is None or n < iterations:

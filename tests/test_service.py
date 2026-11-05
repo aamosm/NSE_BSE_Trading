@@ -173,13 +173,15 @@ def test_pause_only_affects_analysis(tmp_path):
 
 def test_decision_record_is_idempotent_across_restarts(tmp_path):
     c = ctx(tmp_path)
-    service.record_decision(c, date(2026, 11, 5), "WAIT", ["MODEL_NOT_VALIDATED"], ["NSE:AAA"])
-    service.record_decision(c, date(2026, 11, 5), "WAIT", ["MODEL_NOT_VALIDATED"], ["NSE:AAA"])
+    first = service.scheduled_decision(c, date(2026, 11, 5))
+    again = service.scheduled_decision(service.Context(c.root, c.market, ["NSE:AAA"], calendar=CAL, pause=0), date(2026, 11, 5))
     db = Store(c.root / "evidence.sqlite3")
     rows = db.as_of("paper_decision", "2026-11-05", at(6, 0))
     db.close()
-    assert len(rows) == 1 and rows[0]["payload"]["simulated"] is True
-    assert "not passed paper-trading validation" in rows[0]["payload"]["explanation"]
+    assert len(rows) == 1 and rows[0]["payload"]["simulated"] is True and first == again
+    assert first["decision_id"] == "20261105-scheduler-daily" and first["reasons"] == ["MODEL_NOT_PROMOTED"]
+    assert "verified promotion record" in rows[0]["payload"]["explanation"]
+    assert (tmp_path / "runs" / first["artifact"]).exists()  # the same recorder the CLI and Controls use
 
 
 def test_second_scheduler_is_refused(tmp_path):
