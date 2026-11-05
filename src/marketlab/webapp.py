@@ -384,7 +384,7 @@ def universe_view(market: Path, day: date | None = None, root: Path | None = Non
         return {"error": "PANEL_NOT_BUILT"}
     from . import sources
     from .quant.panel import Panel
-    from .quant.universe import ScreenPolicy, rule_inputs_for, screen
+    from .quant.universe import ScreenPolicy, screen_for_day
     pol = service.policy(root or Path("data/private"))
     pn = Panel(panel_path)
     try:
@@ -393,7 +393,7 @@ def universe_view(market: Path, day: date | None = None, root: Path | None = Non
             return {"error": "PANEL_EMPTY"}
         day = day or sessions[-1]
         cal = sources.load_calendar(market)[0]
-        s = screen(pn, day, ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=pol["capital"]), rule_inputs_for(market, day, cal), sessions)
+        s = screen_for_day(pn, day, ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=pol["capital"]), market, cal)
         rows = []
         if s.isins:
             xs = {isin: b for isin, b in pn.cross_section(day)}
@@ -404,34 +404,53 @@ def universe_view(market: Path, day: date | None = None, root: Path | None = Non
     finally:
         pn.close()
     return _jsonable({"day": day.isoformat(), "kept": len(s.isins), "unverified": s.unverified, "stats": s.stats, "rows": rows,
+                      "rule_inputs": s.availability, "note": "Rule files are those of the entry session (the next session).",
                       "policy": {"v_min_crore": pol["v_min_crore"], "capital": pol["capital"]}})
 
 
+def _report_summary(r: dict, key: str, kind: str) -> dict:
+    pr = r.get("promotion") or {}
+    return {"key": key, "kind": kind, "trial_id": r.get("trial_id"), "run_id": r.get("run_id"),
+            "generated_at": r.get("generated_at"), "folds_done": r.get("folds_done"), "n_trades": r.get("n_trades"),
+            "net_rupees_total": r.get("net_rupees_total"), "folds_positive": r.get("folds_positive"),
+            "verdict": pr.get("verdict"), "coverage_80": pr.get("coverage_80_pooled", r.get("coverage_80_mean")),
+            "brier_skill": pr.get("brier_skill_pooled", r.get("brier_skill_mean")),
+            "sharpe_per_trade": (r.get("pooled") or {}).get("sharpe_per_trade"), "sessions": r.get("sessions"),
+            "data_end": r.get("data_end"), "manifest_hash": (r.get("manifest_hash") or "")[:12],
+            "feature_builder": (r.get("candidate_spec") or {}).get("feature_builder")}
+
+
 def evaluation_view(trial: str | None = None, root: Path | None = None) -> dict:
-    folder = (_runs(root) if root is not None else (RUNS or Path("data/runs"))) / "eval"
-    if not folder.exists():
-        return {"reports": []}
+    """Immutable run reports: runs/eval/<trial>/<run>.json (development), runs/holdout/<trial>/<run>.json (the
+    single holdout evaluation) and older flat files (legacy). ``trial`` selects one report by its key."""
+    runs = _runs(root) if root is not None else (RUNS or Path("data/runs"))
+    found = []
+    for kind, pattern in (("development", "eval/*/*.json"), ("holdout", "holdout/*/*.json"), ("legacy", "eval/*.json")):
+        for p in sorted(runs.glob(pattern)):
+            found.append((str(p.relative_to(runs)).replace("\\", "/").removesuffix(".json"), kind, p))
     if trial:
-        safe = "".join(ch for ch in trial if ch.isalnum() or ch in ".-_")
-        p = folder / (safe + ".json")
-        if not p.exists():
+        safe = "".join(ch for ch in trial if ch.isalnum() or ch in ".-_/")
+        match = next(((k, kind, p) for k, kind, p in found if k == safe or (kind == "legacy" and k == "eval/" + safe)), None)
+        if match is None or ".." in safe:
             return {"error": "NOT_FOUND"}
-        rep = json.loads(p.read_text(encoding="utf-8"))
+        rep = json.loads(match[2].read_text(encoding="utf-8"))
         for f in rep.get("folds", []):
             sim = f.get("simulation") or {}
             if "trades" in sim:
                 sim["trades"] = sim["trades"][-200:]
-        return rep
+        return rep | {"key": match[0], "kind": match[1]}
     reports = []
-    for p in sorted(folder.glob("*.json")):
+    for key, kind, p in found:
         try:
-            r = json.loads(p.read_text(encoding="utf-8"))
+            reports.append(_report_summary(json.loads(p.read_text(encoding="utf-8")), key, kind))
         except (ValueError, OSError):
             continue
-        reports.append({k: r.get(k) for k in ("trial_id", "generated_at", "folds_done", "n_trades", "net_rupees_total",
-                                              "folds_positive", "coverage_80_mean", "brier_skill_mean", "rows", "sessions")}
-                       | {"sharpe_per_trade": (r.get("pooled") or {}).get("sharpe_per_trade"), "config": r.get("config")})
-    return {"reports": reports}
+    return {"reports": reports, "holdout": registry_manifest(runs)}
+
+
+def registry_manifest(runs: Path) -> dict | None:
+    from .quant import registry
+    return registry.holdout_manifest(runs)
 
 
 def decision_view(root: Path, decision_id: str | None = None) -> dict:

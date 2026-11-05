@@ -223,19 +223,21 @@ def _run_request(ctx, req: dict) -> dict:
     cfg = qevaluate.Config(candidate=args.get("candidate", pol["candidate"]), h=int(args.get("h", pol["h"])), W=float(pol["capital"]),
                            screen=ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=float(pol["capital"])),
                            policy=effective_policy(ctx.root, pol))
-    ri = lambda d: quniverse.rule_inputs_for(ctx.market, d, ctx.cal)  # noqa: E731
     panel_path = ctx.market / "panel.sqlite3"
     pn = Panel(panel_path) if panel_path.exists() else None
     try:
-        if kind == "decide":
+        if kind == "decide":  # forward decision: rule files received before the decision only
+            ri = lambda d: quniverse.rule_inputs_for(ctx.market, d, ctx.cal, "RECEIPT")  # noqa: E731
             out = qdecide.run(pn, cfg, root=ctx.root, origin="controls", families=pol["families"], rule_inputs_fn=ri,
-                              extra={"request_id": req["id"]})
+                              calendar=ctx.cal, extra={"request_id": req["id"]})
             return {"result": {k: out.get(k) for k in ("decision_id", "day", "action", "reasons")}}
         if pn is None:
             raise ValueError("PANEL_NOT_BUILT: build the price panel first")
-        out = qevaluate.walk_forward(pn, cfg, out_dir=decisions.runs_dir(ctx.root) / "eval", rule_inputs_fn=ri,
+        ri = lambda d: quniverse.rule_inputs_for(ctx.market, d, ctx.cal, cfg.availability)  # noqa: E731
+        out = qevaluate.walk_forward(pn, cfg, runs=decisions.runs_dir(ctx.root), calendar=ctx.cal, rule_inputs_fn=ri,
                                      progress=lambda *_: None)
-        return {"result": {k: out.get(k) for k in ("trial_id", "folds_done", "n_trades", "net_rupees_total")}}
+        return {"result": {k: out.get(k) for k in ("trial_id", "run_id", "folds_done", "n_trades", "net_rupees_total")}
+                | {"verdict": (out.get("promotion") or {}).get("verdict")}}
     finally:
         if pn is not None:
             pn.close()

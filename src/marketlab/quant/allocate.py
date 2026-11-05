@@ -4,6 +4,12 @@ Objective over quantities q_i (V_i = q_i P_i):
     sum_i [(mu_i - c_v - s_in - s_out) V_i - F 1[q_i>0]] - gamma/2 sum_ij V_i V_j sigma_i sigma_j rho_ij
 subject to cash after buy fees, per-stock cap, position count K, long-only integers. Exact enumeration for small
 instances; otherwise continuous optimum per subset then integer neighbourhood search with exact feasibility.
+
+mu is a forecast of the GROSS excess return (labels carry no slippage or charges), so slippage and charges are
+subtracted here exactly once. The preliminary gate (spec 5.2 gates 4-5) is evaluated at the largest permissible
+position; the chosen whole-share quantity is then re-checked with exact rupee-rounded charges at that quantity
+(``position_gate``), together with exact cash at the order's cash price. A plan never contains a position that
+fails its own gate at the size actually chosen.
 """
 from __future__ import annotations
 
@@ -29,6 +35,10 @@ class Candidate:
     q10: float = float("nan")
     symbol: str = ""
     sector: str | None = None
+    cash_price: float = 0.0  # funds blocked per share (e.g. the limit price); 0 = price
+
+    def blocked_price(self) -> float:
+        return self.cash_price if self.cash_price > 0 else self.price
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +107,32 @@ def entry_gate(c: Candidate, policy: Policy) -> tuple[bool, list[str]]:
     return (not reasons), reasons
 
 
+def position_costs(c: Candidate, q: int) -> dict:
+    """Exact round-trip costs of q shares at the decision price: buy and sell charges with rupee-rounded STT,
+    the DP charge, and modelled slippage (rupees and fractions of the position value)."""
+    v = q * c.price
+    if q <= 0 or v <= 0:
+        return {"value": 0.0, "charges": 0.0, "slippage": 0.0, "cost_fraction": float("inf")}
+    dv = Decimal(str(round(v, 2)))
+    buy = sum(charges(dv, side="BUY", style="delivery").values(), Decimal("0"))
+    sell = sum(charges(dv, side="SELL", style="delivery", dp=True).values(), Decimal("0"))
+    total = float(buy + sell)
+    return {"value": round(v, 2), "buy_charges": float(buy), "sell_charges_incl_dp": float(sell), "charges": total,
+            "slippage": round(v * c.slippage, 2), "charge_fraction": total / v, "cost_fraction": total / v + c.slippage}
+
+
+def position_gate(c: Candidate, q: int, policy: "Policy") -> tuple[list[str], dict]:
+    """Gates 4 and 5 at the actual whole-share quantity: mu - costs(q) >= m_min and q10 - costs(q) >= -L."""
+    pc = position_costs(c, q)
+    reasons = []
+    net = c.mu - pc["cost_fraction"]
+    if net < policy.min_edge:
+        reasons.append("EDGE_BELOW_COST_AT_QUANTITY")
+    if not math.isnan(c.q10) and c.q10 - pc["cost_fraction"] < -policy.tail_limit:
+        reasons.append("TAIL_LIMIT_AT_QUANTITY")
+    return reasons, pc | {"net_edge": net, "threshold": pc["cost_fraction"] + policy.min_edge}
+
+
 def objective(values: list[float], cands: list[Candidate], corr: list[list[float]], policy: Policy) -> float:
     g = policy.risk_aversion()
     ret = 0.0
@@ -125,7 +161,7 @@ def feasible(qs: list[int], cands: list[Candidate], policy: Policy, cash_availab
         if v > cap + 1e-9:
             return False
         held += 1
-        spend += v * (1 + BUY_VARIABLE)
+        spend += q * c.blocked_price() * (1 + BUY_VARIABLE)
         if c.sector:
             sectors[c.sector] = sectors.get(c.sector, 0.0) + v
     if held > policy.K or spend > cash_available + 1e-9:
@@ -134,11 +170,12 @@ def feasible(qs: list[int], cands: list[Candidate], policy: Policy, cash_availab
 
 
 def exact_charges_feasible(qs: list[int], cands: list[Candidate], cash_available: float) -> bool:
-    """Recompute buy-side charges with the cited fee schedule (rupee-rounded STT) before accepting a plan."""
+    """Recompute buy-side charges with the cited fee schedule (rupee-rounded STT) at the blocked (cash) price
+    before accepting a plan."""
     total = Decimal("0")
     for q, c in zip(qs, cands):
         if q > 0:
-            v = Decimal(str(round(q * c.price, 2)))
+            v = Decimal(str(round(q * c.blocked_price(), 2)))
             total += v + sum(charges(v, side="BUY", style="delivery").values(), Decimal("0"))
     return float(total) <= cash_available + 1e-6
 
@@ -159,12 +196,19 @@ def _continuous_subset(idx: list[int], cands, corr, policy, cash_available) -> l
             if abs(v - V[a]) > 1e-6:
                 V[a] = v
                 changed = True
-        total = sum(V) * (1 + BUY_VARIABLE)
+        total = sum(v * cands[i].blocked_price() / cands[i].price for v, i in zip(V, idx)) * (1 + BUY_VARIABLE)
         if total > cash_available:
             V = [v * cash_available / total for v in V]
         if not changed:
             break
     return V
+
+
+def _accept(qs, subset, cands, policy, cash_available) -> bool:
+    """Exact cash at the blocked price, and every held position passes its gate at the chosen quantity."""
+    if not exact_charges_feasible(qs, cands, cash_available):
+        return False
+    return all(not position_gate(cands[i], qs[i], policy)[0] for i in subset if qs[i] > 0)
 
 
 def plan(cands: list[Candidate], corr: list[list[float]], policy: Policy, cash_available: float, *,
@@ -191,7 +235,7 @@ def plan(cands: list[Candidate], corr: list[list[float]], policy: Policy, cash_a
                         qs[i] = q
                     if feasible(qs, cands, policy, cash_available):
                         val = objective([q * c.price for q, c in zip(qs, cands)], cands, corr, policy)
-                        if val > best[0]:
+                        if val > best[0] and _accept(qs, subset, cands, policy, cash_available):
                             best = (val, qs[:], "enumeration")
                     for i in subset:
                         qs[i] = 0
@@ -204,20 +248,25 @@ def plan(cands: list[Candidate], corr: list[list[float]], policy: Policy, cash_a
                         qs[i] = q
                     if feasible(qs, cands, policy, cash_available):
                         val = objective([q * c.price for q, c in zip(qs, cands)], cands, corr, policy)
-                        if val > best[0]:
+                        if val > best[0] and _accept(qs, subset, cands, policy, cash_available):
                             best = (val, qs[:], "neighbourhood")
                     for i in subset:
                         qs[i] = 0
     val, qs, method = best
-    if method != "cash" and not exact_charges_feasible(qs, cands, cash_available):
-        # exact rupee-rounded charges exceeded the linear estimate: shave one share off the largest position
-        i = max(range(len(qs)), key=lambda k: qs[k] * cands[k].price)
-        qs[i] -= 1
-        val = objective([q * c.price for q, c in zip(qs, cands)], cands, corr, policy) if any(qs) else 0.0
-        method += "+repair"
+    positions = {cands[i].isin: position_gate(cands[i], q, policy)[1] | {"q": q}
+                 for i, q in enumerate(qs) if q > 0}
+    at_quantity = {}
+    for c in passing:
+        if c.isin not in positions:
+            best_q = int(min(cap, policy.W * (1 - policy.reserve_fraction)) // c.price) if c.price > 0 else 0
+            reasons = position_gate(c, best_q, policy)[0] if best_q > 0 else ["NO_WHOLE_SHARE_FITS"]
+            if reasons:
+                at_quantity[c.isin] = reasons
+    if method == "cash" and at_quantity:
+        rejected.update(at_quantity)
     return {"quantities": {cands[i].isin: q for i, q in enumerate(qs) if q > 0}, "objective": val,
             "values": {cands[i].isin: round(q * cands[i].price, 2) for i, q in enumerate(qs) if q > 0},
-            "rejected": rejected, "method": method}
+            "positions": positions, "rejected": rejected, "method": method}
 
 
 # ---- EXIT.v1 ----------------------------------------------------------------------------------------------

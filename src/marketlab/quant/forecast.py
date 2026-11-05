@@ -160,9 +160,10 @@ def block_bootstrap_betas(grams, days, lam, block_len, B, rng) -> list[list[floa
     return out
 
 
-def predict(model: Model, x: dict[str, float], sigma: float, *, cost_threshold: float = 0.0, tau: float = TAU_DEFAULT) -> dict:
-    """Forecast fields for one security. ``sigma`` = vol_20 * sqrt(h). ``cost_threshold`` is the gross return that
-    nets to zero for the intended quantity (b(qP) + slippage); p_net_positive uses it."""
+def predict(model: Model, x: dict[str, float], sigma: float, *, tau: float = TAU_DEFAULT) -> dict:
+    """Forecast fields for one security. ``sigma`` = vol_20 * sqrt(h). ``p_positive`` = P(gross excess return > 0),
+    quantity-independent (spec 4.5). The probability that the active return beats the round-trip costs of a
+    particular whole-share quantity is computed by the allocator's caller at that quantity, not here."""
     if model.calibration_n < MIN_CALIBRATION:
         return {"abstain": "INSUFFICIENT_CALIBRATION", "calibration_n": model.calibration_n}
     xv = design_vector(x)
@@ -177,7 +178,6 @@ def predict(model: Model, x: dict[str, float], sigma: float, *, cost_threshold: 
         "mu_hat": mu, "se": se, "mu_shrunk": shrink(mu, se, tau), "sigma_hat": sigma, "tau": tau,
         "q10": mu + sigma * conformal_z(z, 0.1), "q50": mu + sigma * conformal_z(z, 0.5), "q90": mu + sigma * conformal_z(z, 0.9),
         "p_positive": conformal_probability_above(z, (0.0 - mu) / sigma) if sigma > 0 else float("nan"),
-        "p_net_positive": conformal_probability_above(z, (cost_threshold - mu) / sigma) if sigma > 0 else float("nan"),
         "calibration_n": model.calibration_n, "target_id": model.target_id, "h": model.h, "lam": model.lam,
     }
 

@@ -5,6 +5,11 @@ Tables (SQLite, ``market/panel.sqlite3``, rebuildable from the raw files):
   sessions(day)                      sessions present in the panel (one bhavcopy each)
   index_levels(name, day, open, high, low, close, pe, pb, dy)
   implied_factors(isin, day, factor) exchange-implied corporate-action factors (spec section 2.4)
+  factor_coverage(day, status)       CHECKED when the calendar's previous session is stored, else UNCHECKED
+
+``Panel.view(end)`` gives a read-only view whose every query stops at ``end``: the development evaluation reads the
+panel only through a view ending before the frozen holdout, so later prices cannot reach it, and
+``content_hash`` fingerprints exactly what a view can see.
 
 ``prev_close`` is the exchange's base price for the day: on an ex-date it is already adjusted, so the daily log
 return ln(close / prev_close) needs no separate adjustment, and the factor prev_close / prior_close records the
@@ -12,6 +17,8 @@ action. ETFs are flagged by name so that the universe can exclude them.
 """
 from __future__ import annotations
 
+import copy
+import hashlib
 import math
 import sqlite3
 from array import array
@@ -24,7 +31,7 @@ from ..master import parse_bhavcopy
 
 EQUITY_SERIES = ("EQ", "BE", "BZ", "SM", "ST", "SZ")
 FACTOR_TOLERANCE = 0.0005  # |prev_close/prior_close - 1| above this is an adjustment (or a data problem)
-ETF_MARKERS = ("ETF", "BEES", "EXCHANGE TRADED", "GOLD", "SILVER", "LIQUID")
+ETF_MARKERS = ("ETF", "BEES", "EXCHANGE TRADED")  # spec 3.1: names containing ETF, plus INF-prefixed ISINs
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +72,22 @@ class Panel:
                 close REAL, pe REAL, pb REAL, dy REAL, PRIMARY KEY (name, day));
             CREATE TABLE IF NOT EXISTS implied_factors (isin TEXT NOT NULL, day TEXT NOT NULL, factor REAL NOT NULL,
                 prior_close REAL, prev_close REAL, PRIMARY KEY (isin, day));
+            CREATE TABLE IF NOT EXISTS factor_coverage (day TEXT PRIMARY KEY, status TEXT NOT NULL);
         """)
+        self.end_limit: date | None = None
+
+    def view(self, end: date | None) -> "Panel":
+        """A view sharing this connection whose queries never return anything after ``end`` (None: no limit)."""
+        v = copy.copy(self)
+        v.end_limit = end if self.end_limit is None or end is None else min(end, self.end_limit)
+        if end is None:
+            v.end_limit = self.end_limit
+        return v
+
+    def _end(self, end: date | None) -> date | None:
+        if self.end_limit is None:
+            return end
+        return self.end_limit if end is None else min(end, self.end_limit)
 
     # ---- building ------------------------------------------------------------------------------
 
@@ -115,16 +137,20 @@ class Panel:
         n, unchecked = 0, []
         with self.db:
             self.db.execute("DELETE FROM implied_factors")
+            self.db.execute("DELETE FROM factor_coverage")
             prior_day = None
             for d in days:
                 try:
                     prev_day = cal.previous_trading_day(Exchange.NSE, d)
                 except RuleUnknown:
                     unchecked.append(d.isoformat())
+                    self.db.execute("INSERT INTO factor_coverage VALUES (?, 'UNCHECKED')", (d.isoformat(),))
                     continue
                 if prev_day not in have:
                     unchecked.append(d.isoformat())
+                    self.db.execute("INSERT INTO factor_coverage VALUES (?, 'UNCHECKED')", (d.isoformat(),))
                     continue
+                self.db.execute("INSERT INTO factor_coverage VALUES (?, 'CHECKED')", (d.isoformat(),))
                 if prior_day != prev_day:
                     prior = {r[0]: r[1] for r in self.db.execute("SELECT isin, close FROM bars WHERE day=?", (prev_day.isoformat(),))}
                     prior_day = prev_day
@@ -142,6 +168,7 @@ class Panel:
     # ---- queries -------------------------------------------------------------------------------
 
     def sessions(self, start: date | None = None, end: date | None = None) -> list[date]:
+        end = self._end(end)
         q, args = "SELECT day FROM sessions", []
         conds = []
         if start:
@@ -153,6 +180,7 @@ class Panel:
         return [date.fromisoformat(r[0]) for r in self.db.execute(q + " ORDER BY day", args)]
 
     def bars(self, isin: str, start: date | None = None, end: date | None = None) -> list[Bar]:
+        end = self._end(end)
         q, args = "SELECT day, symbol, series, open, high, low, close, prev_close, volume, value, trades FROM bars WHERE isin=?", [isin]
         if start:
             q += " AND day >= ?"; args.append(start.isoformat())
@@ -161,19 +189,64 @@ class Panel:
         return [Bar(date.fromisoformat(r[0]), *r[1:]) for r in self.db.execute(q + " ORDER BY day", args)]
 
     def cross_section(self, day: date) -> list[tuple[str, Bar]]:
+        if self.end_limit is not None and day > self.end_limit:
+            return []
         rows = self.db.execute("SELECT isin, day, symbol, series, open, high, low, close, prev_close, volume, value, trades "
                                "FROM bars WHERE day=?", (day.isoformat(),)).fetchall()
         return [(r[0], Bar(date.fromisoformat(r[1]), *r[2:])) for r in rows]
 
-    def is_etf(self, isin: str) -> bool:
-        row = self.db.execute("SELECT name FROM bars WHERE isin=? ORDER BY day DESC LIMIT 1", (isin,)).fetchone()
-        name = (row[0] or "").upper() if row else ""
-        return any(m in name for m in ETF_MARKERS) or isin.startswith("INF")  # INF = mutual fund / ETF ISIN prefix
+    def names_on(self, day: date) -> dict[str, str]:
+        """Security names as printed in that session's bhavcopy (dated classification)."""
+        if self.end_limit is not None and day > self.end_limit:
+            return {}
+        return {r[0]: r[1] or "" for r in self.db.execute("SELECT isin, name FROM bars WHERE day=?", (day.isoformat(),))}
+
+    def is_etf(self, isin: str, day: date | None = None, name: str | None = None) -> bool:
+        """ETF by the name in force on ``day`` (the latest bar at or before it), never a later name."""
+        if name is None:
+            end = self._end(day)
+            q, args = "SELECT name FROM bars WHERE isin=?", [isin]
+            if end:
+                q += " AND day <= ?"
+                args.append(end.isoformat())
+            row = self.db.execute(q + " ORDER BY day DESC LIMIT 1", args).fetchone()
+            name = row[0] if row else ""
+        return is_etf_name(isin, name)
 
     def isins(self) -> list[str]:
+        if self.end_limit is not None:
+            return [r[0] for r in self.db.execute("SELECT DISTINCT isin FROM bars WHERE day <= ? ORDER BY isin",
+                                                  (self.end_limit.isoformat(),))]
         return [r[0] for r in self.db.execute("SELECT DISTINCT isin FROM bars ORDER BY isin")]
 
+    def unchecked_days(self, start: date | None = None, end: date | None = None) -> set[date]:
+        """Days whose corporate-action factor could not be computed (previous session missing or calendar unknown)."""
+        end = self._end(end)
+        q, args = "SELECT day FROM factor_coverage WHERE status='UNCHECKED'", []
+        if start:
+            q += " AND day >= ?"; args.append(start.isoformat())
+        if end:
+            q += " AND day <= ?"; args.append(end.isoformat())
+        return {date.fromisoformat(r[0]) for r in self.db.execute(q, args)}
+
+    def content_hash(self) -> str:
+        """SHA-256 over every row this panel (or view) can see: sessions with their source hashes, bars, index
+        levels, implied factors and factor coverage. Appending or changing rows after a view's end leaves the
+        view's hash unchanged."""
+        h = hashlib.sha256()
+        end = self.end_limit.isoformat() if self.end_limit else "9999-12-31"
+        for table, cols in (("sessions", "day, source_sha256"),
+                            ("bars", "isin, day, symbol, series, name, open, high, low, close, prev_close, volume, value, trades"),
+                            ("index_levels", "name, day, open, high, low, close, pe, pb, dy"),
+                            ("implied_factors", "isin, day, factor"), ("factor_coverage", "day, status")):
+            h.update(table.encode())
+            order = "day" if table in ("sessions", "factor_coverage") else ("name, day" if table == "index_levels" else "isin, day")
+            for row in self.db.execute(f"SELECT {cols} FROM {table} WHERE day <= ? ORDER BY {order}", (end,)):
+                h.update(repr(row).encode())
+        return h.hexdigest()
+
     def index_levels(self, name: str, start: date | None = None, end: date | None = None) -> dict[date, tuple[float, float]]:
+        end = self._end(end)
         q, args = "SELECT day, open, close FROM index_levels WHERE name=?", [name]
         if start:
             q += " AND day >= ?"; args.append(start.isoformat())
@@ -182,6 +255,7 @@ class Panel:
         return {date.fromisoformat(r[0]): (r[1], r[2]) for r in self.db.execute(q + " ORDER BY day", args)}
 
     def implied_factors(self, isin: str, start: date | None = None, end: date | None = None) -> dict[date, float]:
+        end = self._end(end)
         q, args = "SELECT day, factor FROM implied_factors WHERE isin=?", [isin]
         if start:
             q += " AND day >= ?"; args.append(start.isoformat())
@@ -189,9 +263,9 @@ class Panel:
             q += " AND day <= ?"; args.append(end.isoformat())
         return {date.fromisoformat(r[0]): r[1] for r in self.db.execute(q, args)}
 
-    def series_arrays(self, isin: str) -> dict:
-        """Compact columns for rolling computations: day list plus array('d') columns."""
-        bars = self.bars(isin)
+    def series_arrays(self, isin: str, end: date | None = None) -> dict:
+        """Compact columns for rolling computations: day list plus array('d') columns (bars up to ``end``)."""
+        bars = self.bars(isin, None, end)
         cols = {k: array("d") for k in ("open", "high", "low", "close", "prev_close", "volume", "value")}
         days = []
         for b in bars:
@@ -246,6 +320,11 @@ def build(market: Path, path: Path | None = None, after: date | None = None, cal
            "isins": len(panel.isins()), "path": str(panel.path)}
     panel.close()
     return out
+
+
+def is_etf_name(isin: str, name: str | None) -> bool:
+    n = (name or "").upper()
+    return isin.startswith("INF") or any(m in n for m in ETF_MARKERS)  # INF = mutual fund / ETF ISIN prefix
 
 
 def log_return(close: float, prev_close: float) -> float:

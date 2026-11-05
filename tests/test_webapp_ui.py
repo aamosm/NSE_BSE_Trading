@@ -47,7 +47,7 @@ def test_read_endpoints_degrade_gracefully_without_data(server):
     base, *_ = server
     assert call(base, "/api/data")[1] == {"sources": {}, "panel": None, "master": [], "missing_recent": {}}
     assert call(base, "/api/universe")[1] == {"error": "PANEL_NOT_BUILT"}
-    assert call(base, "/api/evaluation")[1] == {"reports": []}
+    assert call(base, "/api/evaluation")[1] == {"reports": [], "holdout": None}  # holdout not frozen yet
     assert call(base, "/api/decision")[1] == {"decision": None, "available": [], "diagnostics": None}
     code, r = call(base, "/api/research")
     assert code == 200 and r["provider"] == "none"

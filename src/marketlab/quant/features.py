@@ -1,4 +1,10 @@
-"""Feature set A (spec section 3.3), computed per security in one pass over its history (O(n))."""
+"""Feature set A (spec section 3.3), computed per security in one pass over its history (O(n)).
+
+The replay dataset and the live decision use the same rows: ``evaluate.build_dataset`` computes them for every
+decision session and ``decide`` takes the latest session's rows from that same dataset. Every value at session D
+depends only on bars and index levels at or before D. A missing or non-finite value stays missing (NaN) through
+standardization, so the decision abstains with FEATURE_COVERAGE instead of seeing a clipped number.
+"""
 from __future__ import annotations
 
 import math
@@ -100,9 +106,10 @@ def market_feature_rows(index_levels: dict[date, tuple[float, float]], breadth: 
     return out
 
 
-def breadth_50(panel: Panel, universe_by_day: dict[date, list[str]], closes: dict[str, dict[date, float]],
+def breadth_50(universe_by_day: dict[date, list[str]], closes: dict[str, dict[date, float]],
                sessions: list[date]) -> dict[date, float]:
-    """Fraction of the day's universe whose close is above its 50-session average close."""
+    """Fraction of the day's universe whose close is above its 50-session average close. ``sessions`` are exchange
+    sessions: a security (or a day) missing any of the 50 does not count, and with none counted breadth is missing."""
     out = {}
     idx = {d: i for i, d in enumerate(sessions)}
     for d, isins in universe_by_day.items():
@@ -122,27 +129,52 @@ def breadth_50(panel: Panel, universe_by_day: dict[date, list[str]], closes: dic
     return out
 
 
-def standardize_by_date(rows: list[dict], market_stats: dict | None = None) -> list[dict]:
-    """Stock features -> cross-sectional rank uniform per date; market features -> z-score with the supplied
-    (mean, std) per feature fitted on training dates, winsorized at +-3. Rows need keys day, isin, features."""
+def _finite(v) -> bool:
+    return isinstance(v, (int, float)) and math.isfinite(v)
+
+
+def rank_stock_features(rows: list[dict]) -> list[dict]:
+    """Stock features -> cross-sectional rank uniform on (-0.5, 0.5] per date, over the rows given (the whole
+    decision-time cross-section, not only rows whose outcome later resolved). Non-finite values stay NaN."""
     by_day: dict[date, list[int]] = {}
     for i, r in enumerate(rows):
         by_day.setdefault(r["day"], []).append(i)
-    out = [dict(r) for r in rows]
+    out = [dict(r, x=dict(r.get("x") or {})) for r in rows]
     for d, idxs in by_day.items():
         for f in STOCK_FEATURES:
-            vals = [rows[i]["features"][f] for i in idxs]
-            ranks = rank_uniform(vals) if len(vals) > 1 else [0.0]
-            for i, v in zip(idxs, ranks):
-                out[i].setdefault("x", {})[f] = v
-    for r in out:
+            ok = [i for i in idxs if _finite(rows[i]["features"].get(f))]
+            vals = [rows[i]["features"][f] for i in ok]
+            ranks = rank_uniform(vals) if len(vals) > 1 else [0.0] * len(vals)
+            for i in idxs:
+                out[i]["x"][f] = float("nan")
+            for i, v in zip(ok, ranks):
+                out[i]["x"][f] = v
+    return out
+
+
+def scale_market_features(rows: list[dict], market_stats: dict | None) -> list[dict]:
+    """Market features -> z-score with (mean, std) fitted on training dates, winsorized at +-3 AFTER checking the
+    value is finite (a NaN must not become +3). Without usable stats a feature is missing."""
+    for r in rows:
+        x = r.setdefault("x", {})
         for f in MARKET_FEATURES:
             v = r["features"].get(f, float("nan"))
-            if market_stats and f in market_stats and market_stats[f][1] > 0:
-                m, s = market_stats[f]
-                v = max(-3.0, min(3.0, (v - m) / s))
-            r.setdefault("x", {})[f] = 0.0 if math.isnan(v) else v
-    return out
+            st = (market_stats or {}).get(f)
+            if not _finite(v) or not st or not (st[1] > 0):
+                x[f] = float("nan")
+                continue
+            z = (v - st[0]) / st[1]
+            x[f] = max(-3.0, min(3.0, z))
+    return rows
+
+
+def standardize_by_date(rows: list[dict], market_stats: dict | None = None) -> list[dict]:
+    """Both steps (stock ranks per date, market z-scores with training stats). Rows need day, isin, features."""
+    return scale_market_features(rank_stock_features(rows), market_stats)
+
+
+def missing_features(x: dict) -> list[str]:
+    return [f for f in FEATURES if not _finite(x.get(f))]
 
 
 def market_stats(rows: list[dict]) -> dict:

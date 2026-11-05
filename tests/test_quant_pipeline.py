@@ -5,21 +5,13 @@ from datetime import date, timedelta
 
 import pytest
 
-from marketlab.quant import evaluate, features, labels
+from marketlab.quant import evaluate, features, labels, registry
 from marketlab.quant.panel import Panel
 from marketlab.quant.universe import ScreenPolicy, screen
+from synthetic import WeekdayCalendar
 
 START = date(2020, 1, 1)
-
-
-class WeekdayCalendar:
-    """Every weekday is a session (synthetic data only; real runs load the exchange calendar)."""
-
-    def previous_trading_day(self, exchange, d):
-        d -= timedelta(days=1)
-        while d.weekday() >= 5:
-            d -= timedelta(days=1)
-        return d
+CAL = WeekdayCalendar()
 
 
 def sessions(n):
@@ -81,18 +73,19 @@ def test_panel_round_trip_and_implied_factor(panel):
     assert panel.implied_factors("INE001A01001") == {}
 
 
-def test_label_uses_exchange_implied_factor_and_slippage(panel):
+def test_label_is_gross_and_applies_only_listed_implied_factors(panel):
     days = panel.sessions()
     d = days[590]  # window 591 .. 611 contains the bonus on day 600
-    lab = labels.forward_return(panel, "INE000A01001", d, 20, sessions=days)
+    unlisted = labels.forward_return(panel, "INE000A01001", d, 20, sessions=days)
+    assert unlisted.status == labels.EXCLUDED and unlisted.reason == "UNEXPLAINED_PRICE_ADJUSTMENT"  # spec 2.4
+    lab = labels.forward_return(panel, "INE000A01001", d, 20, sessions=days, listed_action_days={days[600]})
     assert lab.entry_day == days[591] and lab.exit_day == days[611] and lab.factor == pytest.approx(0.5)
     eb, xb = panel.bars("INE000A01001", days[591], days[591])[0], panel.bars("INE000A01001", days[611], days[611])[0]
-    s = labels.slippage_for(sorted(b.value for b in panel.bars("INE000A01001", days[571], d))[10])
-    expected = (xb.open * (1 - s) / 0.5) / (eb.open * (1 + s)) - 1
-    assert lab.gross == pytest.approx(expected) and lab.excess is not None
+    assert lab.gross == pytest.approx((xb.open / 0.5) / eb.open - 1)  # no slippage inside the label
+    assert lab.basis == "RECONSTRUCTED" and lab.excess is not None and lab.status == labels.RESOLVED
     # a decision on the bonus day itself: entry on day 601 is post-action, no factor applies
     assert labels.forward_return(panel, "INE000A01001", days[599], 20, sessions=days).factor == 1.0
-    assert labels.forward_return(panel, "INE000A01001", days[895], 20, sessions=days) is None  # unresolved
+    assert labels.forward_return(panel, "INE000A01001", days[895], 20, sessions=days).status == labels.UNRESOLVED
 
 
 def test_features_hand_computed_on_a_geometric_series():
@@ -147,46 +140,42 @@ def cfg(**kw):
     return evaluate.Config(**base)
 
 
-def test_walk_forward_purges_labels_overlapping_the_test_fold(panel):
+def test_walk_forward_purges_by_outcome_date(panel):
     c = cfg()
-    ds = evaluate.build_dataset(panel, c)
-    assert ds.rows and ds.label_exclusions == {}
-    fs = evaluate.folds(ds.sessions, c)
-    assert fs and fs[-1]["test_end"] < len(ds.sessions) - c.holdout_sessions  # holdout untouched
-    f = fs[0]
-    idx = {d: i for i, d in enumerate(ds.sessions)}
-    res = evaluate.run_fold(ds, f, c, "t")
-    expected = sum(1 for r in ds.rows if f["train_start"] <= idx[r["day"]] <= f["train_end"]
-                   and idx[r["day"]] + c.h + 1 < f["test_start"] - c.h)
+    ds = evaluate.build_dataset(panel, c, calendar=CAL)
+    assert ds.rows and ds.label_counts["EXCLUDED:UNEXPLAINED_PRICE_ADJUSTMENT"] > 0
+    f = evaluate.folds(ds.sessions, c)[0]
+    res = evaluate.run_fold(ds, f, c, "t", panel)
+    embargo = ds.sessions[f["test_start"] - c.h]
+    expected = sum(1 for r in ds.rows if ds.sessions[f["train_start"]] <= r["day"] <= ds.sessions[f["train_end"]]
+                   and r["label"].exit_day < embargo)
     assert res["n_train"] == expected > 0
-    latest_train_label_end = max(idx[r["day"]] + c.h + 1 for r in ds.rows if f["train_start"] <= idx[r["day"]] <= f["train_end"]
-                                 and idx[r["day"]] + c.h + 1 < f["test_start"] - c.h)
-    assert latest_train_label_end < f["test_start"] - c.h
 
 
 def test_walk_forward_report_shape_and_simulation(panel, tmp_path):
     c = cfg()
-    report = evaluate.walk_forward(panel, c, out_dir=tmp_path / "runs", progress=lambda *_: None)
+    days = panel.sessions()
+    registry.freeze_holdout(tmp_path / "runs", days, c.holdout_sessions)
+    report = evaluate.walk_forward(panel, c, runs=tmp_path / "runs", calendar=CAL, progress=lambda *_: None)
     assert report["folds_done"] >= 1 and report["profitability_proven"] is False
+    assert report["sessions"][1] < days[-c.holdout_sessions].isoformat()  # the development view stops before the holdout
     fold = next(r for r in report["folds"] if "skipped" not in r)
     m = fold["metrics"]
-    assert 0 <= m["coverage_80"] <= 1 and m["n"] > 0 and not math.isnan(m["pit_ks"])
+    assert 0 <= m["coverage_80"] <= 1 and m["n"] > 0 and m["pit_ks"] is not None
     sim = fold["simulation"]
-    assert sim["ending_cash"] + sim["open_positions_value"] > 0 and isinstance(sim["trades"], list)
+    assert sim["nav_liquidation"] > 0 and isinstance(sim["trades"], list) and len(sim["nav"]) == c.test_sessions
     for t in sim["trades"]:
-        assert t["q"] * t["entry_price"] <= 0.5 * c.W + 1e-6 and t["cost"] >= 15.34
-    assert (tmp_path / "runs" / (report["trial_id"] + ".json")).exists()
-    verdict = evaluate.promotion(report, n_trials=21, sr_variance_across_trials=0.01)
-    assert verdict["verdict"] in ("INSUFFICIENT EVIDENCE", "REJECT", "PROMOTED") and "criteria" in verdict
+        assert float(t["buy_value"]) <= 0.5 * c.W * (1 + 0.05) and float(t["charges"]["dp"]) == 15.34
+    assert (tmp_path / "runs" / "eval" / report["trial_id"] / (report["run_id"] + ".json")).exists()
+    assert report["promotion"]["verdict"] == "INSUFFICIENT EVIDENCE"  # no rule inputs: eligibility unverified
 
 
-def test_holdout_folds_are_separate(panel):
-    c = cfg()
-    ds_sessions = sessions(900)
-    normal = evaluate.folds(ds_sessions, c)
-    hold = evaluate.folds(ds_sessions, cfg(evaluate_holdout=True))
-    assert all(h["test_start"] >= 900 - c.holdout_sessions for h in hold)
-    assert all(n["test_end"] < 900 - c.holdout_sessions for n in normal)
+def test_holdout_fold_starts_at_the_frozen_date(panel):
+    days = sessions(900)
+    hold = evaluate.folds(days, cfg(evaluate_holdout=True), days[780])
+    normal = evaluate.folds([d for d in days if d < days[780]], cfg(), days[780])
+    assert hold == [{"train_start": 380, "train_end": 779, "test_start": 780, "test_end": 899}]
+    assert all(n["test_end"] < 780 for n in normal) and normal
 
 
 def test_implied_factor_needs_the_true_previous_session(tmp_path):

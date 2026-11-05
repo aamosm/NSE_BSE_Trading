@@ -292,9 +292,10 @@ async function renderForecasts() {
   const m = x.model, mc = card("Model (diagnostic: " + x.plan_status + ")"); g.append(mc);
   const zq = m.z_quantiles || {};
   mc.append(dl([["Target", m.target_id], ["Lambda", m.lam], ["Training rows", m.n_train], ["Training dates", (m.train || []).join(" → ")], ["Calibration residuals", m.calibration_n], ["z quantiles (10/50/90)", [zq["0.1"], zq["0.5"], zq["0.9"]].map(v => num(v, 2)).join(" / ")], ["Bootstrap refits", m.bootstraps]]));
-  const pl = card("Hypothetical plan (diagnostic, not a decision)"); g.append(pl);
-  const q = (x.plan && x.plan.quantities) || {}, vals = (x.plan && x.plan.values) || {};
-  pl.append(Object.keys(q).length ? table(["ISIN", "Quantity", "Value"], Object.keys(q).map(k => [k, q[k], money(vals[k])]), [1, 2]) : el("p", (x.plan && x.plan.note) || "No position passes the gate: " + JSON.stringify((x.plan && x.plan.rejected) || {}).slice(0, 300), "muted"));
+  const pl = card("Hypothetical intents (diagnostic, not a decision)"); g.append(pl);
+  const its = x.intents || [];
+  pl.append(its.length ? table(["Symbol", "Qty", "Decision close", "Limit", "Cash blocked", "Costs at qty", "Net edge", "P(active > costs)"], its.map(i => [i.symbol || i.isin, i.q, i.decision_close, i.limit, money(i.cash_blocked), pct(i.costs_at_q.cost_fraction), pct(i.costs_at_q.net_edge), num(i.p_active_beats_costs_at_q, 3)]), [1, 2, 3, 4, 5, 6, 7]) : el("p", (x.plan && x.plan.note) || "No position passes the gate at a whole-share quantity: " + JSON.stringify((x.plan && x.plan.rejected) || {}).slice(0, 300), "muted"));
+  pl.append(el("p", "P(active > costs) assumes a zero benchmark return over the horizon: it is the probability of net profit only in a flat market.", "muted"));
   const fc = card("Forecasts (gross excess return over the horizon; shrunk mean drives decisions)", "wide"); g.append(fc);
   const rows = (x.forecasts || []).filter(f => f.mu_shrunk != null);
   fc.append(barChart(rows.slice(0, 20).map(f => ({ label: f.symbol || f.isin, value: f.mu_shrunk })), { fmt: v => pct(v) }));
@@ -304,36 +305,55 @@ async function renderForecasts() {
 }
 
 // ---- evaluation ----------------------------------------------------------------------------------
-async function renderEvaluation(trial) {
+const CRIT = v => v === true ? "pass" : v === false ? "fail" : "no evidence";
+async function renderEvaluation(key) {
   const t = tab("evaluation"); t.append(el("p", "Loading…", "muted"));
   const list = await get("/api/evaluation"); t.replaceChildren();
-  const lc = card("Registered trials (walk-forward reports)"); t.append(lc);
+  const lc = card("Evaluation runs (immutable reports)", "wide"); t.append(lc);
+  lc.append(el("p", list.holdout ? "Holdout frozen from " + list.holdout.holdout_start + " (" + when(list.holdout.frozen_at) + "); development runs never read prices from that date on." : "Holdout not frozen yet: evaluations refuse to run until it is (marketlab freeze-holdout, once, after the backfill).", "muted"));
   if (!list.reports.length) { lc.append(el("p", "No evaluation has been run. Needs the historical backfill; see docs/FABLE_SESSION_1_SPEC.md section 8.", "muted")); return; }
-  lc.append(table(["Trial", "Generated", "Folds", "Trades", "Net ₹", "Folds > 0", "80% coverage", "Brier skill", "Sharpe/trade"],
-    list.reports.map(r => [r.trial_id, r.generated_at, r.folds_done, r.n_trades, r.net_rupees_total, r.folds_positive, num(r.coverage_80_mean, 3), num(r.brier_skill_mean, 3), num(r.sharpe_per_trade, 3)]), [2, 3, 4, 5, 6, 7, 8], { 4: v => v > 0 ? "pos" : "neg" }));
-  const row = el("div", null, "row"); const sel = el("select"); for (const r of list.reports) { const o = el("option", r.trial_id); o.value = r.trial_id; sel.append(o); }
-  if (trial) sel.value = trial; const go = el("button", "Show details", "button"); go.type = "button"; go.addEventListener("click", () => renderEvaluation(sel.value)); row.append(sel, go); lc.append(row);
-  const id = trial || list.reports[list.reports.length - 1].trial_id;
+  lc.append(table(["Run", "Kind", "Generated", "Folds", "Trades", "Net ₹", "Folds > 0", "Verdict", "80% cov", "Brier skill"],
+    list.reports.map(r => [r.key, r.kind, when(r.generated_at), r.folds_done, r.n_trades, r.net_rupees_total, r.folds_positive, r.verdict || "not computed", num(r.coverage_80, 3), num(r.brier_skill, 3)]), [3, 4, 5, 6, 8, 9], { 5: v => v > 0 ? "pos" : "neg" }));
+  const row = el("div", null, "row"); const sel = el("select"); for (const r of list.reports) { const o = el("option", r.key); o.value = r.key; sel.append(o); }
+  if (key) sel.value = key; const go = el("button", "Show details", "button"); go.type = "button"; go.addEventListener("click", () => renderEvaluation(sel.value)); row.append(sel, go); lc.append(row);
+  const id = key || list.reports[list.reports.length - 1].key;
   const rep = await get("/api/evaluation?trial=" + encodeURIComponent(id));
   if (rep.error) { t.append(el("p", rep.error, "muted")); return; }
   const g = el("div", null, "grid"); t.append(g);
-  const sm = card("Summary: " + rep.trial_id); g.append(sm);
+  const sm = card("Summary: " + rep.trial_id + " (" + rep.kind + ")"); g.append(sm);
   const p = rep.pooled || {};
-  sm.append(dl([["Sessions", (rep.sessions || []).join(" → ")], ["Rows", rep.rows], ["Label exclusions", JSON.stringify(rep.label_exclusions || {})], ["Unverified days", rep.unverified_days],
-    ["Net ₹ (realized, all folds)", rep.net_rupees_total], ["Mean net return per trade", pct(p.mean_net_return)], ["Sharpe per trade", num(p.sharpe_per_trade, 3)], ["PSR vs 0", num(p.psr_vs_zero, 3)], ["MinTRL (95%)", p.min_track_record_95 == null ? "undefined" : Math.ceil(p.min_track_record_95)]]));
-  sm.append(el("p", rep.note, "muted"));
-  const nf = card("Net ₹ by fold"); g.append(nf);
-  nf.append(barChart((rep.net_rupees_by_fold || []).map((v, i) => ({ label: "fold " + (i + 1), value: v })), { fmt: v => v.toFixed(2) }));
+  sm.append(dl([["Sessions", (rep.sessions || []).join(" → ")], ["Data visible until", rep.data_end || "all"], ["Input manifest", (rep.manifest_hash || "").slice(0, 16)],
+    ["Opportunities (decision-time)", rep.opportunities], ["Training-eligible rows", rep.rows], ["Missing features", rep.feature_missing],
+    ["Missing exchange sessions", rep.missing_sessions ? rep.missing_sessions.count : "unknown"], ["Eligibility-unverified days", rep.eligibility_unverified_days],
+    ["Net ₹ (NAV at liquidation, all folds)", rep.net_rupees_total], ["Trades closed", rep.n_trades], ["Mean net return per trade", pct(p.mean_net_return)], ["Sharpe per trade", num(p.sharpe_per_trade, 3)]]));
+  sm.append(el("p", "Labels: " + JSON.stringify(rep.label_counts || {}), "muted"), el("p", rep.note || "", "muted"));
+  if (rep.candidate_spec) sm.append(el("p", "Builder " + rep.candidate_spec.feature_builder + "; columns " + rep.candidate_spec.feature_columns.length + "; ablated " + (rep.candidate_spec.ablated_columns.join(", ") || "none"), "muted"));
+  const pr = rep.promotion, pc = card("Promotion rule (spec 8.6): " + (pr ? pr.verdict : rep.holdout ? "holdout report" : "not computed")); g.append(pc);
+  if (pr) { pc.append(table(["Criterion", "Result"], Object.entries(pr.criteria).map(([k, v]) => [k.replaceAll("_", " "), CRIT(v)]), [], { 1: v => v === "pass" ? "pos" : "neg" }));
+    pc.append(dl([["DSR", num(pr.dsr, 3)], ["Registered trials", pr.n_trials_registered], ["PBO", pr.pbo && pr.pbo.pbo != null ? num(pr.pbo.pbo, 3) : (pr.pbo && pr.pbo.reason) || "unknown"], ["N_eff (MinTRL)", num(pr.n_eff && pr.n_eff.n_eff, 1) + " (" + num(pr.min_track_record, 1) + ")"], ["Verified folds", pr.verified_folds + " of " + pr.folds_done]])); }
+  if (rep.attribution) pc.append(el("p", "Attribution: beta " + num(rep.attribution.beta, 3) + ", daily alpha " + pct(rep.attribution.alpha_daily, 4) + ", invested " + pct(rep.attribution.mean_invested_fraction, 0) + " (" + rep.attribution.benchmark + ")", "muted"));
   const folds = (rep.folds || []).filter(f => !f.skipped);
-  const eq = card("Paper equity by fold (each starts at the policy capital)"); g.append(eq);
-  eq.append(lineChart(folds.map((f, i) => ({ name: "fold " + (i + 1), values: f.simulation.equity_curve })), { baseline: (rep.config || {}).W }));
-  const cal = card("Calibration and discrimination by fold", "wide"); g.append(cal);
-  cal.append(table(["Fold", "Test", "n", "80% cov", "Brier", "BSS", "Pinball q10 (vs uncond.)", "Pinball q50", "Pinball q90", "PIT KS", "Rank IC", "λ", "Trades", "Net ₹", "Hit"],
-    folds.map((f, i) => { const m = f.metrics, s = f.simulation; return [i + 1, f.fold.test_start + " → " + f.fold.test_end, m.n, num(m.coverage_80, 3), num(m.brier, 4), num(m.brier_skill, 3), num(m.pinball_0_1, 5) + " (" + num(m["pinball_0_1_unconditional"], 5) + ")", num(m.pinball_0_5, 5), num(m.pinball_0_9, 5), num(m.pit_ks, 3), num(m.rank_ic_mean, 3), f.model.lam, s.n_trades, s.net_rupees_realized, pct(s.hit_rate, 0)]; }), [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]));
+  const nf = card("Net ₹ by fold (liquidation NAV − capital)"); g.append(nf);
+  nf.append(barChart(folds.map((f, i) => ({ label: f.fold.test_start, value: f.simulation.net_rupees })), { fmt: v => v.toFixed(2) }));
+  const eq = card("Daily NAV by fold (ledger: settled + unsettled cash + positions at close)"); g.append(eq);
+  eq.append(lineChart(folds.map((f, i) => ({ name: "fold " + (i + 1), values: f.simulation.nav.map(r => r.nav) })), { baseline: (rep.policy || {}).W }));
+  const cal = card("Calibration and discrimination by fold (references fitted on training data)", "wide"); g.append(cal);
+  cal.append(table(["Fold", "Test", "Resolved", "80% cov", "Brier", "BSS", "Pinball q10 (vs train uncond.)", "PIT KS", "Rank IC", "Residual ICC", "λ", "Abstained"],
+    folds.map((f, i) => { const m = f.metrics; return [i + 1, f.fold.test_start + " → " + f.fold.test_end, m.n + " / " + m.n_predictions, num(m.coverage_80, 3), num(m.brier, 4), num(m.brier_skill, 3), num(m.pinball_0_1, 5) + " (" + num(m["pinball_0_1_unconditional"], 5) + ")", num(m.pit_ks, 3), num(m.rank_ic_mean, 3), num(m.residual_icc_by_date, 3), f.model.lam, m.abstained_feature_coverage]; }), [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
   const skipped = (rep.folds || []).filter(f => f.skipped); if (skipped.length) cal.append(el("p", skipped.length + " fold(s) skipped: " + skipped.map(f => f.skipped).join(", "), "muted"));
-  const tr = card("Last trades (paper, exact charges)", "wide"); g.append(tr);
+  const st = card("Stresses and evidence by fold", "wide"); g.append(st);
+  st.append(table(["Fold", "Net ₹", "Costs ×2", "Slippage ×2", "Entry 1 late", "Best 5% removed", "Verified", "Unverified days", "Flagged actions"],
+    folds.map((f, i) => [i + 1, f.simulation.net_rupees, f.stresses.costs_x2, f.stresses.slippage_x2, f.stresses.entry_one_session_late, f.stresses.best_5pct_trades_removed, f.evidence.verified ? "yes" : "no", f.evidence.eligibility_unverified_days, f.evidence.action_unverified_positions]), [1, 2, 3, 4, 5, 7, 8]));
+  const ev = {}; for (const f of folds) for (const [k, v] of Object.entries(f.simulation.event_counts || {})) ev[k] = (ev[k] || 0) + v;
+  const ec = card("Execution events (all folds)"); g.append(ec);
+  ec.append(Object.keys(ev).length ? barChart(Object.entries(ev).map(([k, v]) => ({ label: k, value: v })), { fmt: v => String(v) }) : el("p", "none", "muted"));
+  const tr = card("Closed trades (ledger, exact charges; costs counted once)", "wide"); g.append(tr);
   const trades = folds.flatMap(f => f.simulation.trades).slice(-50);
-  tr.append(trades.length ? table(["Entry", "Exit", "ISIN", "Qty", "Entry px", "Exit px", "Gross", "Cost ₹", "Net ₹", "μ̃ at entry", "q10"], trades.map(x => [x.entry, x.exit, x.isin, x.q, x.entry_price, x.exit_price, pct(x.gross), x.cost.toFixed(2), x.net_pnl, pct(x.mu_shrunk), pct(x.q10)]), [3, 4, 5, 6, 7, 8, 9, 10], { 8: v => v > 0 ? "pos" : "neg" }) : el("p", "No trade passed the gate in any fold (cash was the answer).", "muted"));
+  tr.append(trades.length ? table(["Decided", "Entry", "Exit", "ISIN", "Qty", "Gross ₹", "Slippage ₹", "Charges ₹", "Net ₹", "Abs return", "Active (log)", "Exit reason"],
+    trades.map(x => [x.decision_day, x.entry_day, x.exit_day, x.isin, x.q, x.gross_rupees_at_open, x.slippage_rupees, x.charges.total, x.net_rupees.toFixed(2), pct(x.abs_return_gross), x.active_return_log == null ? "unknown" : pct(x.active_return_log), x.exit_reason]), [4, 5, 6, 7, 8, 9, 10], { 8: v => Number(v) > 0 ? "pos" : "neg" }) : el("p", "No trade closed in any fold (cash was the answer).", "muted"));
+  const op = folds.flatMap(f => f.simulation.open_positions.map(o => [f.fold.test_end, o.isin, o.q, o.units, o.status, o.liquidation_value, o.outcome_bounds.map(v => v.toFixed(2)).join(" – "), o.action_status]));
+  const oc = card("Open at fold end (valued at liquidation; blocked exits carry bounds)", "wide"); g.append(oc);
+  oc.append(op.length ? table(["Fold end", "ISIN", "Qty", "Units", "Status", "Liquidation ₹", "Bounds ₹", "Actions"], op, [2, 3, 5]) : el("p", "none", "muted"));
   const rj = card("Why candidates were rejected (gate counts across folds)"); g.append(rj);
   const counts = {}; for (const f of folds) for (const [k, v] of Object.entries(f.simulation.rejected || {})) counts[k] = (counts[k] || 0) + v;
   rj.append(Object.keys(counts).length ? barChart(Object.entries(counts).map(([k, v]) => ({ label: k, value: v })), { fmt: v => String(v) }) : el("p", "none", "muted"));

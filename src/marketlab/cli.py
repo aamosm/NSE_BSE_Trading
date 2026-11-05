@@ -377,6 +377,8 @@ def parser():
     a.add_argument("--ablate", nargs="*", default=[]); a.add_argument("--holdout", action="store_true", help="evaluate the locked holdout (once)")
     a.add_argument("--capital", type=float, default=None, help="override the saved policy's capital for this run (recorded)")
     a.add_argument("--bootstrap", type=int, default=50)
+    a = sub.add_parser("freeze-holdout", help="freeze the final holdout start once, after the backfill (never moves)")
+    a.add_argument("--sessions", type=int, default=250)
     a = sub.add_parser("decide", help="today's decision from the panel; recorded with a decision id (WAIT until a verified promotion)")
     a.add_argument("--candidate", default=None); a.add_argument("--h", type=int, default=None)
     a.add_argument("--capital", type=float, default=None, help="override the saved policy's capital for this run (recorded)")
@@ -473,14 +475,29 @@ def main():
             from .quant.panel import Panel
             pn = Panel(args.market_dir / "panel.sqlite3")
             try:
-                sc = quniverse.screen(pn, args.date, rule_inputs=quniverse.rule_inputs_for(args.market_dir, args.date))
+                pol = service.policy(root)
+                sc = quniverse.screen_for_day(pn, args.date, quniverse.ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=pol["capital"]),
+                                              args.market_dir, sources.load_calendar(args.market_dir)[0])
             finally:
                 pn.close()
             print(json.dumps({"day": sc.day.isoformat(), "kept": len(sc.isins), "unverified": sc.unverified, "stats": sc.stats,
-                              "isins": sc.isins[:100]}, indent=1))
+                              "rule_inputs": sc.availability, "isins": sc.isins[:100]}, indent=1))
+        elif args.command == "freeze-holdout":
+            from . import decisions
+            from .quant import registry
+            from .quant.panel import Panel
+            from .quant.sessions import exchange_sessions
+            cal = sources.load_calendar(args.market_dir)[0]
+            pn = Panel(args.market_dir / "panel.sqlite3")
+            try:
+                days = set(pn.sessions())
+                sess = exchange_sessions(cal, min(days), max(days), days)[0] if days else []
+            finally:
+                pn.close()
+            print(json.dumps(registry.freeze_holdout(decisions.runs_dir(root), sess, args.sessions), indent=1))
         elif args.command in ("evaluate", "decide"):
             from . import decisions
-            from .quant import candidates, decide as qdecide, evaluate as qevaluate, universe as quniverse
+            from .quant import candidates, decide as qdecide, evaluate as qevaluate, registry, universe as quniverse
             from .quant.panel import Panel
             from .quant.universe import ScreenPolicy
             pol = service.policy(root)
@@ -491,7 +508,7 @@ def main():
             cfg = qevaluate.Config(candidate=cand, h=h, W=eff.W, bootstrap=args.bootstrap if args.command == "evaluate" else 50,
                                    ablate=tuple(args.ablate) if args.command == "evaluate" else (), evaluate_holdout=getattr(args, "holdout", False),
                                    screen=ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=eff.W), policy=eff)
-            ri = lambda d: quniverse.rule_inputs_for(args.market_dir, d)  # noqa: E731
+            cal = sources.load_calendar(args.market_dir)[0]
             panel_path = args.market_dir / "panel.sqlite3"
             pn = Panel(panel_path) if panel_path.exists() else None
             try:
@@ -499,17 +516,24 @@ def main():
                     candidates.require(cand, h, cfg.ablate)  # UNIMPLEMENTED / unregistered trials stop before any work
                     if pn is None:
                         raise ValueError("PANEL_NOT_BUILT: run panel-build first")
-                    out_dir = decisions.runs_dir(root) / "eval"
+                    runs = decisions.runs_dir(root)
+                    ri = lambda d: quniverse.rule_inputs_for(args.market_dir, d, cal, cfg.availability)  # noqa: E731
                     with Experiment(root, panel_path, {"trial": cfg.trial_id(), "holdout": cfg.evaluate_holdout,
                                                        "policy": eff.to_json()}) as trial:
-                        out = qevaluate.walk_forward(pn, cfg, out_dir=out_dir, rule_inputs_fn=ri)
-                        trial.output = out_dir / (out["trial_id"] + ".json")
-                    print(json.dumps({k: out.get(k) for k in ("trial_id", "folds_done", "n_trades", "net_rupees_total", "folds_positive",
-                                                              "coverage_80_mean", "brier_skill_mean", "pooled", "label_exclusions",
-                                                              "candidate_spec", "policy")}, indent=1, default=str))
+                        out = qevaluate.walk_forward(pn, cfg, runs=runs, calendar=cal, rule_inputs_fn=ri)
+                        trial.output = Path(out["path"])
+                    print(json.dumps({k: out.get(k) for k in ("trial_id", "run_id", "path", "folds_done", "n_trades", "net_rupees_total",
+                                                              "folds_positive", "label_counts", "candidate_spec", "policy")}
+                                     | {"promotion": (out.get("promotion") or {}).get("verdict")}, indent=1, default=str))
+                    if cfg.evaluate_holdout:
+                        dev = next((r for r in registry.development_reports(runs) if r.get("trial_id") == out["trial_id"]), None)
+                        rec = registry.write_promotion(runs, runs / dev["_path"], Path(out["path"]), cand, h) if dev else None
+                        print("Promotion record written: " + rec["promotion_id"] if rec else
+                              "No promotion: the spec 8.6 criteria and the holdout did not all pass (see the reports).")
                 else:
+                    ri = lambda d: quniverse.rule_inputs_for(args.market_dir, d, cal, "RECEIPT")  # noqa: E731
                     out = qdecide.run(pn, cfg, root=root, origin="cli", families=pol["families"], rule_inputs_fn=ri,
-                                      extra={"policy_source": "cli-override" if args.capital is not None else "saved"})
+                                      calendar=cal, extra={"policy_source": "cli-override" if args.capital is not None else "saved"})
                     print(json.dumps({k: out.get(k) for k in ("decision_id", "day", "action", "reasons", "artifact",
                                                               "diagnostic_artifact", "policy_digest")}, indent=1, default=str))
                     print("Recorded in the decision timeline; the dashboard shows the same decision id.")

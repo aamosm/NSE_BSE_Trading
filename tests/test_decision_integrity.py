@@ -95,7 +95,7 @@ def test_unimplemented_candidates_and_unregistered_trials_are_refused(root, tmp_
     pn = make_panel(tmp_path / "p.sqlite3", n=40)
     try:
         with pytest.raises(candidates.Unimplemented):
-            evaluate.walk_forward(pn, cfg(candidate="C"), out_dir=tmp_path / "eval", progress=lambda *_: None)
+            evaluate.walk_forward(pn, cfg(candidate="C"), runs=tmp_path / "runs", calendar=CAL, progress=lambda *_: None)
     finally:
         pn.close()
     monkeypatch.setattr(sys, "argv", ["marketlab", "--private-dir", str(root), "--market-dir", str(tmp_path / "m"),
