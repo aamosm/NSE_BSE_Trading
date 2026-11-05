@@ -204,11 +204,8 @@ def resolve_key(root: Path, session_key: str | None) -> tuple[str | None, str | 
 
 def status(root: Path, market: Path, session_key: str | None) -> dict:
     _, source = resolve_key(root, session_key)
-    try:
-        import anthropic  # noqa: F401
-        sdk = True
-    except ImportError:
-        sdk = False
+    import importlib.util
+    sdk = importlib.util.find_spec("anthropic") is not None  # without importing it (slow on first import)
     led = budget.Ledger(_ledger_path(market), budget.Policy.load(root / POLICY_FILE))
     try:
         s = led.spent()

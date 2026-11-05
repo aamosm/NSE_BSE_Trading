@@ -565,35 +565,46 @@ def stocks_view(app) -> dict:
             "stocks": [_stock_row(s) for s in r.get("stocks", [])]}
 
 
-def _price_history(market: Path, isin: str, n: int = 250, actions_fn=None) -> dict:
-    """Closes in today's units (listed splits and bonuses restated; the predecessor ISIN joined after a listed split),
-    with the Nifty 50 rebased to the stock's first close, for the chart. Unexplained jumps are marked."""
-    from .quant import evaluate as qe
+def _price_history(market: Path, card: dict, n: int = 250) -> dict:
+    """Closes in today's units for the chart, from the ranking card's own lineage and listed actions (no registry
+    rebuild): the predecessor ISIN joined after a listed split, prices before a listed split/bonus restated by its
+    factor, and the Nifty 50 rebased to the stock's first close. Unexplained jumps are marked."""
+    from datetime import date as _date
     from .quant.panel import Panel
     pp = market / "panel.sqlite3"
     if not pp.exists():
         return {"days": [], "close": [], "index": []}
+    chain = card.get("lineage") or [card["isin"]]
+    lf = {}
+    for a in card.get("actions") or []:
+        if a.get("price_factor") and a.get("status") == "RATIO_CONSISTENT":
+            d = _date.fromisoformat(a["ex_date"])
+            lf[d] = lf.get(d, 1.0) * a["price_factor"]
     pn = Panel(pp)
     try:
-        disc = pn.discontinuities()
-        acts = actions_fn(pn) if actions_fn else None
-        h = qe.security_history(pn, isin, disc, acts)
-        s, lf = h["series"], h["level_factors"]
-        days, closes = list(s["days"])[-n:], list(s["close"])[-n:]
+        parts = [pn.bars(i) for i in chain]
+        bars = []
+        for k, part in enumerate(parts):
+            cut = parts[k + 1][0].day if k + 1 < len(parts) and parts[k + 1] else None
+            bars += [b for b in part if cut is None or b.day < cut]
+        bars = bars[-n:]
+        days, closes = [b.day for b in bars], [b.close for b in bars]
         later = 1.0
         adj = [0.0] * len(days)
         for i in range(len(days) - 1, -1, -1):
             adj[i] = closes[i] * later
             if days[i] in lf:
                 later *= lf[days[i]]
-        idx = pn.index_levels("Nifty 50")
+        bad = sorted({d for i in chain for d, v in pn.discontinuities(i, days[0] if days else None).items()
+                      if any(k == "PRICE_DISCONTINUITY" for k, _, _ in v) and d not in lf})
+        idx = pn.index_levels("Nifty 50", days[0], days[-1]) if days else {}
         ix = [idx.get(d, (None, None))[1] for d in days]
         base = next((v for v in ix if v), None)
         rebased = [round(v / base * adj[0], 4) if (v and base and adj) else None for v in ix]
         return {"days": [d.isoformat() for d in days], "close": [round(v, 4) for v in adj], "index": rebased,
-                "unexplained_jumps": sorted(d.isoformat() for d in h["bad_days"] if d >= days[0]) if days else [],
-                "listed_actions": sorted(d.isoformat() for d in lf if days and d >= days[0]), "lineage": h["lineage"],
-                "log_note": "closes restated for listed splits/bonuses" if lf else None}
+                "unexplained_jumps": [d.isoformat() for d in bad], "listed_actions": sorted(d.isoformat() for d in lf
+                                                                                         if days and d >= days[0]),
+                "lineage": chain, "log_note": "closes restated for listed splits/bonuses" if lf else None}
     finally:
         pn.close()
 
@@ -609,7 +620,7 @@ def stock_detail(app, isin: str) -> dict:
     v = explain.stock_view(card, r)
     v["features_table"] = explain.feature_table(card)
     try:
-        v["prices"] = _price_history(app.market, isin, actions_fn=app.actions_for)
+        v["prices"] = _price_history(app.market, card)
     except (OSError, ValueError, KeyError) as e:
         v["prices"] = {"error": type(e).__name__}
     v["ranking"] = {k: r.get(k) for k in ("day", "entry_session", "h", "policy", "validation", "digest", "status")}
