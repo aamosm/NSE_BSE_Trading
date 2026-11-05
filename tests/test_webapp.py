@@ -136,3 +136,16 @@ def test_icons_are_valid_pngs():
 def test_server_refuses_non_loopback_binding(tmp_path):
     with pytest.raises(ValueError, match="loopback"):
         webapp.serve(tmp_path, tmp_path, 0, host="0.0.0.0")
+
+
+def test_the_server_names_the_code_it_runs(server):
+    import subprocess
+    from pathlib import Path
+    base, _ = server
+    code, _, body = call(base, "/api/version")
+    v = json.loads(body)
+    pkg = Path(__file__).resolve().parents[1] / "src" / "marketlab"
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=pkg, capture_output=True, text=True).stdout.strip()
+    assert code == 200 and Path(v["code_path"]) == pkg and v["git_head"] == head and len(v["source_digest_now"]) == 64
+    h = json.loads(call(base, "/health")[2])
+    assert h["git_head"] == head and h["source_changed_since_start"] is False

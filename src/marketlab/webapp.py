@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import account, decisions, login, service, webassets
+from . import account, buildinfo, decisions, login, service, webassets
 from .common import IST, now, timestamp
 from .kite import KiteError
 from .store import Store
@@ -296,7 +296,7 @@ def status(root: Path, market: Path, at=None, calendar=None) -> dict:
                                                      "promotion_id", "forecasts", "plan_quantities", "diagnostic_artifact")}
         decision_summary["policy"] = latest.get("policy")
     return _jsonable({
-        "at": at, "live_orders": False, "health": hl,
+        "at": at, "live_orders": False, "health": hl, "build": buildinfo.build_info(),
         "service": {"state": st.get("state", "NOT_STARTED"), "state_is_current": hl["scheduler"]["status"] == "ALIVE",
                     "analysis": st.get("analysis", "ACTIVE"), "updated_at": updated,
                     "scheduler_age_seconds": hl["scheduler"]["age_seconds"],
@@ -551,7 +551,10 @@ def make_handler(app: App):
             u = urlsplit(self.path)
             path, q = u.path, parse_qs(u.query)
             if path == "/health":
-                return self._json(200, {"service": "up", "live_orders": False})
+                b = buildinfo.build_info()
+                return self._json(200, {"service": "up", "live_orders": False, "git_head": b["git_head"],
+                                        "source_digest": b["source_digest_at_start"],
+                                        "source_changed_since_start": b["source_changed_since_start"]})
             if not self._allowed():
                 return self._send(403, b"Forbidden", "text/plain; charset=utf-8")
             try:
@@ -566,6 +569,9 @@ def make_handler(app: App):
             if path in ("/icon-192.png", "/icon-512.png"):
                 return self._send(200, webassets.icon_png(192 if "192" in path else 512), "image/png", cache="no-cache")
             try:
+                if path == "/api/version":
+                    return self._json(200, buildinfo.build_info() | {"private_root": str(app.root.resolve()),
+                                                                      "market_root": str(app.market.resolve())})
                 if path == "/api/status":
                     return self._json(200, status(app.root, app.market))
                 if path == "/api/data":

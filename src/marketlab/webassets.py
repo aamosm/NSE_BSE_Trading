@@ -182,7 +182,8 @@ function renderOverview(s) {
     chip("Kite: " + ses.state + (ses.invalidated ? " (invalidated)" : ""), ses.state === "AUTHENTICATED" && !ses.invalidated ? "ok" : "warn"),
     chip("Broker data: " + (BROKER_TEXT[hl.broker.status] || hl.broker.status), hl.broker.status === "FRESH" || hl.broker.status === "IDLE_BY_SCHEDULE" ? "ok" : "warn"),
     chip("Paper decisions: " + (pd.eligible ? "eligible" : "not eligible"), pd.eligible ? "ok" : "warn"),
-    chip("Analysis: " + s.service.analysis, s.service.analysis === "ACTIVE" ? "ok" : "warn"), chip("Live orders: none", "ok"));
+    chip("Analysis: " + s.service.analysis, s.service.analysis === "ACTIVE" ? "ok" : "warn"), chip("Live orders: none", "ok"),
+    chip("Build " + String(s.build.git_head || "unknown").slice(0, 7) + (s.build.source_changed_since_start ? " (files changed since start: restart)" : s.build.package_dirty_paths ? " (uncommitted changes)" : ""), s.build.source_changed_since_start ? "bad" : s.build.package_dirty_paths ? "warn" : "ok"));
   const t = tab("overview"), g = el("div", null, "grid"); t.append(g);
   const h = card("Health (derived now from timestamps)"); g.append(h);
   const cal = s.service.calendar || {};
