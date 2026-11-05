@@ -547,14 +547,17 @@ class RankingCache:
         return self.body
 
 
-def stocks_view(app) -> dict:
+def stocks_view(app, capital: float | None = None) -> dict:
     from . import explain
     r = app.rankings.latest(app.root)
     if r is None:
         return {"ranking": None, "hint": "No ranking yet: Controls -> Run a job -> Rank stocks, or `marketlab rank`."}
+    if capital is not None and abs(capital - float((r.get("policy") or {}).get("W") or 0)) > 0.005:
+        from .quant import ranking as qranking
+        r = qranking.restate(r, capital)
     meta = {k: r.get(k) for k in ("version", "day", "entry_session", "status", "counts", "h", "candidate", "validation",
                                   "universe", "policy", "created_at", "digest", "forward", "integrity", "artifact", "market",
-                                  "screen_policy")}
+                                  "screen_policy", "restated")}
     meta["data"] = {k: v for k, v in (r.get("data") or {}).items() if k != "actions"} | {
         "actions": {k: (r["data"]["actions"] or {}).get(k) for k in ("mapped", "unmapped", "by_status", "digest")}
         if (r.get("data") or {}).get("actions") else None}
@@ -744,7 +747,14 @@ def make_handler(app: App):
                 if path == "/api/requests":
                     return self._json(200, _jsonable(requests_view(app.root)))
                 if path == "/api/stocks":
-                    return self._json(200, _jsonable(stocks_view(app)))
+                    cap = q.get("capital", [""])[0]
+                    try:  # out-of-range or unparseable: the saved policy's capital, never a silent other number
+                        w = float(cap) if cap else None
+                        if w is not None and not 1000.0 <= w <= 1e8:
+                            w = None
+                    except ValueError:
+                        w = None
+                    return self._json(200, _jsonable(stocks_view(app, w)))
                 if path == "/api/stock":
                     return self._json(200, stock_detail(app, q.get("isin", [""])[0]))
                 if path == "/api/how":

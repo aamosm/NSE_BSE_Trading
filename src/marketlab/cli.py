@@ -379,6 +379,8 @@ def parser():
     a.add_argument("--bootstrap", type=int, default=50)
     a = sub.add_parser("rank", help="today's research ranking of every stock (buy candidates, hold off, avoid ...) with reasons")
     a.add_argument("--h", type=int, default=None); a.add_argument("--bootstrap", type=int, default=50)
+    a.add_argument("--capital", type=float, default=None,
+                   help="rank at this capital instead of the saved policy's (recorded in the artifact)")
     a = sub.add_parser("actions-import-api", help="import NSE corporate-actions API responses (folder with raw/*.json + manifest.json)")
     a.add_argument("--folder", type=Path, required=True)
     sub.add_parser("actions-reconcile", help="every panel price jump and ISIN change against the listed actions")
@@ -493,7 +495,7 @@ def main():
         elif args.command == "rank":
             cal = sources.load_calendar_for(args.market_dir)[0]
             out = service.build_ranking(root, args.market_dir, cal, h=args.h, bootstrap=args.bootstrap,
-                                        progress=lambda m: print(m, flush=True))
+                                        capital=args.capital, progress=lambda m: print(m, flush=True))
             top = lambda k: [s["symbol"] for s in sorted((s for s in out.get("stocks", []) if s["class"] == k),  # noqa: E731
                                                        key=lambda s: s.get("rank") or 1e9)][:15]
             print(json.dumps({k: out.get(k) for k in ("day", "status", "counts", "artifact", "forward")}

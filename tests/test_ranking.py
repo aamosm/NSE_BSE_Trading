@@ -129,3 +129,40 @@ def test_every_reason_code_has_plain_text():
 def test_feature_formatting_is_finite():
     assert explain.pct(None) == "unknown" and explain.pct(float("nan")) == "unknown" and explain.pct(0.0123) == "+1.23%"
     assert explain.crore(5e7) == "₹5.0 crore" and not math.isnan(float(explain.pct(0.5, sign=False).rstrip("%")))
+
+
+def test_restating_at_another_capital_changes_costs_and_classes_but_never_the_forecast(built):
+    p, root, r = built
+    base = {s["isin"]: s for s in r["stocks"]}
+    seen = {}
+    for w in (3_000.0, 10_000.0, 30_000.0):
+        out = ranking.restate(r, w)
+        assert out["policy"]["W"] == w and out["restated"]["basis"] == ranking.RESTATE_BASIS
+        assert out.get("digest") is None and out.get("artifact") is None  # never a stored artifact
+        assert sum(out["counts"].values()) == len(out["stocks"]) == len(r["stocks"])
+        assert out["policy"]["K"] == allocate.Policy.for_capital(w).K
+        for s in out["stocks"]:
+            b = base[s["isin"]]
+            if "forecast" in b and "forecast" in s:
+                assert s["forecast"] == b["forecast"]  # the model is not refitted
+                assert s["x"] == b["x"] and s["contributions"] == b["contributions"]
+            if s.get("costs", {}).get("q"):
+                cap = min(out["policy"]["cap_fraction"] * w, w * (1 - out["policy"]["reserve_fraction"]))
+                assert s["costs"]["q"] == int(cap // s["close"])  # whole shares at this capital's cap
+                assert s["costs"]["cost_fraction"] > 0
+            assert s["class"] in ranking.CLASSES and s["reasons"]
+            if s["class"] == "INELIGIBLE" and s["reasons"] == ["PRICE_ABOVE_HALF_POSITION"]:
+                assert s["close"] > w * 0.5
+        assert sum(1 for s in out["stocks"] if s["class"] == "BUY_CANDIDATE") <= out["policy"]["K"]
+        seen[w] = {k: v for k, v in out["counts"].items()}
+    # Bigger capital: cheaper round trip on the same stock, so the cost hurdle never rises.
+    cf = lambda o, i: (next(s for s in o["stocks"] if s["isin"] == i).get("costs") or {}).get("cost_fraction")  # noqa: E731
+    small, big = ranking.restate(r, 3_000.0), ranking.restate(r, 30_000.0)
+    pairs = [(cf(small, i), cf(big, i)) for i in base if cf(small, i) and cf(big, i)]
+    assert pairs and all(b <= s + 1e-12 for s, b in pairs)
+    assert seen[3_000.0] != seen[30_000.0]  # the capital changes the calls
+
+
+def test_restate_keeps_an_unranked_body_untouched():
+    out = ranking.restate({"version": ranking.VERSION, "status": "NO_PANEL", "stocks": []}, 5_000.0)
+    assert out["restated"]["basis"] == "NOT_RANKED" and out["stocks"] == []

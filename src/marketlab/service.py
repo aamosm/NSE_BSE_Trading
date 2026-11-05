@@ -200,14 +200,21 @@ def list_requests(root: Path, limit=30) -> list:
 
 
 def build_ranking(root: Path, market: Path, calendar, *, h: int | None = None, candidate: str | None = None,
-                  bootstrap: int = 50, progress=None, origin: str = "cli") -> dict:
+                  bootstrap: int = 50, progress=None, origin: str = "cli", capital: float | None = None) -> dict:
     """Today's research ranking (quant.ranking) with the saved policy, the corporate-action registry and rule files
-    admitted by the exchange server's timestamp before the entry session opens (RECONSTRUCTED; labelled)."""
+    admitted by the exchange server's timestamp before the entry session opens (RECONSTRUCTED; labelled).
+
+    capital overrides the saved policy's capital for this run only (recorded in the artifact as policy_source)."""
     from . import action_registry
     from .quant import evaluate as qevaluate, ranking as qranking, universe as quniverse
     from .quant.panel import Panel
     from .quant.universe import ScreenPolicy
     pol = policy(root)
+    if capital is not None:
+        lo, hi = POLICY_BOUNDS["capital"]
+        if not lo <= float(capital) <= hi:
+            raise ValueError(f"CAPITAL_OUT_OF_RANGE: {lo:.0f}..{hi:.0f}")
+        pol = dict(pol, capital=float(capital))
     eff = effective_policy(root, pol)
     cfg = qevaluate.Config(candidate=candidate or pol["candidate"], h=int(h or pol["h"]), W=eff.W,
                            screen=ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=eff.W), policy=eff)
@@ -219,7 +226,8 @@ def build_ranking(root: Path, market: Path, calendar, *, h: int | None = None, c
         acts = action_registry.load_index(market, pn)
         ri = lambda d: quniverse.rule_inputs_for(market, d, calendar, "RECONSTRUCTED")  # noqa: E731
         return qranking.build(pn, cfg, root=root, calendar=calendar, rule_inputs_fn=ri, actions=acts, bootstrap=bootstrap,
-                              progress=progress, extra={"origin": origin})
+                              progress=progress, extra={"origin": origin} |
+                              ({"policy_source": "capital-override"} if capital is not None else {}))
     finally:
         pn.close()
 

@@ -181,6 +181,122 @@ def classify(card: dict, policy: allocate.Policy) -> tuple[str, list[str]]:
     return "HOLD_OFF", ["EDGE_BELOW_COST"] + (["LEANS_NEGATIVE"] if fc["mu_shrunk"] < 0 else ["LEANS_POSITIVE"])
 
 
+def policy_for_capital(saved: dict, capital: float) -> allocate.Policy:
+    """The same owner policy at a different capital. Fractions and K come from the spec 5.4 tier for the new
+    capital unless the stored policy already departed from its own tier (an explicit owner override, which is
+    kept); gamma follows 2/W; min_edge and tail_limit are spec-fixed and never scale."""
+    w0 = float(saved.get("W") or capital)
+    old_tier, tier = allocate.Policy.for_capital(w0), allocate.Policy.for_capital(float(capital))
+    k = int(saved["K"]) if saved.get("K") not in (None, old_tier.K) else tier.K
+    capf = float(saved["cap_fraction"]) if saved.get("cap_fraction") not in (None, old_tier.cap_fraction) else tier.cap_fraction
+    g0 = float(saved.get("gamma") or (2.0 / w0))
+    m = (2.0 / w0) / g0 if g0 > 0 else 1.0  # the owner's risk multiplier, recovered from gamma = 2/(mW)
+    return allocate.Policy(float(capital), reserve_fraction=float(saved.get("reserve_fraction", 0.20)),
+                           cap_fraction=capf, K=k, gamma=2.0 / (m * float(capital)),
+                           min_edge=float(saved.get("min_edge", 0.001)), tail_limit=float(saved.get("tail_limit", 0.08)))
+
+
+RESTATE_BASIS = "RESTATED_GREEDY_NO_CORRELATION"
+
+
+def restate(body: dict, capital: float) -> dict:
+    """The same day's ranking read at a different capital, from the stored forecasts alone: no refit happens,
+    because capital changes only the whole-share quantity, the exact charges, the gates and the allocation.
+
+    Honest limits, recorded in the returned body under "restated":
+      - a stock the stored screen excluded on price has no forecast in the artifact, so a larger capital can only
+        mark it NEWLY_ELIGIBLE_NEEDS_RANK_RUN, never rank it;
+      - selection uses a greedy top-K by net edge, not the correlation-aware allocator, so BUY_CANDIDATE here means
+        "clears both gates and fits the cap/cash/K", pending a real `rank --capital` run;
+      - P(beats costs) needs the calibration residuals, which the artifact does not carry, so it is dropped.
+    This body is never written as an artifact: it has no digest and no path."""
+    if body.get("status") != "RANKED" or not body.get("stocks"):
+        return dict(body, restated={"capital": float(capital), "basis": "NOT_RANKED", "changed": 0})
+    policy = policy_for_capital(body.get("policy") or {}, capital)
+    cap = min(policy.cap_fraction * policy.W, policy.W * (1 - policy.reserve_fraction))
+    price_max = policy.W * 0.5
+    out, priced_out, newly = [], 0, 0
+    for src in body["stocks"]:
+        card = dict(src)
+        close = card.get("close") or 0.0
+        if "forecast" not in card:
+            if card.get("reasons") == ["PRICE_ABOVE_HALF_POSITION"] and 0 < close <= price_max:
+                card["class"], card["reasons"] = "NO_FORECAST", ["NEWLY_ELIGIBLE_NEEDS_RANK_RUN"]
+                newly += 1
+            out.append(card)
+            continue
+        if close > price_max:
+            card["class"], card["reasons"] = "INELIGIBLE", ["PRICE_ABOVE_HALF_POSITION"]
+            for k in ("gates", "allocation", "flip", "rank", "rank_of"):
+                card.pop(k, None)
+            priced_out += 1
+            out.append(card)
+            continue
+        fc = card["forecast"]
+        c = allocate.Candidate(card["isin"], close, fc["mu_shrunk"], fc["sigma_hat"],
+                               card["costs"].get("slippage_fraction") or 0.002,
+                               fc.get("q10", float("nan")), card.get("symbol") or "",
+                               cash_price=card["costs"].get("limit_price") or 0.0)
+        q = int(cap // c.price) if c.price > 0 else 0
+        pc = allocate.position_costs(c, q) if q > 0 else {"value": 0.0, "charges": 0.0, "slippage": 0.0,
+                                                          "cost_fraction": float("inf")}
+        reasons_q, gate = allocate.position_gate(c, q, policy) if q > 0 else (["NO_WHOLE_SHARE_FITS"], {})
+        card["costs"] = {"q": q, "value": pc.get("value"), "buy_charges": pc.get("buy_charges"),
+                         "sell_charges_incl_dp": pc.get("sell_charges_incl_dp"), "charges": _f(pc.get("charges"), 2),
+                         "slippage_rupees": _f(pc.get("slippage"), 2), "slippage_fraction": _f(c.slippage),
+                         "charge_fraction": _f(pc.get("charge_fraction")), "cost_fraction": _f(pc.get("cost_fraction")),
+                         "limit_price": round(c.blocked_price(), 2),
+                         "cash_blocked": str(reservation(q, c.blocked_price())) if q > 0 else "0",
+                         "dp_charge": allocate.FIXED_SELL, "bigger_accounts": _bigger_account(c, policy)}
+        card["gates"] = {"at_quantity": reasons_q, "at_cap": allocate.entry_gate(c, policy)[1],
+                         "net_edge": _f(gate.get("net_edge")), "threshold": _f(gate.get("threshold"))}
+        card["p_beats_costs"] = None
+        card["allocation"] = {"selected": False, "q": None, "value": None, "costs_at_plan_q": None}
+        card["_c"] = c
+        out.append(card)
+    # Greedy selection: best net edge first, whole shares, within the per-stock cap, the cash after the reserve and K.
+    eligible = sorted((c for c in out if c.get("gates") and not c["gates"]["at_quantity"]),
+                      key=lambda s: -(s["gates"]["net_edge"] or -9))
+    free = policy.W * (1 - policy.reserve_fraction)
+    for card in eligible:
+        if sum(1 for s in out if s["allocation"]["selected"]) >= policy.K:
+            card["allocation"]["why_not"] = "NOT_SELECTED_K_LIMIT"
+            continue
+        c, q = card.pop("_c"), card["costs"]["q"]
+        blocked = float(reservation(q, c.blocked_price())) if q > 0 else 0.0
+        if q > 0 and blocked <= free:
+            free -= blocked
+            card["allocation"] = {"selected": True, "q": q, "value": card["costs"]["value"],
+                                  "costs_at_plan_q": {"cost_fraction": card["costs"]["cost_fraction"],
+                                                      "net_edge": card["gates"]["net_edge"]}}
+        else:
+            card["allocation"]["why_not"] = "CASH_AFTER_RESERVE_EXHAUSTED"
+    for card in out:
+        card.pop("_c", None)
+        if card.get("gates"):
+            card["class"], card["reasons"] = classify(card, policy)
+            card["flip"] = _flip(card, policy, None)
+    ranked = sorted([s for s in out if "gates" in s], key=lambda s: -(s["gates"]["net_edge"] or -9))
+    for s in out:
+        s.pop("rank", None), s.pop("rank_of", None)
+    for i, s in enumerate(ranked, 1):
+        s["rank"], s["rank_of"] = i, len(ranked)
+    new = dict(body)
+    new.pop("digest", None), new.pop("artifact", None)
+    new["stocks"] = out
+    new["counts"] = {k: sum(1 for s in out if s["class"] == k) for k in CLASSES}
+    new["policy"] = policy.to_json()
+    new["policy_digest"] = policy.digest()
+    new["screen_policy"] = dict(body.get("screen_policy") or {}, price_max=price_max)
+    new["restated"] = {"capital": float(policy.W), "from_capital": float((body.get("policy") or {}).get("W") or 0),
+                       "from_digest": body.get("digest"), "from_day": body.get("day"), "basis": RESTATE_BASIS,
+                       "priced_out": priced_out, "newly_eligible_needs_run": newly,
+                       "note": "Costs, gates and classes recomputed at this capital from the stored forecasts; "
+                               "the model was not refitted. Selection is greedy by net edge, not the "
+                               "correlation-aware allocator, and P(beats costs) is unavailable here."}
+    return new
+
+
 def _digest(body: dict) -> str:
     raw = json.dumps({k: v for k, v in body.items() if k not in ("created_at", "artifact", "digest", "forward")},
                      sort_keys=True, default=str, separators=(",", ":"))
