@@ -57,7 +57,7 @@ def rule_inputs_for(market: Path, day: date, calendar=None, availability: str = 
     if availability not in ("RECEIPT", "RECONSTRUCTED"):
         raise ValueError("availability must be RECEIPT or RECONSTRUCTED")
     if calendar is None:
-        calendar = sources.load_calendar(market)[0]
+        calendar = sources.load_calendar_for(market)[0]
     try:
         inp = Inputs(market, day, calendar, cutoff=now() if availability == "RECONSTRUCTED" else None)
     except RuleUnknown:

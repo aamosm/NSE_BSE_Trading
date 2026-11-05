@@ -1,6 +1,6 @@
 """Static assets of the private dashboard (installable PWA). No third-party code, fonts or trackers.
 
-All data is rendered with textContent (never innerHTML), so feed or provider text cannot inject markup. Charts
+All data is rendered with textContent (never innerHTML), so feed, provider or AI text cannot inject markup. Charts
 are inline SVG built from numbers. The service worker caches only the app shell; API, login and callback
 responses are never cached, so the page never shows stale account data as if it were current.
 """
@@ -10,6 +10,8 @@ import html
 import struct
 import zlib
 from functools import lru_cache
+
+from .webui import STOCKS_JS, UI_CSS
 
 INDEX_HTML = """<!doctype html>
 <html lang="en">
@@ -26,88 +28,53 @@ INDEX_HTML = """<!doctype html>
 <script src="/app.js" defer></script>
 </head>
 <body>
-<header>
-  <div class="brand"><img src="/icon.svg" alt="" width="28" height="28"><h1>MarketLab</h1>
-    <span class="scope">research and paper decisions only; this app cannot place, change or cancel orders</span></div>
+<header class="top">
+  <div class="brand"><img src="/icon.svg" alt="" width="30" height="30">
+    <div><h1>MarketLab</h1><span class="scope">NSE research and paper decisions · this app cannot place, change or cancel orders</span></div>
+    <button id="theme" class="ghost" type="button" title="Theme">Theme: auto</button></div>
   <div class="chips" id="chips"></div>
   <p id="offline" class="banner" hidden>Offline or server unavailable: showing nothing rather than old data.</p>
   <nav id="tabs" aria-label="Sections">
-    <button data-tab="overview" class="on" type="button">Overview</button>
+    <button data-tab="stocks" class="on" type="button">Stocks</button>
+    <button data-tab="how" type="button">How it works</button>
+    <button data-tab="overview" type="button">Overview</button>
     <button data-tab="data" type="button">Data</button>
     <button data-tab="universe" type="button">Universe</button>
-    <button data-tab="forecasts" type="button">Forecasts</button>
+    <button data-tab="forecasts" type="button">Decision</button>
     <button data-tab="evaluation" type="button">Evaluation</button>
-    <button data-tab="research" type="button">Research</button>
-    <button data-tab="controls" type="button">Controls</button>
+    <button data-tab="controls" type="button">Controls &amp; AI</button>
   </nav>
 </header>
 <main>
-  <section id="tab-overview" class="tab"></section>
+  <section id="tab-stocks" class="tab"></section>
+  <section id="tab-how" class="tab" hidden></section>
+  <section id="tab-overview" class="tab" hidden></section>
   <section id="tab-data" class="tab" hidden></section>
   <section id="tab-universe" class="tab" hidden></section>
   <section id="tab-forecasts" class="tab" hidden></section>
   <section id="tab-evaluation" class="tab" hidden></section>
-  <section id="tab-research" class="tab" hidden></section>
   <section id="tab-controls" class="tab" hidden></section>
 </main>
-<footer>Private service on loopback or your tailnet. Explanations are assembled from recorded reason codes, never generated text.</footer>
+<div id="sheet" class="sheet" hidden><div class="sheet-body" id="sheet-body" role="dialog" aria-modal="true"></div></div>
+<div id="tip" class="tip" hidden></div>
+<footer>Private service on loopback or your tailnet. Every explanation on this page is assembled from computed numbers by
+fixed templates; AI commentary appears only where you ask for it and is labelled.</footer>
 </body>
 </html>
 """
 
-APP_CSS = """
-:root{--bg:#f4f6f8;--card:#fff;--ink:#14212b;--muted:#5b6b78;--line:#dde3e8;--ok:#1f7a4d;--warn:#a15c00;--bad:#b42318;
---actual:#1d4ed8;--sim:#7c3aed;--btn:#e8edf1;--bar:#60a5fa;--bar2:#c4b5fd;--neg:#f87171;color-scheme:light dark}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1a22;--card:#16242f;--ink:#e8eef2;--muted:#9fb0bd;--line:#2a3b48;--ok:#4ade80;
---warn:#fbbf24;--bad:#f87171;--actual:#60a5fa;--sim:#c4b5fd;--btn:#223443;--bar:#60a5fa;--bar2:#a78bfa;--neg:#f87171}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-padding:max(12px,env(safe-area-inset-top)) 14px max(24px,env(safe-area-inset-bottom))}
-header,main,footer{max-width:1180px;margin:0 auto}
-.brand{display:flex;align-items:center;gap:10px;flex-wrap:wrap}h1{font-size:22px;margin:0}
-.scope,.hint,footer,.muted{color:var(--muted);font-size:13px}
-h2{font-size:16px;margin:0 0 8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}h3{font-size:14px;margin:12px 0 4px;color:var(--muted)}
-nav#tabs{display:flex;gap:6px;overflow-x:auto;padding:8px 0;border-bottom:1px solid var(--line);margin-bottom:10px}
-nav#tabs button{flex:0 0 auto;border:1px solid var(--line);background:var(--btn);color:var(--ink);font:inherit;font-weight:600;
-border-radius:999px;padding:6px 14px;cursor:pointer}nav#tabs button.on{background:var(--actual);color:#fff;border-color:transparent}
-@media (prefers-color-scheme:dark){nav#tabs button.on{color:#0f1a22}}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:0 0 12px}
-.card.wide{grid-column:1/-1}.actual{border-left:5px solid var(--actual)}.simulated{border-left:5px solid var(--sim)}
-.tag{font-size:11px;font-weight:700;letter-spacing:.06em;padding:2px 8px;border-radius:999px;color:#fff}
-.actual-tag{background:var(--actual)}.sim-tag{background:var(--sim)}
-@media (prefers-color-scheme:dark){.tag{color:#0f1a22}}
-.chips{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
-.chip{font-size:12px;font-weight:600;border:1px solid var(--line);border-radius:999px;padding:3px 10px;white-space:nowrap}
-.chip.ok{color:var(--ok)}.chip.warn{color:var(--warn)}.chip.bad{color:var(--bad)}
-.banner{background:var(--warn);color:#000;padding:8px 12px;border-radius:10px}
-.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center}
-.button{appearance:none;border:1px solid var(--line);background:var(--btn);color:var(--ink);font:inherit;font-weight:600;
-border-radius:10px;padding:8px 12px;text-decoration:none;min-height:40px;display:inline-flex;align-items:center;cursor:pointer}
-.button.primary{background:var(--actual);color:#fff;border-color:transparent}
-@media (prefers-color-scheme:dark){.button.primary{color:#0f1a22}}
-dl{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 12px;margin:0}dt{color:var(--muted)}
-dd{margin:0;text-align:right;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
-.table{width:100%;overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{text-align:left;padding:5px 4px;border-bottom:1px solid var(--line);white-space:nowrap}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
-.item{border-top:1px solid var(--line);padding:8px 0}.item:first-child{border-top:0}
-.state-STALE,.state-SESSION_UNKNOWN,.st-QUEUED,.st-RUNNING{color:var(--warn)}.state-MISSING,.state-UNAVAILABLE,.state-MALFORMED,.st-FAILED,.st-INTERRUPTED{color:var(--bad)}.st-DONE{color:var(--ok)}
-svg.chart{width:100%;height:auto;display:block;margin:6px 0}svg text{fill:var(--muted);font-size:10px}
-.pos{color:var(--ok)}.neg{color:var(--bad)}
-form.policy{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}
-form.policy label{display:flex;flex-direction:column;font-size:12px;color:var(--muted)}
-input,select{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);min-height:36px}
-.row{display:flex;gap:8px;flex-wrap:wrap;align-items:end}
-"""
+APP_CSS = UI_CSS
 
-APP_JS = r"""
+BASE_JS = r"""
 "use strict";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 function el(tag, text, cls) { const e = document.createElement(tag); if (text != null) e.textContent = String(text); if (cls) e.className = cls; return e; }
-function money(x) { return x == null ? "unknown" : "₹" + (typeof x === "number" ? x.toFixed(2) : x); }
-function pct(x, d = 2) { return x == null || Number.isNaN(x) ? "unknown" : (100 * x).toFixed(d) + "%"; }
-function num(x, d = 4) { return x == null || Number.isNaN(x) ? "unknown" : Number(x).toFixed(d); }
+function money(x) { return x == null ? "unknown" : "₹" + (typeof x === "number" ? x.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : x); }
+function pct(x, d = 2, sign = false) { if (x == null || Number.isNaN(Number(x))) return "unknown"; const v = 100 * Number(x); return (sign && v > 0 ? "+" : "") + v.toFixed(d) + "%"; }
+function spct(x, d = 2) { return pct(x, d, true); }
+function num(x, d = 4) { return x == null || Number.isNaN(Number(x)) ? "unknown" : Number(x).toFixed(d); }
+function crore(x) { return x == null ? "unknown" : "₹" + (x / 1e7).toLocaleString("en-IN", { maximumFractionDigits: 1 }) + " cr"; }
 function age(s) { if (s == null) return "never"; if (s < 90) return s + " s ago"; if (s < 5400) return Math.round(s / 60) + " min ago"; if (s < 172800) return Math.round(s / 3600) + " h ago"; return Math.round(s / 86400) + " days ago"; }
 function dl(pairs) { const d = el("dl"); for (const [k, v] of pairs) { d.append(el("dt", k), el("dd", v)); } return d; }
 function table(head, rows, numeric = [], cls = {}) {
@@ -121,51 +88,63 @@ function card(title, cls) { const c = el("section", null, "card" + (cls ? " " + 
 function tab(id) { const t = $("#tab-" + id); t.replaceChildren(); return t; }
 const SVG = "http://www.w3.org/2000/svg";
 function svgEl(tag, attrs) { const e = document.createElementNS(SVG, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+function svgText(x, y, text, attrs = {}) { const t = svgEl("text", Object.assign({ x, y }, attrs)); t.textContent = text; return t; }
+// ---- tooltip (one shared element; text only) ------------------------------------------------------
+function showTip(evt, lines) {
+  const t = $("#tip"); if (!t) return; t.replaceChildren(...lines.map((l, i) => el("div", l, i === 0 ? "tip-h" : null))); t.hidden = false;
+  const x = (evt.clientX || 0) + 14, y = (evt.clientY || 0) + 14; t.style.left = Math.min(x, (window.innerWidth || 800) - 280) + "px"; t.style.top = y + "px";
+}
+function hideTip() { const t = $("#tip"); if (t) t.hidden = true; }
+function tipOn(node, lines) { node.addEventListener("mousemove", e => showTip(e, lines)); node.addEventListener("mouseleave", hideTip); node.addEventListener("focus", e => showTip(e, lines)); node.addEventListener("blur", hideTip); return node; }
 function barChart(items, opts = {}) {
-  // items: [{label, value}]; horizontal bars with sign colouring
-  const W = 600, rowH = 18, H = items.length * rowH + 8, max = Math.max(1e-9, ...items.map(i => Math.abs(i.value || 0)));
+  // items: [{label, value}]; horizontal bars from one baseline, sign by colour and by the printed value
+  const W = 600, rowH = 22, H = items.length * rowH + 8, max = Math.max(1e-9, ...items.map(i => Math.abs(i.value || 0)));
   const s = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, class: "chart", role: "img" });
   items.forEach((it, i) => {
-    const v = it.value || 0, w = Math.abs(v) / max * 300, y = i * rowH + 4;
-    s.append(svgEl("rect", { x: v >= 0 ? 260 : 260 - w, y, width: w, height: rowH - 6, fill: v >= 0 ? (opts.color || "var(--bar)") : "var(--neg)", rx: 2 }));
-    const t = svgEl("text", { x: 4, y: y + 10 }); t.textContent = String(it.label).slice(0, 34); s.append(t);
-    const tv = svgEl("text", { x: 570, y: y + 10, "text-anchor": "end" }); tv.textContent = opts.fmt ? opts.fmt(v) : v.toFixed(2); s.append(tv);
+    const v = it.value || 0, w = Math.max(1, Math.abs(v) / max * 280), y = i * rowH + 6;
+    const r = svgEl("rect", { x: v >= 0 ? 250 : 250 - w, y, width: w, height: 12, rx: 3, class: v >= 0 ? "m-pos" : "m-neg" });
+    tipOn(r, [String(it.label), opts.fmt ? opts.fmt(v) : v.toFixed(2)]); s.append(r);
+    s.append(svgText(4, y + 10, String(it.label).slice(0, 34), { class: "t-lab" }));
+    s.append(svgText(596, y + 10, opts.fmt ? opts.fmt(v) : v.toFixed(2), { "text-anchor": "end", class: "t-val" }));
   });
-  s.append(svgEl("line", { x1: 260, y1: 0, x2: 260, y2: H, stroke: "var(--line)" }));
+  s.append(svgEl("line", { x1: 250, y1: 0, x2: 250, y2: H, class: "axis" }));
   return s;
 }
 function lineChart(series, opts = {}) {
-  // series: [{name, values:[y...]}] plotted on a shared x index
-  const W = 600, H = 160, pad = 28, all = series.flatMap(s => s.values).filter(v => v != null);
+  // series: [{name, values:[y...]}] on a shared x index; legend for two or more series
+  const W = 600, H = 170, pad = 34, all = series.flatMap(s => s.values).filter(v => v != null);
   if (!all.length) return el("p", "no data", "muted");
   const lo = Math.min(...all), hi = Math.max(...all), n = Math.max(...series.map(s => s.values.length));
-  const sx = x => pad + x / Math.max(1, n - 1) * (W - pad - 6), sy = y => H - pad + (lo === hi ? 0 : -(y - lo) / (hi - lo) * (H - pad - 8));
+  const sx = x => pad + x / Math.max(1, n - 1) * (W - pad - 8), sy = y => H - 20 + (lo === hi ? 0 : -(y - lo) / (hi - lo) * (H - 34));
   const s = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, class: "chart", role: "img" });
-  const colors = ["var(--bar)", "var(--bar2)", "var(--ok)", "var(--warn)", "var(--neg)"];
+  s.append(svgEl("line", { x1: pad, y1: H - 20, x2: W - 8, y2: H - 20, class: "axis" }));
   series.forEach((sr, k) => {
-    const d = sr.values.map((v, i) => (i === 0 ? "M" : "L") + sx(i).toFixed(1) + " " + sy(v).toFixed(1)).join(" ");
-    s.append(svgEl("path", { d, fill: "none", stroke: colors[k % colors.length], "stroke-width": 1.5 }));
+    const d = sr.values.map((v, i) => v == null ? "" : (i === 0 || sr.values[i - 1] == null ? "M" : "L") + sx(i).toFixed(1) + " " + sy(v).toFixed(1)).join(" ");
+    s.append(svgEl("path", { d, fill: "none", class: "ln s" + (k % 4 + 1) }));
   });
-  if (opts.baseline != null && opts.baseline >= lo && opts.baseline <= hi) s.append(svgEl("line", { x1: pad, y1: sy(opts.baseline), x2: W - 6, y2: sy(opts.baseline), stroke: "var(--line)", "stroke-dasharray": "4 3" }));
-  const t1 = svgEl("text", { x: 2, y: 12 }); t1.textContent = hi.toFixed(0); const t2 = svgEl("text", { x: 2, y: H - pad }); t2.textContent = lo.toFixed(0);
-  s.append(t1, t2); return s;
+  if (opts.baseline != null && opts.baseline >= lo && opts.baseline <= hi) s.append(svgEl("line", { x1: pad, y1: sy(opts.baseline), x2: W - 8, y2: sy(opts.baseline), class: "grid" }));
+  s.append(svgText(2, 14, hi.toFixed(0), { class: "t-lab" }), svgText(2, H - 22, lo.toFixed(0), { class: "t-lab" }));
+  const w = el("div"); w.append(s);
+  if (series.length > 1) { const lg = el("div", null, "legend"); series.forEach((sr, k) => { const it = el("span", null, "lg"); it.append(el("i", null, "sw s" + (k % 4 + 1)), el("span", sr.name)); lg.append(it); }); w.append(lg); }
+  return w;
 }
 function histogram(values, bins = 10) {
   const counts = new Array(bins).fill(0); for (const v of values) { if (v == null) continue; counts[Math.min(bins - 1, Math.max(0, Math.floor(v * bins)))]++; }
   return barChart(counts.map((c, i) => ({ label: (i / bins).toFixed(1) + "-" + ((i + 1) / bins).toFixed(1), value: c })), { fmt: v => String(v) });
 }
-async function get(path) { const r = await fetch(path, { cache: "no-store", credentials: "same-origin" }); if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }
+async function get(path) { const r = await fetch(path, { cache: "no-store", credentials: "same-origin" }); if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || ("HTTP " + r.status)); } return r.json(); }
 async function post(path, body) {
   const r = await fetch(path, { method: "POST", headers: { "X-MarketLab-Action": "1", "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify(body || {}) });
   const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || ("HTTP " + r.status)); return j;
 }
+"""
 
+LEGACY_JS = r"""
 // ---- overview ------------------------------------------------------------------------------------
 const SCHED_TEXT = { ALIVE: "alive", MISSED_HEARTBEATS: "missed heartbeats", NEVER_STARTED: "never started" };
 const BROKER_TEXT = { FRESH: "fresh", OVERDUE: "overdue", IDLE_BY_SCHEDULE: "idle by schedule", AUTH_REQUIRED: "login needed", NO_BATCH_YET: "no batch yet", UNKNOWN_CALENDAR: "calendar unknown" };
 function when(t) { return t ? String(t).replace("T", " ").slice(0, 16) : "unknown"; }
 function sectionLine(sec, fmt) {
-  // per-section state with its own receipt time; STALE and SESSION_UNKNOWN are never shown as today's or as zero
   if (!sec || !sec.state || sec.state === "MISSING") return "not in the latest batch (unknown)";
   if (sec.state === "UNAVAILABLE" || sec.state === "MALFORMED") return sec.state.toLowerCase() + " (unknown, not zero)";
   const at = " · received " + when(sec.received_at);
@@ -174,16 +153,19 @@ function sectionLine(sec, fmt) {
   if (sec.state === "SESSION_UNKNOWN") return "session day unknown: " + fmt(sec) + at;
   return sec.state + at;
 }
-function renderOverview(s) {
+function renderChips(s) {
   const hl = s.health, sc = hl.scheduler, ses = s.session, pd = hl.paper_decisions;
   $("#chips").replaceChildren(chip("Web: reachable", "ok"),
     chip("Scheduler: " + (SCHED_TEXT[sc.status] || sc.status) + (sc.age_seconds != null ? " (" + age(sc.age_seconds) + ")" : ""), sc.status === "ALIVE" ? "ok" : "bad"),
     chip("Market: " + hl.market.status.replaceAll("_", " ").toLowerCase(), "ok"),
     chip("Kite: " + ses.state + (ses.invalidated ? " (invalidated)" : ""), ses.state === "AUTHENTICATED" && !ses.invalidated ? "ok" : "warn"),
-    chip("Broker data: " + (BROKER_TEXT[hl.broker.status] || hl.broker.status), hl.broker.status === "FRESH" || hl.broker.status === "IDLE_BY_SCHEDULE" ? "ok" : "warn"),
     chip("Paper decisions: " + (pd.eligible ? "eligible" : "not eligible"), pd.eligible ? "ok" : "warn"),
-    chip("Analysis: " + s.service.analysis, s.service.analysis === "ACTIVE" ? "ok" : "warn"), chip("Live orders: none", "ok"),
+    chip("Live orders: none", "ok"),
     chip("Build " + String(s.build.git_head || "unknown").slice(0, 7) + (s.build.source_changed_since_start ? " (files changed since start: restart)" : s.build.package_dirty_paths ? " (uncommitted changes)" : ""), s.build.source_changed_since_start ? "bad" : s.build.package_dirty_paths ? "warn" : "ok"));
+}
+function renderOverview(s) {
+  renderChips(s);
+  const hl = s.health, sc = hl.scheduler, ses = s.session, pd = hl.paper_decisions;
   const t = tab("overview"), g = el("div", null, "grid"); t.append(g);
   const h = card("Health (derived now from timestamps)"); g.append(h);
   const cal = s.service.calendar || {};
@@ -195,8 +177,8 @@ function renderOverview(s) {
     ["Broker batch", hl.broker.last_batch_at ? when(hl.broker.last_batch_at) + " (" + age(hl.broker.age_seconds) + ")" : "never"],
     ["Broker reads due now", hl.broker.expected_now == null ? "unknown (calendar)" : hl.broker.expected_now ? "yes" : "no"],
     ["Kite session", ses.state === "AUTHENTICATED" ? "valid until " + when(ses.expires_at) : (ses.reason || ses.state)],
-    ["Calendar source", (cal.source || "unknown") + (cal.years ? " (" + cal.years.join(", ") + ")" : "")],
-    ["Calendar cross-check", !cal.discrepancies_checked ? "not checked (no NSE holiday-API vintage)" : (cal.discrepancies && Object.keys(cal.discrepancies).length ? "differences in " + Object.keys(cal.discrepancies).join(", ") : "checked: no differences")],
+    ["Calendar source", (cal.source || "unknown") + (cal.verified_years ? " (verified " + cal.verified_years.join(", ") + ")" : cal.years ? " (" + cal.years.join(", ") + ")" : "")],
+    ["Calendar cross-check", !cal.discrepancies_checked ? (cal.cross_check ? cal.cross_check.weekdays_agreeing + " weekdays agree with published files" : "not checked (no NSE holiday-API vintage)") : (cal.discrepancies && Object.keys(cal.discrepancies).length ? "differences in " + Object.keys(cal.discrepancies).join(", ") : "checked: no differences")],
     ["Paper decisions", pd.eligible ? "eligible" : "not eligible: " + pd.reasons.join(", ")]]));
   h.append(el("p", sc.gap_note, "muted"));
   const jobs = Object.entries(s.service.jobs || {});
@@ -233,7 +215,6 @@ function renderOverview(s) {
   e.append(ev.listings_upcoming.length ? table(["Date", "Symbol", "Series", "Route", "Name"], ev.listings_upcoming.map(r => [r.listing_date, r.symbol, r.series, r.route, r.name])) : el("p", "None in the stored NSE equity list.", "muted"));
   e.append(el("h3", "Recent listings (last 14 days)"));
   e.append(ev.listings_recent.length ? table(["Date", "Symbol", "Series", "Route", "Name"], ev.listings_recent.map(r => [r.listing_date, r.symbol, r.series, r.route, r.name])) : el("p", "None in the stored NSE equity list.", "muted"));
-  e.append(el("p", "ROUTE_UNVERIFIED: the equity list cannot distinguish an IPO from a migration, relisting or cross-listing.", "muted"));
   const b = card("What blocks decisions"); g.append(b);
   for (const x of s.blockers) { const it = el("div", null, "item"); it.append(el("strong", x.code + " · " + (x.basis || "").toLowerCase().replaceAll("_", " ")), el("p", x.text)); b.append(it); }
   const u = s.budget, mb = n => (n / 1048576).toFixed(1) + " MB", bc = card("Storage and running costs"); g.append(bc);
@@ -277,11 +258,11 @@ async function renderUniverse(dateStr) {
   tb.append(u.rows.length ? table(["Symbol", "ISIN", "Close", "Traded value (₹ crore)"], u.rows.map(r => [r.symbol, r.isin, r.close, r.value_crore]), [2, 3]) : el("p", "No security passes the screen on this day.", "muted"));
 }
 
-// ---- forecasts -----------------------------------------------------------------------------------
+// ---- decision (formerly forecasts) -----------------------------------------------------------------
 async function renderForecasts() {
   const t = tab("forecasts"); t.append(el("p", "Loading…", "muted"));
   const r = await get("/api/decision"); t.replaceChildren();
-  if (!r.decision) { t.append(card("Forecasts").appendChild(el("p", "No decision recorded yet (Controls → Decide). Forecasts are research diagnostics until a candidate has a verified promotion.", "muted")).parentNode); return; }
+  if (!r.decision) { const c = card("Latest decision"); c.append(el("p", "No decision recorded yet (Controls → Decide). The Stocks tab shows today's research ranking; a paper decision needs a verified promotion.", "muted")); t.append(c); return; }
   const d = r.decision, x = r.diagnostics || {}, g = el("div", null, "grid"); t.append(g);
   const h = card("Decision " + d.decision_id); g.append(h);
   h.append(dl([["Session", d.day], ["Origin", d.origin], ["Action", d.action], ["Reasons", (d.reasons || []).join(", ") || "none"], ["Candidate / horizon", d.candidate + " / " + d.h], ["Generated", when(d.generated_at)],
@@ -289,20 +270,18 @@ async function renderForecasts() {
   if (d.candidate_spec) h.append(el("p", "Feature builder " + d.candidate_spec.feature_builder + "; columns: " + d.candidate_spec.feature_columns.join(", ") + "; event records used: " + d.candidate_spec.event_records_used, "muted"));
   const pol = d.policy || {}, pc = card("Effective policy used"); g.append(pc);
   pc.append(dl([["Capital", money(pol.W)], ["Per-stock cap", pct(pol.cap_fraction, 0) + " = " + money(pol.cap_rupees)], ["Positions K", pol.K], ["Cash reserve", money(pol.reserve_rupees)], ["Risk aversion γ", num(pol.gamma, 6)], ["Minimum edge / tail limit", pct(pol.min_edge) + " / " + pct(pol.tail_limit)], ["Digest", d.policy_digest]]));
-  if (!x.model) { g.append(card("Diagnostics").appendChild(el("p", "This decision stopped before any forecast (" + (d.reasons || []).join(", ") + ").", "muted")).parentNode); return; }
+  if (!x.model) { const c = card("Diagnostics"); c.append(el("p", "This decision stopped before any forecast (" + (d.reasons || []).join(", ") + ").", "muted")); g.append(c); return; }
   const m = x.model, mc = card("Model (diagnostic: " + x.plan_status + ")"); g.append(mc);
   const zq = m.z_quantiles || {};
   mc.append(dl([["Target", m.target_id], ["Lambda", m.lam], ["Training rows", m.n_train], ["Training dates", (m.train || []).join(" → ")], ["Calibration residuals", m.calibration_n], ["z quantiles (10/50/90)", [zq["0.1"], zq["0.5"], zq["0.9"]].map(v => num(v, 2)).join(" / ")], ["Bootstrap refits", m.bootstraps]]));
   const pl = card("Hypothetical intents (diagnostic, not a decision)"); g.append(pl);
   const its = x.intents || [];
-  pl.append(its.length ? table(["Symbol", "Qty", "Decision close", "Limit", "Cash blocked", "Costs at qty", "Net edge", "P(active > costs)"], its.map(i => [i.symbol || i.isin, i.q, i.decision_close, i.limit, money(i.cash_blocked), pct(i.costs_at_q.cost_fraction), pct(i.costs_at_q.net_edge), num(i.p_active_beats_costs_at_q, 3)]), [1, 2, 3, 4, 5, 6, 7]) : el("p", (x.plan && x.plan.note) || "No position passes the gate at a whole-share quantity: " + JSON.stringify((x.plan && x.plan.rejected) || {}).slice(0, 300), "muted"));
-  pl.append(el("p", "P(active > costs) assumes a zero benchmark return over the horizon: it is the probability of net profit only in a flat market.", "muted"));
+  pl.append(its.length ? table(["Symbol", "Qty", "Decision close", "Limit", "Cash blocked", "Costs at qty", "Net edge", "P(active > costs)"], its.map(i => [i.symbol || i.isin, i.q, i.decision_close, i.limit, money(i.cash_blocked), pct(i.costs_at_q.cost_fraction), pct(i.costs_at_q.net_edge), num(i.p_active_beats_costs_at_q, 3)]), [1, 2, 3, 4, 5, 6, 7]) : el("p", (x.plan && x.plan.note) || "No position passes the gate at a whole-share quantity.", "muted"));
   const fc = card("Forecasts (gross excess return over the horizon; shrunk mean drives decisions)", "wide"); g.append(fc);
   const rows = (x.forecasts || []).filter(f => f.mu_shrunk != null);
   fc.append(barChart(rows.slice(0, 20).map(f => ({ label: f.symbol || f.isin, value: f.mu_shrunk })), { fmt: v => pct(v) }));
   fc.append(table(["Symbol", "Close", "μ̂", "se", "μ̃ shrunk", "q10", "q50", "q90", "P(excess>0)", "σ̂", "Slippage"],
     rows.map(f => [f.symbol || f.isin, f.close, pct(f.mu_hat), pct(f.se), pct(f.mu_shrunk), pct(f.q10), pct(f.q50), pct(f.q90), num(f.p_positive, 3), pct(f.sigma_hat), pct(f.slippage)]), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
-  const ab = (x.forecasts || []).filter(f => f.abstain); if (ab.length) fc.append(el("p", ab.length + " securities abstained: " + ab[0].abstain, "muted"));
 }
 
 // ---- evaluation ----------------------------------------------------------------------------------
@@ -312,7 +291,7 @@ async function renderEvaluation(key) {
   const list = await get("/api/evaluation"); t.replaceChildren();
   const lc = card("Evaluation runs (immutable reports)", "wide"); t.append(lc);
   lc.append(el("p", list.holdout ? "Holdout frozen from " + list.holdout.holdout_start + " (" + when(list.holdout.frozen_at) + "); development runs never read prices from that date on." : "Holdout not frozen yet: evaluations refuse to run until it is (marketlab freeze-holdout, once, after the backfill).", "muted"));
-  if (!list.reports.length) { lc.append(el("p", "No evaluation has been run. Needs the historical backfill; see docs/FABLE_SESSION_1_SPEC.md section 8.", "muted")); return; }
+  if (!list.reports.length) { lc.append(el("p", "No evaluation has been run. It needs the historical backfill (about 5.5 years of sessions); see How it works → Validation.", "muted")); return; }
   lc.append(table(["Run", "Kind", "Generated", "Folds", "Trades", "Net ₹", "Folds > 0", "Verdict", "80% cov", "Brier skill"],
     list.reports.map(r => [r.key, r.kind, when(r.generated_at), r.folds_done, r.n_trades, r.net_rupees_total, r.folds_positive, r.verdict || "not computed", num(r.coverage_80, 3), num(r.brier_skill, 3)]), [3, 4, 5, 6, 8, 9], { 5: v => v > 0 ? "pos" : "neg" }));
   const row = el("div", null, "row"); const sel = el("select"); for (const r of list.reports) { const o = el("option", r.key); o.value = r.key; sel.append(o); }
@@ -325,63 +304,44 @@ async function renderEvaluation(key) {
   const p = rep.pooled || {};
   sm.append(dl([["Sessions", (rep.sessions || []).join(" → ")], ["Data visible until", rep.data_end || "all"], ["Input manifest", (rep.manifest_hash || "").slice(0, 16)],
     ["Opportunities (decision-time)", rep.opportunities], ["Training-eligible rows", rep.rows], ["Missing features", rep.feature_missing],
-    ["Missing exchange sessions", rep.missing_sessions ? rep.missing_sessions.count : "unknown"], ["Eligibility-unverified days", rep.eligibility_unverified_days],
     ["Net ₹ (NAV at liquidation, all folds)", rep.net_rupees_total], ["Trades closed", rep.n_trades], ["Mean net return per trade", pct(p.mean_net_return)], ["Sharpe per trade", num(p.sharpe_per_trade, 3)]]));
-  sm.append(el("p", "Labels: " + JSON.stringify(rep.label_counts || {}), "muted"), el("p", rep.note || "", "muted"));
-  if (rep.candidate_spec) sm.append(el("p", "Builder " + rep.candidate_spec.feature_builder + "; columns " + rep.candidate_spec.feature_columns.length + "; ablated " + (rep.candidate_spec.ablated_columns.join(", ") || "none"), "muted"));
   const pr = rep.promotion, pc = card("Promotion rule (spec 8.6): " + (pr ? pr.verdict : rep.holdout ? "holdout report" : "not computed")); g.append(pc);
   if (pr) { pc.append(table(["Criterion", "Result"], Object.entries(pr.criteria).map(([k, v]) => [k.replaceAll("_", " "), CRIT(v)]), [], { 1: v => v === "pass" ? "pos" : "neg" }));
-    pc.append(dl([["DSR", num(pr.dsr, 3)], ["Registered trials", pr.n_trials_registered], ["PBO", pr.pbo && pr.pbo.pbo != null ? num(pr.pbo.pbo, 3) : (pr.pbo && pr.pbo.reason) || "unknown"], ["N_eff (MinTRL)", num(pr.n_eff && pr.n_eff.n_eff, 1) + " (" + num(pr.min_track_record, 1) + ")"], ["Verified folds", pr.verified_folds + " of " + pr.folds_done]])); }
-  if (rep.attribution) pc.append(el("p", "Attribution: beta " + num(rep.attribution.beta, 3) + ", daily alpha " + pct(rep.attribution.alpha_daily, 4) + ", invested " + pct(rep.attribution.mean_invested_fraction, 0) + " (" + rep.attribution.benchmark + ")", "muted"));
+    pc.append(dl([["DSR", num(pr.dsr, 3)], ["Registered trials", pr.n_trials_registered], ["PBO", pr.pbo && pr.pbo.pbo != null ? num(pr.pbo.pbo, 3) : (pr.pbo && pr.pbo.reason) || "unknown"], ["Verified folds", pr.verified_folds + " of " + pr.folds_done]])); }
   const folds = (rep.folds || []).filter(f => !f.skipped);
   const nf = card("Net ₹ by fold (liquidation NAV − capital)"); g.append(nf);
-  nf.append(barChart(folds.map((f, i) => ({ label: f.fold.test_start, value: f.simulation.net_rupees })), { fmt: v => v.toFixed(2) }));
-  const eq = card("Daily NAV by fold (ledger: settled + unsettled cash + positions at close)"); g.append(eq);
+  nf.append(barChart(folds.map(f => ({ label: f.fold.test_start, value: f.simulation.net_rupees })), { fmt: v => v.toFixed(2) }));
+  const eq = card("Daily NAV by fold"); g.append(eq);
   eq.append(lineChart(folds.map((f, i) => ({ name: "fold " + (i + 1), values: f.simulation.nav.map(r => r.nav) })), { baseline: (rep.policy || {}).W }));
-  const cal = card("Calibration and discrimination by fold (references fitted on training data)", "wide"); g.append(cal);
-  cal.append(table(["Fold", "Test", "Resolved", "80% cov", "Brier", "BSS", "Pinball q10 (vs train uncond.)", "PIT KS", "Rank IC", "Residual ICC", "λ", "Abstained"],
-    folds.map((f, i) => { const m = f.metrics; return [i + 1, f.fold.test_start + " → " + f.fold.test_end, m.n + " / " + m.n_predictions, num(m.coverage_80, 3), num(m.brier, 4), num(m.brier_skill, 3), num(m.pinball_0_1, 5) + " (" + num(m["pinball_0_1_unconditional"], 5) + ")", num(m.pit_ks, 3), num(m.rank_ic_mean, 3), num(m.residual_icc_by_date, 3), f.model.lam, m.abstained_feature_coverage]; }), [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
-  const skipped = (rep.folds || []).filter(f => f.skipped); if (skipped.length) cal.append(el("p", skipped.length + " fold(s) skipped: " + skipped.map(f => f.skipped).join(", "), "muted"));
-  const st = card("Stresses and evidence by fold", "wide"); g.append(st);
-  st.append(table(["Fold", "Net ₹", "Costs ×2", "Slippage ×2", "Entry 1 late", "Best 5% removed", "Verified", "Unverified days", "Flagged actions"],
-    folds.map((f, i) => [i + 1, f.simulation.net_rupees, f.stresses.costs_x2, f.stresses.slippage_x2, f.stresses.entry_one_session_late, f.stresses.best_5pct_trades_removed, f.evidence.verified ? "yes" : "no", f.evidence.eligibility_unverified_days, f.evidence.action_unverified_positions]), [1, 2, 3, 4, 5, 7, 8]));
-  const ev = {}; for (const f of folds) for (const [k, v] of Object.entries(f.simulation.event_counts || {})) ev[k] = (ev[k] || 0) + v;
-  const ec = card("Execution events (all folds)"); g.append(ec);
-  ec.append(Object.keys(ev).length ? barChart(Object.entries(ev).map(([k, v]) => ({ label: k, value: v })), { fmt: v => String(v) }) : el("p", "none", "muted"));
-  const tr = card("Closed trades (ledger, exact charges; costs counted once)", "wide"); g.append(tr);
-  const trades = folds.flatMap(f => f.simulation.trades).slice(-50);
-  tr.append(trades.length ? table(["Decided", "Entry", "Exit", "ISIN", "Qty", "Gross ₹", "Slippage ₹", "Charges ₹", "Net ₹", "Abs return", "Active (log)", "Exit reason"],
-    trades.map(x => [x.decision_day, x.entry_day, x.exit_day, x.isin, x.q, x.gross_rupees_at_open, x.slippage_rupees, x.charges.total, x.net_rupees.toFixed(2), pct(x.abs_return_gross), x.active_return_log == null ? "unknown" : pct(x.active_return_log), x.exit_reason]), [4, 5, 6, 7, 8, 9, 10], { 8: v => Number(v) > 0 ? "pos" : "neg" }) : el("p", "No trade closed in any fold (cash was the answer).", "muted"));
-  const op = folds.flatMap(f => f.simulation.open_positions.map(o => [f.fold.test_end, o.isin, o.q, o.units, o.status, o.liquidation_value, o.outcome_bounds.map(v => v.toFixed(2)).join(" – "), o.action_status]));
-  const oc = card("Open at fold end (valued at liquidation; blocked exits carry bounds)", "wide"); g.append(oc);
-  oc.append(op.length ? table(["Fold end", "ISIN", "Qty", "Units", "Status", "Liquidation ₹", "Bounds ₹", "Actions"], op, [2, 3, 5]) : el("p", "none", "muted"));
-  const rj = card("Why candidates were rejected (gate counts across folds)"); g.append(rj);
-  const counts = {}; for (const f of folds) for (const [k, v] of Object.entries(f.simulation.rejected || {})) counts[k] = (counts[k] || 0) + v;
-  rj.append(Object.keys(counts).length ? barChart(Object.entries(counts).map(([k, v]) => ({ label: k, value: v })), { fmt: v => String(v) }) : el("p", "none", "muted"));
+  const cal = card("Calibration and discrimination by fold", "wide"); g.append(cal);
+  cal.append(table(["Fold", "Test", "Resolved", "80% cov", "Brier", "BSS", "PIT KS", "Rank IC", "λ"],
+    folds.map((f, i) => { const m = f.metrics; return [i + 1, f.fold.test_start + " → " + f.fold.test_end, m.n + " / " + m.n_predictions, num(m.coverage_80, 3), num(m.brier, 4), num(m.brier_skill, 3), num(m.pit_ks, 3), num(m.rank_ic_mean, 3), f.model.lam]; }), [2, 3, 4, 5, 6, 7, 8]));
 }
+"""
 
-// ---- research ------------------------------------------------------------------------------------
-async function renderResearch() {
-  const t = tab("research"); t.append(el("p", "Loading…", "muted"));
-  const r = await get("/api/research"); t.replaceChildren();
-  const c = card("Research service"); t.append(c);
-  c.append(dl([["Provider", r.provider], ["Queue", Object.keys(r.queue).length ? JSON.stringify(r.queue) : "empty"],
-    ["Spent this month", r.usage ? "$" + r.usage.month_usd + " of $" + r.usage.monthly_cap_usd : "unknown"], ["Spent today", r.usage ? "$" + r.usage.day_usd + " of $" + r.usage.daily_cap_usd : "unknown"]]));
-  c.append(el("p", "No LLM provider is configured (owner decision). Official NSE feeds are collected directly; the evidence schema, budget ledger and job queue stay ready for a provider adapter if one is ever needed.", "muted"));
-}
-
-// ---- controls ------------------------------------------------------------------------------------
+CONTROLS_JS = r"""
+// ---- controls and AI settings --------------------------------------------------------------------
 async function renderControls() {
   const t = tab("controls"); t.append(el("p", "Loading…", "muted"));
-  const [cfg, st, rq] = await Promise.all([get("/api/config"), get("/api/status"), get("/api/requests")]); t.replaceChildren();
+  const [cfg, st, rq, ai] = await Promise.all([get("/api/config"), get("/api/status"), get("/api/requests"), get("/api/ai/status")]); t.replaceChildren();
+  renderChips(st);
   const g = el("div", null, "grid"); t.append(g);
+  const rc = card("Run a job (executed by the scheduler process, one at a time)", "wide"); g.append(rc);
+  const dateIn = el("input"); dateIn.type = "date"; const dl1 = el("label", "Date for file jobs"); dl1.append(dateIn);
+  const jobs = [["rank", "Rank stocks (research view)"], ["prepare", "Prepare today's rule inputs"], ["fetch_public", "Fetch official files for date"], ["build_master", "Build security master for date"], ["panel_build", "Build price panel"], ["decide", "Decide (saved candidate and horizon)"], ["evaluate", "Evaluate (saved candidate and horizon)"]];
+  const rrow = el("div", null, "row"); rrow.append(dl1);
+  for (const [k, label] of jobs) { const b = el("button", label, "button" + (k === "rank" ? " primary" : "")); b.type = "button"; b.addEventListener("click", async () => {
+    const args = {}; if (dateIn.value && (k === "fetch_public" || k === "build_master" || k === "prepare")) args.date = dateIn.value;
+    try { await post("/api/request", { kind: k, args }); renderControls(); } catch (e) { alert("Refused: " + e.message); } }); rrow.append(b); }
+  rc.append(rrow, el("p", "The scheduler (marketlab run) picks requests up within a minute; a ranking takes a few minutes. Without the scheduler, run `marketlab rank` in a terminal.", "muted"));
+  g.append(aiSettingsCard(ai));
   const an = card("Analysis"); g.append(an);
   const paused = st.service.analysis === "PAUSED";
-  const pb = el("button", paused ? "Resume paper analysis" : "Pause paper analysis", "button primary"); pb.type = "button";
+  const pb = el("button", paused ? "Resume paper analysis" : "Pause paper analysis", "button"); pb.type = "button";
   pb.addEventListener("click", async () => { await post("/api/analysis/" + (paused ? "resume" : "pause")); renderControls(); });
   an.append(el("p", "Pausing stops new decision records; data collection continues.", "muted"), pb);
   const lg = el("a", "Log in to Kite", "button"); lg.href = "/login/start"; an.append(el("p", "Login opens Zerodha's own page; your password is typed there, never here.", "muted"), lg);
-  const pc = card("Policy (bounded; stored in the private folder; persisted with every decision)", "wide"); g.append(pc);
+  const pc = card("Policy (bounded; stored in the private folder; persisted with every decision and ranking)", "wide"); g.append(pc);
   const f = el("form", null, "policy"); const P = cfg.policy, B = cfg.bounds, E = cfg.policy_effective, N = cfg.nullable || [];
   const fields = [["capital", "Capital ₹"], ["K", "Max positions K"], ["cap_fraction", "Per-stock cap (fraction)"], ["reserve_fraction", "Cash reserve (fraction)"], ["v_min_crore", "Min median traded value (₹ crore)"], ["risk_multiplier", "Risk multiplier (1 = half-Kelly)"]];
   const inputs = {};
@@ -391,48 +351,74 @@ async function renderControls() {
   const hl = el("label", "Horizon (registered for the candidate)"); const hs = el("select");
   const fillH = () => { hs.replaceChildren(); for (const h of cfg.candidates[cs.value].horizons) { const o = el("option", h + " sessions"); o.value = h; hs.append(o); } hs.value = String(P.h); };
   fillH(); cs.addEventListener("change", fillH); hl.append(hs); f.append(hl);
-  const sl = el("label", "Watchlist symbols (" + ((cfg.unsupported || {}).symbols || "") + ")"); const si = el("input"); si.value = (P.symbols || []).join(","); sl.append(si); f.append(sl);
-  const fam = el("label", "Families enabled"); const fs = el("div", null, "row"); const famBoxes = {};
-  for (const k of ["A", "B", "C"]) { const info = cfg.candidates[k]; const lab = el("label", k + (info.implemented ? "" : " (not implemented)")); const cb = el("input"); cb.type = "checkbox"; cb.checked = !!P.families[k]; cb.disabled = !info.implemented; famBoxes[k] = cb; lab.prepend(cb); fs.append(lab); } fam.append(fs); f.append(fam);
   const save = el("button", "Save policy", "button primary"); save.type = "button"; const msg = el("p", "", "muted");
   save.addEventListener("click", async () => {
     const body = {}; for (const k in inputs) body[k] = inputs[k].value === "" && N.includes(k) ? null : Number(inputs[k].value); body.candidate = cs.value; body.h = Number(hs.value);
-    body.symbols = si.value.split(",").map(x => x.trim().toUpperCase()).filter(Boolean); body.families = { A: famBoxes.A.checked, B: famBoxes.B.checked, C: famBoxes.C.checked };
-    try { await post("/api/config", body); msg.textContent = "Saved."; renderControls(); } catch (e) { msg.textContent = "Refused: " + e.message; }
+    try { await post("/api/config", body); msg.textContent = "Saved. Re-run the ranking to apply it."; renderControls(); } catch (e) { msg.textContent = "Refused: " + e.message; }
   });
-  pc.append(f, el("div", null, "actions").appendChild(save).parentNode, msg);
-  pc.append(el("h3", "Effective policy the next decision will use (digest " + cfg.policy_digest + ")"),
+  const act = el("div", null, "actions"); act.append(save); pc.append(f, act, msg);
+  pc.append(el("h3", "Effective policy (digest " + cfg.policy_digest + ")"),
     dl([["Per-stock cap", money(E.cap_rupees) + " (" + pct(E.cap_fraction, 0) + ")"], ["Positions K", E.K], ["Cash reserve", money(E.reserve_rupees)], ["Risk aversion γ", num(E.gamma, 6)], ["Minimum edge", pct(E.min_edge)], ["Tail limit", pct(E.tail_limit)]]));
-  const rc = card("Run a job (executed by the scheduler process, one at a time)", "wide"); g.append(rc);
-  const dateIn = el("input"); dateIn.type = "date"; const dl1 = el("label", "Date for file jobs"); dl1.append(dateIn);
-  const jobs = [["prepare", "Prepare today's rule inputs"], ["fetch_public", "Fetch official files for date"], ["build_master", "Build security master for date"], ["panel_build", "Build price panel"], ["decide", "Decide (saved candidate and horizon)"], ["evaluate", "Evaluate (saved candidate and horizon)"]];
-  const rrow = el("div", null, "row"); rrow.append(dl1);
-  for (const [k, label] of jobs) { const b = el("button", label, "button"); b.type = "button"; b.addEventListener("click", async () => {
-    const args = {}; if (dateIn.value && (k === "fetch_public" || k === "build_master" || k === "prepare")) args.date = dateIn.value;
-    try { await post("/api/request", { kind: k, args }); renderControls(); } catch (e) { alert("Refused: " + e.message); } }); rrow.append(b); }
-  rc.append(rrow, el("p", "The scheduler (marketlab run) picks requests up within a minute. If it is not running, requests wait. A request interrupted by a restart is shown as INTERRUPTED (file jobs are retried once).", "muted"));
   const rl = card("Requests", "wide"); g.append(rl);
   rl.append(rq.requests.length ? table(["Submitted", "Kind", "Args", "State", "Attempt", "Result / error"], rq.requests.map(r => [when(r.submitted_at), r.kind, JSON.stringify(r.args || {}), r.state, r.attempt || 0, r.error || (r.result == null ? "" : JSON.stringify(r.result).slice(0, 200))]), [4], { 3: v => "st-" + v }) : el("p", "none", "muted"));
 }
+function aiSettingsCard(ai) {
+  const c = card("AI explanations (optional, your own Anthropic key)", "wide");
+  const k = ai.key || {};
+  c.append(el("p", k.set ? "Key: set (" + (k.source === "SESSION" ? "kept in this server's memory until it restarts" : "saved in the private env file") + "). It is never shown again or sent anywhere except Anthropic's API." : "Key: not set. Explanations are off; everything else works without it.", k.set ? "ok-text" : "muted"));
+  if (!ai.sdk_installed) c.append(el("p", "The optional Anthropic SDK is not installed: run `pip install anthropic` (or `pip install -e .[ai]`) in this environment.", "warn-text"));
+  const kr = el("div", null, "row"); const ki = el("input"); ki.type = "password"; ki.placeholder = "sk-ant-…"; ki.autocomplete = "off"; ki.size = 34;
+  const persist = el("select"); for (const [v, lab] of [["0", "Keep for this session only"], ["1", "Save to the private env file"]]) { const o = el("option", lab); o.value = v; persist.append(o); }
+  const ks = el("button", "Set key", "button primary"); ks.type = "button"; const kc = el("button", "Remove key", "button"); kc.type = "button"; const km = el("p", "", "muted");
+  ks.addEventListener("click", async () => { try { await post("/api/ai/key", { key: ki.value, persist: persist.value === "1" }); ki.value = ""; renderControls(); } catch (e) { km.textContent = "Refused: " + e.message; } });
+  kc.addEventListener("click", async () => { try { await post("/api/ai/key", { clear: true }); renderControls(); } catch (e) { km.textContent = "Refused: " + e.message; } });
+  kr.append(ki, persist, ks, kc); c.append(kr, km);
+  const s = ai.settings || {}, f = el("form", null, "policy");
+  const ms = el("select"); for (const [m, info] of Object.entries(ai.models || {})) { const o = el("option", info.label + " · $" + info.price_per_mtok.input + " in / $" + info.price_per_mtok.output + " out per M tokens"); o.value = m; ms.append(o); } ms.value = s.model;
+  const ef = el("select"); for (const v of ["low", "medium", "high"]) { const o = el("option", v); o.value = v; ef.append(o); } ef.value = s.effort;
+  const mt = el("input"); mt.type = "number"; mt.min = 2000; mt.max = 16000; mt.step = 500; mt.value = s.max_tokens;
+  const fb = el("select"); for (const [v, lab] of [["1", "on (a refused request is retried on another model)"], ["0", "off"]]) { const o = el("option", lab); o.value = v; fb.append(o); } fb.value = s.fallback ? "1" : "0";
+  for (const [lab, inp] of [["Model", ms], ["Thinking effort", ef], ["Max output tokens (answer + thinking)", mt], ["Server-side fallback", fb]]) { const l = el("label", lab); l.append(inp); f.append(l); }
+  const sv = el("button", "Save AI settings", "button"); sv.type = "button"; const sm = el("p", "", "muted");
+  sv.addEventListener("click", async () => { try { await post("/api/ai/settings", { model: ms.value, effort: ef.value, max_tokens: Number(mt.value), fallback: fb.value === "1" }); renderControls(); } catch (e) { sm.textContent = "Refused: " + e.message; } });
+  const capsF = el("form", null, "policy"), cp = ai.caps || {}, ci = {};
+  for (const [kk, lab] of [["monthly_usd", "Monthly cap $ (max $" + cp.hard_monthly_ceiling_usd + ")"], ["daily_usd", "Daily cap $"], ["per_ask_usd", "Per-ask cap $"], ["asks_per_day", "Asks per day"]]) { const l = el("label", lab); const i = el("input"); i.type = "number"; i.step = "any"; i.value = cp[kk]; ci[kk] = i; l.append(i); capsF.append(l); }
+  const cs = el("button", "Save spending caps", "button"); cs.type = "button";
+  cs.addEventListener("click", async () => { const b = {}; for (const kk in ci) b[kk] = ci[kk].value; try { await post("/api/ai/caps", b); renderControls(); } catch (e) { sm.textContent = "Refused: " + e.message; } });
+  const sp = ai.spent || {};
+  c.append(el("h3", "Model and output"), f, el("div", null, "actions").appendChild(sv).parentNode, el("h3", "Spending caps (enforced before every call)"), capsF, el("div", null, "actions").appendChild(cs).parentNode, sm,
+    dl([["Spent today", "$" + sp.day_usd + " of $" + cp.daily_usd + " (" + sp.asks_today + " asks)"], ["Spent this month", "$" + sp.month_usd + " of $" + cp.monthly_usd], ["Prices verified", (ai.price_source || {}).verified_on + " · " + (ai.price_source || {}).url]]),
+    el("p", "Every ask first reserves its worst case (the whole prompt at the cache-write price plus every output token, plus a second attempt if fallback is on) and is refused if that would break a cap; afterwards the actual tokens are charged. The model sees only the stock's card and MarketLab's glossary: no account data.", "muted"));
+  return c;
+}
 
 // ---- shell ---------------------------------------------------------------------------------------
-let current = "overview";
-const renderers = { overview: async () => renderOverview(await get("/api/status")), data: renderData, universe: () => renderUniverse(), forecasts: renderForecasts, evaluation: () => renderEvaluation(), research: renderResearch, controls: renderControls };
+let current = "stocks";
+const renderers = { stocks: () => renderStocks(), how: renderHow, overview: async () => renderOverview(await get("/api/status")), data: renderData, universe: () => renderUniverse(), forecasts: renderForecasts, evaluation: () => renderEvaluation(), controls: renderControls };
 async function show(id) {
   current = id; for (const b of $$("#tabs button")) b.classList.toggle("on", b.dataset.tab === id);
   for (const s of $$("main .tab")) s.hidden = s.id !== "tab-" + id;
   try { await renderers[id](); $("#offline").hidden = true; } catch (err) { $("#offline").hidden = false; tab(id).append(el("p", "Could not load: " + err.message, "muted")); }
 }
+function applyTheme(mode) { const root = document.documentElement; if (mode === "auto") delete root.dataset.theme; else root.dataset.theme = mode; const b = $("#theme"); if (b) b.textContent = "Theme: " + mode; }
 document.addEventListener("DOMContentLoaded", () => {
+  let mode = "auto"; try { mode = localStorage.getItem("ml-theme") || "auto"; } catch (e) { mode = "auto"; }
+  applyTheme(mode);
+  const tb = $("#theme"); if (tb) tb.addEventListener("click", () => { mode = mode === "auto" ? "light" : mode === "light" ? "dark" : "auto"; applyTheme(mode); try { localStorage.setItem("ml-theme", mode); } catch (e) { /* private window */ } });
   for (const b of $$("#tabs button")) b.addEventListener("click", () => show(b.dataset.tab));
-  show("overview"); setInterval(() => { if (current === "overview") show("overview"); }, 30000);
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeSheet(); });
+  const sh = $("#sheet"); if (sh) sh.addEventListener("click", e => { if (e.target === sh) closeSheet(); });
+  get("/api/status").then(renderChips).catch(() => {});
+  show("stocks"); setInterval(() => { if (current === "overview") show("overview"); }, 30000);
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 });
 """
 
+APP_JS = BASE_JS + LEGACY_JS + STOCKS_JS + CONTROLS_JS
+
 SERVICE_WORKER = r"""
 "use strict";
-const SHELL = "marketlab-shell-v3";
+const SHELL = "marketlab-shell-v4";
 const ASSETS = ["/", "/app.js", "/app.css", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png"];
 self.addEventListener("install", e => e.waitUntil(caches.open(SHELL).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting())));
 self.addEventListener("activate", e => e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== SHELL).map(k => caches.delete(k)))).then(() => self.clients.claim())));

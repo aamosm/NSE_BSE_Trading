@@ -1,5 +1,52 @@
 # Handoff
 
+## Research ranking, explanations and AI commentary (Claude Opus 5.5, 5 Nov 2026, branch `research-ranking` on `2909474`)
+
+Worktree `C:\Users\d_hru\try\tradebot\marketlab-integrity`. Research data lives in `data/research/` (git-ignored):
+- `market/`: official NSE files from 3 Jul 2024 to 5 Nov 2026, the 582-session panel and `actions.sqlite3`;
+- `documents/`: holiday circular and Infosys filings;
+- `corporate-actions-2026/`: one 2026 API response with its manifest;
+- `private/` and `runs/`.
+
+**Delivered**
+- **Corporate actions.**
+  - `action_registry` imports NSE corporate-actions API files with their hashes verified against the manifest. Your 2016–2025 folder gave 22,499 rows after removing 12 exact duplicates. One request with MarketLab's own user agent fetched 1,929 rows for 2026.
+  - The parser now leaves 16 of 21,281 EQ subjects unparsed, down from 8,999. It handles the `/-` and `Re` forms, "Plus Special", "INCLUDING" (not double counted), `FV SPLT FRM`, preference-share bonuses (no equity factor), AGM/EGM typos and "Purposed Revised".
+  - Dividends are deduplicated, and a revised purpose supersedes the original.
+  - `reconcile` checks panel jumps against the registry. All 200 listed splits and bonuses in the window match their jumps. 194 of 898 price discontinuities and 110 of 156 ISIN changes are explained; the rest stay excluded.
+  - NSE's API `isin` is often the pre-split ISIN (1,189 cases), so it is kept for comparison only.
+- **Features (E17):** listed factors correct the ex-date return and earlier price levels. A new ISIN created by a listed split inherits its predecessor's history. Nothing changes without the registry.
+- **Ranking (E18):** `quant/ranking.py` (RANK.v1), `marketlab rank`, the `rank` request kind, write-once `runs/rankings/<day>/<digest>.json` files and forward-evidence status. `decide.fit_today` is now shared by the decision and the ranking.
+- **Explanations:** `explain.py` holds the glossary (41 terms), feature meanings, class rules, the per-stock narrative, the "what the numbers mean together" rules, the 15-stage How-it-works pipeline with live status, and today's summary. All of it is fixed templates over computed numbers.
+- **AI commentary:** `ai_explain.py`, owner decision recorded in CLAUDE.md, details in `docs/AI_EXPLAINER.md`.
+  - Prices were verified on 5 Nov 2026 and recorded in `researcher/budget.py`.
+  - Each call reserves its worst case, is refused if that breaks a cap, and is then settled per attempt.
+  - The key is kept in memory or in the private env file and is never echoed.
+  - The context is the card only. Numbers in an answer that are not on the card are flagged.
+  - Answers are stored as labelled commentary in `runs/ai/`.
+- **UI:**
+  - new Stocks tab (summary, class tiles, filter, sort and search table, per-stock sheet with range, contribution, cost and price charts, insights, step-by-step explanation, feature table, eligibility checks and Ask AI);
+  - How it works tab; AI settings and the Rank job under Controls & AI;
+  - light/dark theme toggle; SW `marketlab-shell-v4`.
+- **Calendar:** `sources.load_calendar_for` reads an optional `calendar_sources.json`. Stored circulars become verified years and the rest is reconstructed from publication. The research folder uses it: 2025 from NSE/CMTR/65587, 2026 built in, 2024 observed.
+
+**First real ranking (close of 5 Nov 2026, forward-eligible):**
+- 0 buy candidates, 10 hold off, 791 high risk, 60 avoid (all exchange flags), 110 no forecast, 2,487 not eligible.
+- Why: the median typical 20-session move is ±11.5% against an 8% tail limit. After shrinkage the forecasts lie within ±0.16% (the model keeps 12% of each forecast with 311 training dates), while a round trip costs about 0.76%.
+
+**Verify:** `PYTHONPATH="src;tests" .venv/Scripts/python.exe -m pytest -q tests/test_ranking.py tests/test_action_registry_api.py tests/test_ai_explain.py tests/test_dashboard_render.py tests/test_corporate_action_registry.py`. The Node render test is skipped without Node. Then view the research folder with `marketlab --private-dir data/research/private --market-dir data/research/market dashboard --port 8770`.
+
+**Known:** `tests/test_researcher.py::test_rate_limit_is_released_and_retried_auth_is_final` also fails on the unmodified `2909474`, so it predates this branch and was left untouched.
+
+**Left (in order):**
+1. Backfill about 3 more years: legacy-format bhavcopies before 8 Jul 2024 and the 2020–2024 holiday circulars, needed for the registered evaluation's 1,376 sessions.
+2. Freeze the holdout, run walk-forward trials and apply the promotion rule.
+3. Twelve weeks of forward paper observation; rankings recorded before each open are scored by `ranking.forward_record`.
+4. Dividend-adjusted bases (H-CA1): 15,778 labels are still excluded as UNEXPLAINED_PRICE_ADJUSTMENT.
+5. The 46 unexplained ISIN changes.
+6. A daily scheduled ranking job.
+7. Reconcile charges with a real contract note.
+
 ## Historical pilot (Claude Opus 5.5, 5 Nov 2026, branch `historical-pilot` on `integrity-replay`)
 
 Bounded NSE pilot for January–July 2025 from official archives, plus the format-transition check (3–5 Jul 2024) and the reconstructed Infosys Q4 FY25 case. Results are in `docs/pilot/PILOT_2025.md`, the immutable manifest in `docs/pilot/nse_2025_manifest.json` (SHA-256 `93501484…`), and the questions for GPT in `docs/pilot/GPT_SOURCE_QUESTIONS.md`. The data stays in `data/pilot/nse_2025` (git-ignored). The holdout was not frozen.

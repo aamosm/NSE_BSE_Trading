@@ -61,33 +61,10 @@ def run(panel: Panel | None, cfg: evaluate.Config, *, root: Path, origin: str, f
                          "availability": u.availability} if u else {"kept": 0, "unverified": ["DAY_NOT_A_SESSION"]})
     body["data"] = {"manifest_hash": ds.manifest_hash, "missing_sessions": len(ds.missing_sessions),
                     "session_basis": {str(k): v for k, v in ds.session_basis.items()}}
-    complete = features.rank_stock_features([o for o in ds.opportunities if not o["missing"]])
-    train = [o for o in complete if o["label"].status == labels.RESOLVED]
-    if len({o["day"] for o in train}) < 60:
-        return finish("WAIT", reasons + ["INSUFFICIENT_RESOLVED_LABELS"], rows=len(train))
-    ms = features.market_stats(train)
-    train = [o for o in features.scale_market_features(train, ms) if not features.missing_features(o["x"])]
-    today_all = [o for o in ds.opportunities if o["day"] == day]
-    today = features.scale_market_features([o for o in complete if o["day"] == day], ms)
-    ys = features.winsorize_targets([o["label"].excess for o in train])
-    fit_rows = [{"day": o["day"], "isin": o["isin"], "x": o["x"], "y": y, "sigma": o["sigma"]} for o, y in zip(train, ys)]
-    model = forecast.fit(fit_rows, h=cfg.h, target_id=f"{cfg.candidate}.h{cfg.h}.v2", lam_grid=cfg.lam_grid,
-                         sessions=ds.sessions, bootstrap=bootstrap, seed=cfg.seed)
-    fc_rows, todays = [], {}
-    coverage_missing = len(today_all) - len(today)
-    for o in today:
-        if features.missing_features(o["x"]) or not (o["sigma"] > 0):
-            coverage_missing += 1
-            continue
-        p = forecast.predict(model, o["x"], o["sigma"])
-        row = {"isin": o["isin"], "symbol": o["symbol"], "close": o["ref_close"], **p,
-               "slippage": 2 * labels.slippage_for(o["median_value"])}
-        fc_rows.append(row)
-        if "abstain" not in p:
-            z = model.z_sorted
-            todays[o["isin"]] = dict(p, ref_close=o["ref_close"], symbol=o["symbol"], median_value=o["median_value"],
-                                     _p_above=lambda c, mu=p["mu_hat"], sg=p["sigma_hat"], z=z:
-                                     forecast.conformal_probability_above(z, (c - mu) / sg))
+    fit = fit_today(ds, cfg, day, bootstrap=bootstrap)
+    if fit.get("error"):
+        return finish("WAIT", reasons + [fit["error"]], rows=fit["rows"])
+    model, fc_rows, todays, coverage_missing = fit["model"], fit["fc_rows"], fit["todays"], fit["coverage_missing"]
     if promo is not None and model.calibration_n >= forecast.MIN_CALIBRATION:
         return _paper_decision(panel, cfg, policy, ds, day, todays, model, fc_rows, coverage_missing, calendar, root,
                                actions, finish)
@@ -122,6 +99,46 @@ def run(panel: Panel | None, cfg: evaluate.Config, *, root: Path, origin: str, f
                    "plan_status": "DIAGNOSTIC_NOT_PROMOTED" if not promo else "DIAGNOSTIC_LEDGER_MISSING"}
     return finish("WAIT", reasons, diagnostics=diagnostics, model_id=model.target_id, forecasts=len(fc_rows),
                   plan_quantities=plan.get("quantities", {}))
+
+
+def fit_today(ds, cfg: evaluate.Config, day, *, bootstrap: int = 50) -> dict:
+    """The live model and the day's forecasts from one dataset (shared by the decision and the ranking, so both
+    use the same rows, features, scaling, fit and conformal distribution).
+
+    Training rows: complete features and a resolved label (decision-time ranks over the whole cross-section of
+    their date; market features z-scored with training statistics; targets winsorized). Returns {"error",
+    "rows"} with fewer than 60 training dates, else the model, the market statistics, today's scaled rows
+    (``today``), every row of the day (``today_all``), forecast rows and {isin: forecast} for non-abstaining ones."""
+    complete = features.rank_stock_features([o for o in ds.opportunities if not o["missing"]])
+    train = [o for o in complete if o["label"].status == labels.RESOLVED]
+    if len({o["day"] for o in train}) < 60:
+        return {"error": "INSUFFICIENT_RESOLVED_LABELS", "rows": len(train)}
+    ms = features.market_stats(train)
+    train = [o for o in features.scale_market_features(train, ms) if not features.missing_features(o["x"])]
+    today_all = [o for o in ds.opportunities if o["day"] == day]
+    today = features.scale_market_features([o for o in complete if o["day"] == day], ms)
+    ys = features.winsorize_targets([o["label"].excess for o in train])
+    fit_rows = [{"day": o["day"], "isin": o["isin"], "x": o["x"], "y": y, "sigma": o["sigma"]} for o, y in zip(train, ys)]
+    model = forecast.fit(fit_rows, h=cfg.h, target_id=f"{cfg.candidate}.h{cfg.h}.v2", lam_grid=cfg.lam_grid,
+                         sessions=ds.sessions, bootstrap=bootstrap, seed=cfg.seed)
+    fc_rows, todays = [], {}
+    coverage_missing = len(today_all) - len(today)
+    for o in today:
+        if features.missing_features(o["x"]) or not (o["sigma"] > 0):
+            coverage_missing += 1
+            continue
+        p = forecast.predict(model, o["x"], o["sigma"])
+        row = {"isin": o["isin"], "symbol": o["symbol"], "close": o["ref_close"], **p,
+               "slippage": 2 * labels.slippage_for(o["median_value"])}
+        fc_rows.append(row)
+        if "abstain" not in p:
+            z = model.z_sorted
+            todays[o["isin"]] = dict(p, ref_close=o["ref_close"], symbol=o["symbol"], median_value=o["median_value"],
+                                     _p_above=lambda c, mu=p["mu_hat"], sg=p["sigma_hat"], z=z:
+                                     forecast.conformal_probability_above(z, (c - mu) / sg))
+    return {"model": model, "market_stats": ms, "today": today, "today_all": today_all, "fc_rows": fc_rows,
+            "todays": todays, "coverage_missing": coverage_missing, "train_rows": len(train),
+            "train_days": len({o["day"] for o in train})}
 
 
 def _paper_decision(panel, cfg, policy, ds, day, todays, model, fc_rows, coverage_missing, calendar, root, actions, finish):

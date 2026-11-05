@@ -22,12 +22,57 @@ from pathlib import Path
 from ..common import now, timestamp
 
 D = Decimal
-# USD per 1M tokens (input, output). Empty by design: a provider is enabled only after its price is verified
-# against the provider's published list and recorded here with the source and date (spec: no invented capabilities).
-MODEL_PRICES: dict[str, tuple[Decimal, Decimal]] = {}
+
+
+@dataclass(frozen=True, slots=True)
+class TokenPrice:
+    """USD per 1M tokens for one model: base input, 5-minute cache write, cache hit, output; optional higher prices
+    for prompts above ``long_threshold`` tokens (all input categories and output priced at the long rates)."""
+    input: Decimal
+    cache_write_5m: Decimal
+    cache_read: Decimal
+    output: Decimal
+    long_threshold: int | None = None
+    long: "TokenPrice | None" = None
+
+
+# Verified 2026-11-05 against https://platform.claude.com/docs/en/about-claude/pricing (model pricing table and the
+# cache-hit footnote: 0.05x base input on Claude Opus 5.5 and Claude Sonnet 5.5). Owner decision 2026-11-05: an
+# Anthropic key may be entered for per-stock explanations; every call is reserved and settled in this ledger.
+PRICE_SOURCE = {"url": "https://platform.claude.com/docs/en/about-claude/pricing", "verified_on": "2026-11-05"}
+CLAUDE_PRICES: dict[str, TokenPrice] = {
+    "claude-opus-5-5": TokenPrice(D("4"), D("5"), D("0.20"), D("20")),
+    "claude-sonnet-5-5": TokenPrice(D("2"), D("2.50"), D("0.10"), D("10")),
+    "claude-haiku-5-5": TokenPrice(D("0.10"), D("0.125"), D("0.01"), D("0.50"), 100_000,
+                                   TokenPrice(D("0.50"), D("0.625"), D("0.05"), D("2.50"))),
+    # possible server-side fallback targets (priced when a fallback attempt runs)
+    "claude-opus-5": TokenPrice(D("5"), D("6.25"), D("0.50"), D("25")),
+    "claude-opus-4-8": TokenPrice(D("5"), D("6.25"), D("0.50"), D("25")),
+    "claude-sonnet-5": TokenPrice(D("2"), D("2.50"), D("0.20"), D("10")),
+}
+# The most expensive verified rate, used for an attempt whose model is not in the table (never under-charged).
+CEILING_PRICE = TokenPrice(D("10"), D("12.50"), D("1"), D("50"))  # Claude Fable 5 / 5.1 (same page)
+# USD per 1M tokens (input, output). A provider is enabled only after its price is verified against the provider's
+# published list and recorded here with the source and date (spec: no invented capabilities).
+MODEL_PRICES: dict[str, tuple[Decimal, Decimal]] = {m: (p.input, p.output) for m, p in CLAUDE_PRICES.items()}
 # USD per tool invocation, likewise recorded with their source when a provider is enabled.
 TOOL_PRICES: dict[str, Decimal] = {"web_search": D("0.0025"), "web_search_fast": D("0.001")}
 HARD_MONTHLY_CEILING = D("10.00")  # owner's stated range is $5-10/month; config can never exceed this
+
+
+def token_cost_usd(model: str, *, input_tokens: int, output_tokens: int, cache_write_tokens: int = 0,
+                   cache_read_tokens: int = 0) -> tuple[Decimal, bool]:
+    """Cost of one attempt from its reported token counts. Returns (usd, price_known); an unknown model is priced at
+    the ceiling rate so the ledger never records less than could have been billed."""
+    p = CLAUDE_PRICES.get(model)
+    known = p is not None
+    p = p or CEILING_PRICE
+    prompt = input_tokens + cache_write_tokens + cache_read_tokens
+    if p.long is not None and p.long_threshold is not None and prompt > p.long_threshold:
+        p = p.long
+    usd = (D(input_tokens) * p.input + D(cache_write_tokens) * p.cache_write_5m + D(cache_read_tokens) * p.cache_read
+           + D(output_tokens) * p.output) / 1_000_000
+    return usd.quantize(D("0.000001"), rounding=ROUND_CEILING), known
 
 
 class BudgetExceeded(RuntimeError):
@@ -83,10 +128,12 @@ class Policy:
     per_job_usd: dict = field(default_factory=lambda: {
         "overnight_update": D("0.03"), "upcoming_event_verification": D("0.03"),
         "material_event_investigation": D("0.05"), "contradiction_resolution": D("0.05"),
-        "bounded_company_research": D("0.25"), "smoke": D("0.02"), "search": D("0.005")})
+        "bounded_company_research": D("0.25"), "smoke": D("0.02"), "search": D("0.005"),
+        "stock_explainer": D("0.50")})
     per_kind_daily_count: dict = field(default_factory=lambda: {
         "overnight_update": 20, "upcoming_event_verification": 20, "material_event_investigation": 10,
-        "contradiction_resolution": 10, "bounded_company_research": 2, "smoke": 5, "search": 40})
+        "contradiction_resolution": 10, "bounded_company_research": 2, "smoke": 5, "search": 40,
+        "stock_explainer": 30})
 
     def __post_init__(self):
         if not (D("0") <= self.daily_usd <= self.monthly_usd <= HARD_MONTHLY_CEILING):

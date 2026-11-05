@@ -377,6 +377,11 @@ def parser():
     a.add_argument("--ablate", nargs="*", default=[]); a.add_argument("--holdout", action="store_true", help="evaluate the locked holdout (once)")
     a.add_argument("--capital", type=float, default=None, help="override the saved policy's capital for this run (recorded)")
     a.add_argument("--bootstrap", type=int, default=50)
+    a = sub.add_parser("rank", help="today's research ranking of every stock (buy candidates, hold off, avoid ...) with reasons")
+    a.add_argument("--h", type=int, default=None); a.add_argument("--bootstrap", type=int, default=50)
+    a = sub.add_parser("actions-import-api", help="import NSE corporate-actions API responses (folder with raw/*.json + manifest.json)")
+    a.add_argument("--folder", type=Path, required=True)
+    sub.add_parser("actions-reconcile", help="every panel price jump and ISIN change against the listed actions")
     a = sub.add_parser("actions-import", help="import the NSE corporate-actions CSV downloaded from nseindia.com")
     a.add_argument("--file", type=Path, required=True)
     sub.add_parser("actions-feeds", help="load every stored corporate-action RSS vintage into the action registry")
@@ -480,11 +485,40 @@ def main():
             try:
                 pol = service.policy(root)
                 sc = quniverse.screen_for_day(pn, args.date, quniverse.ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=pol["capital"]),
-                                              args.market_dir, sources.load_calendar(args.market_dir)[0])
+                                              args.market_dir, sources.load_calendar_for(args.market_dir)[0])
             finally:
                 pn.close()
             print(json.dumps({"day": sc.day.isoformat(), "kept": len(sc.isins), "unverified": sc.unverified, "stats": sc.stats,
                               "rule_inputs": sc.availability, "isins": sc.isins[:100]}, indent=1))
+        elif args.command == "rank":
+            cal = sources.load_calendar_for(args.market_dir)[0]
+            out = service.build_ranking(root, args.market_dir, cal, h=args.h, bootstrap=args.bootstrap,
+                                        progress=lambda m: print(m, flush=True))
+            top = lambda k: [s["symbol"] for s in sorted((s for s in out.get("stocks", []) if s["class"] == k),  # noqa: E731
+                                                       key=lambda s: s.get("rank") or 1e9)][:15]
+            print(json.dumps({k: out.get(k) for k in ("day", "status", "counts", "artifact", "forward")}
+                             | {"buy_candidates": top("BUY_CANDIDATE"), "qualifies": top("QUALIFIES"), "avoid": top("AVOID"),
+                                "validation": (out.get("validation") or {}).get("status")}, indent=1, default=str))
+        elif args.command in ("actions-import-api", "actions-reconcile"):
+            from . import action_registry as ar
+            from .quant.panel import Panel
+            out = {}
+            if args.command == "actions-import-api":
+                st = Store(ar.registry_path(args.market_dir))
+                try:
+                    out = ar.import_verification_folder(st, args.folder)
+                finally:
+                    st.close()
+            pp = args.market_dir / "panel.sqlite3"
+            if pp.exists():
+                pn = Panel(pp)
+                try:
+                    idx = ar.load_index(args.market_dir, pn)
+                    out["index"] = idx.summary() if idx else None
+                    out["reconcile"] = ar.reconcile(pn, idx)
+                finally:
+                    pn.close()
+            print(json.dumps(out, indent=1, default=str))
         elif args.command in ("actions-import", "actions-feeds"):
             from . import action_registry as ar
             from .quant.panel import Panel
@@ -510,7 +544,7 @@ def main():
             from .quant import registry
             from .quant.panel import Panel
             from .quant.sessions import exchange_sessions
-            cal = sources.load_calendar(args.market_dir)[0]
+            cal = sources.load_calendar_for(args.market_dir)[0]
             pn = Panel(args.market_dir / "panel.sqlite3")
             try:
                 days = set(pn.sessions())
@@ -531,7 +565,7 @@ def main():
             cfg = qevaluate.Config(candidate=cand, h=h, W=eff.W, bootstrap=args.bootstrap if args.command == "evaluate" else 50,
                                    ablate=tuple(args.ablate) if args.command == "evaluate" else (), evaluate_holdout=getattr(args, "holdout", False),
                                    screen=ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=eff.W), policy=eff)
-            cal = sources.load_calendar(args.market_dir)[0]
+            cal = sources.load_calendar_for(args.market_dir)[0]
             panel_path = args.market_dir / "panel.sqlite3"
             pn = Panel(panel_path) if panel_path.exists() else None
             try:

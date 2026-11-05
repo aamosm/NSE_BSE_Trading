@@ -406,6 +406,44 @@ def calendar_year_from_circular(text: str, year: int, source_id: str):
     return CalendarYear(Exchange.NSE, year, holidays - special, holidays - special, special, frozenset(), (), cites)
 
 
+def research_calendar(market: Path, documents: Path, circulars: list[dict], base, base_report: dict) -> tuple:
+    """(calendar, report) for a history folder: the base calendar's years, plus each stored circular (``documents``
+    holds the gzipped PDF fetched from its official URL), plus observed publication for the rest of the stored
+    window. A circular that is missing or does not parse is reported and its year stays observed."""
+    import hashlib
+    from datetime import date as _date
+    from .rules.calendar import MarketCalendar
+    from .rules.types import Exchange
+    years = list(getattr(base, "_years", {}).values())
+    have = {y.year for y in years if y.exchange is Exchange.NSE}
+    report = dict(base_report, circulars={})
+    for c in circulars:
+        y, sid, url = int(c["year"]), c["source_id"], c["url"]
+        if y in have:
+            report["circulars"][str(y)] = {"source": sid, "result": "BASE_CALENDAR_HAS_YEAR"}
+            continue
+        pdf = read_document(documents, url)
+        if pdf is None:
+            report["circulars"][str(y)] = {"source": sid, "result": "DOCUMENT_NOT_STORED"}
+            continue
+        try:
+            years.append(calendar_year_from_circular(pdf_text(pdf), y, sid))
+            have.add(y)
+            report["circulars"][str(y)] = {"source": sid, "url": url, "sha256": hashlib.sha256(pdf).hexdigest(), "result": "VERIFIED"}
+        except ValueError as e:
+            report["circulars"][str(y)] = {"source": sid, "result": "PARSE_FAILED", "error": str(e)}
+    verified = MarketCalendar(tuple(years))
+    recs = attempts(market).get("nse_bhavcopy", {})
+    days = sorted(_date.fromisoformat(k) for k in recs)
+    if not days:
+        return verified, report
+    observed = ObservedCalendar(market, days[0], days[-1])
+    cal = CompositeCalendar(verified, observed)
+    report.update(source="COMPOSITE", verified_years=sorted(have), observed_window=[days[0].isoformat(), days[-1].isoformat()],
+                  cross_check=cal.cross_check())
+    return cal, report
+
+
 class CompositeCalendar:
     """Verified years (a MarketCalendar built from circulars or the holiday API) plus an ObservedCalendar for the
     rest. Inside a verified year, a weekend session that was published but is in no loaded circular (e.g. a Budget

@@ -12,6 +12,7 @@ data/raw/
 data/runs/
 data/market/
 data/pilot/
+data/research/
 logs/
 backups/
 *.sqlite*

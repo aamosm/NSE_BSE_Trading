@@ -383,3 +383,19 @@ def load_calendar(market: Path, fallback=None) -> tuple:
         return MarketCalendar(fallback), report
     report.update(source="NSE_API", years=years, trading_vintage=t[0].isoformat(), clearing_vintage=c[0].isoformat())
     return MarketCalendar(tuple(built)), report
+
+
+def load_calendar_for(market: Path) -> tuple:
+    """``load_calendar``, extended for a history folder that declares ``calendar_sources.json``: every stored NSE
+    holiday circular listed there becomes a verified year, and years with stored bhavcopies but no verified calendar
+    are reconstructed from what the exchange published (history.ObservedCalendar, basis OBSERVED_PUBLICATION).
+    Without the file this is exactly ``load_calendar``."""
+    cal, report = load_calendar(market)
+    spec_path = market / "calendar_sources.json"
+    if not spec_path.exists():
+        return cal, report
+    import json as _json
+    from . import history
+    spec = _json.loads(spec_path.read_text(encoding="utf-8"))
+    return history.research_calendar(market, (market / spec.get("documents", "../documents")).resolve(),
+                                     spec.get("circulars", []), cal, report)

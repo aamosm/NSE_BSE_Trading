@@ -40,7 +40,8 @@ def test_real_nse_purpose_wording_parses(purpose, expected):
 def test_combined_and_unknown_purposes():
     two = ar.parse_purpose("FINAL DIVIDEND - RS 22 PER SHARE / SPECIAL DIVIDEND - RS 8 PER SHARE")
     assert [(p["label"], p["cash_per_share"]) for p in two] == [("FINAL", 22.0), ("SPECIAL", 8.0)]
-    assert ar.parse_purpose("ANNUAL GENERAL MEETING")[0]["kind"] == "UNPARSED"  # never guessed
+    assert ar.parse_purpose("ANNUAL GENERAL MEETING")[0]["kind"] == "AGM"  # a non-price event, named as such
+    assert ar.parse_purpose("SOMETHING NEW")[0]["kind"] == "UNPARSED"  # never guessed
     assert ar.parse_purpose("CONSOLIDATION OF SHARES FROM RE 1/- PER SHARE TO RS 10/- PER SHARE")[0]["price_factor"] == 10.0
 
 

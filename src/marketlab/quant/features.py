@@ -44,13 +44,33 @@ class _RollingMedian:
         return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
 
 
-def stock_feature_rows(series: dict, bad_days: set[date] | None = None) -> dict[date, dict[str, float]]:
+def stock_feature_rows(series: dict, bad_days: set[date] | None = None, return_factors: dict[date, float] | None = None,
+                       level_factors: dict[date, float] | None = None) -> dict[date, dict[str, float]]:
     """``series`` from Panel.series_arrays. Returns {day: features} for days with full history. A day in
-    ``bad_days`` (an unexplained price discontinuity) makes every window containing it incomplete."""
+    ``bad_days`` (an unexplained price discontinuity) makes every window containing it incomplete.
+
+    Listed, ratio-consistent splits and bonuses (action_registry) are applied instead of discarding the window:
+    ``return_factors`` {ex-date: f} turns that day's close / unadjusted base into an ordinary return
+    (ln(close / (base * f))), and ``level_factors`` {ex-date: f} puts every earlier price in post-action units for the
+    250-session range (prices divided by the cumulative factor, so the comparison is scale-free). Without either the
+    result is exactly the unadjusted computation."""
     days, o, h, l, c, pc, val = (series[k] for k in ("days", "open", "high", "low", "close", "prev_close", "value"))
     n = len(days)
     bad_days = bad_days or set()
-    r = [float("nan") if days[i] in bad_days else log_return(c[i], pc[i]) for i in range(n)]
+    rf, lf = return_factors or {}, level_factors or {}
+    if lf:  # normalised levels: x_j * exp(-L_j), L_j = sum of ln f over ex-dates <= day j
+        acc, scale = 0.0, []
+        for d in days:
+            if d in lf:
+                acc += math.log(lf[d])
+            scale.append(math.exp(-acc))
+        h = [h[i] * scale[i] for i in range(n)]
+        l = [l[i] * scale[i] for i in range(n)]
+        c_level = [c[i] * scale[i] for i in range(n)]
+    else:
+        c_level = c
+    base = [pc[i] * rf.get(days[i], 1.0) for i in range(n)]
+    r = [float("nan") if days[i] in bad_days else log_return(c[i], base[i]) for i in range(n)]
     hl2 = [(math.log(h[i] / l[i]) ** 2) if h[i] > 0 and l[i] > 0 else float("nan") for i in range(n)]
     ami = [abs(r[i]) / (val[i] / 1e7) if val[i] > 0 and not math.isnan(r[i]) else float("nan") for i in range(n)]
     ok = [not (math.isnan(r[i]) or math.isnan(hl2[i]) or math.isnan(ami[i])) for i in range(n)]
@@ -87,8 +107,8 @@ def stock_feature_rows(series: dict, bad_days: set[date] | None = None) -> dict[
             "park_20": math.sqrt(wsum(P_hl, 20) / 20 / (4 * math.log(2))),
             "amihud_20": wsum(P_ami, 20) / 20,
             "lvalue_20": math.log(mv),
-            "range_250": (c[i] - l[lo_q[0]]) / (h[hi_q[0]] - l[lo_q[0]]) if h[hi_q[0]] > l[lo_q[0]] else 0.5,
-            "gap_1": math.log(o[i] / pc[i]) if o[i] > 0 and pc[i] > 0 else 0.0,
+            "range_250": (c_level[i] - l[lo_q[0]]) / (h[hi_q[0]] - l[lo_q[0]]) if h[hi_q[0]] > l[lo_q[0]] else 0.5,
+            "gap_1": math.log(o[i] / base[i]) if o[i] > 0 and base[i] > 0 else 0.0,
         }
     return out
 

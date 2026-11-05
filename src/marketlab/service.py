@@ -97,9 +97,9 @@ POLICY_BOUNDS = {"capital": (1000.0, 1e8), "K": (1, 10), "cap_fraction": (0.05, 
 NULLABLE = {"K", "cap_fraction"}
 # Stored but not read by any job yet: the scheduler collects broker data for its --symbols argument.
 UNSUPPORTED_POLICY_KEYS = {"symbols": "stored only; the scheduler uses its --symbols argument"}
-REQUEST_KINDS = {"prepare", "fetch_public", "build_master", "panel_build", "decide", "evaluate"}
+REQUEST_KINDS = {"prepare", "fetch_public", "build_master", "panel_build", "decide", "evaluate", "rank"}
 REQUESTS_DIR = "requests"
-IDEMPOTENT_REQUESTS = {"prepare", "fetch_public", "build_master", "panel_build"}
+IDEMPOTENT_REQUESTS = {"prepare", "fetch_public", "build_master", "panel_build", "rank"}  # same inputs, same result
 MAX_REQUEST_ATTEMPTS = 2
 PROCESS_TOKEN = uuid.uuid4().hex  # identifies this scheduler process in request files (restart detection)
 
@@ -199,6 +199,31 @@ def list_requests(root: Path, limit=30) -> list:
     return list(reversed(out))
 
 
+def build_ranking(root: Path, market: Path, calendar, *, h: int | None = None, candidate: str | None = None,
+                  bootstrap: int = 50, progress=None, origin: str = "cli") -> dict:
+    """Today's research ranking (quant.ranking) with the saved policy, the corporate-action registry and rule files
+    admitted by the exchange server's timestamp before the entry session opens (RECONSTRUCTED; labelled)."""
+    from . import action_registry
+    from .quant import evaluate as qevaluate, ranking as qranking, universe as quniverse
+    from .quant.panel import Panel
+    from .quant.universe import ScreenPolicy
+    pol = policy(root)
+    eff = effective_policy(root, pol)
+    cfg = qevaluate.Config(candidate=candidate or pol["candidate"], h=int(h or pol["h"]), W=eff.W,
+                           screen=ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=eff.W), policy=eff)
+    panel_path = market / "panel.sqlite3"
+    if not panel_path.exists():
+        raise ValueError("PANEL_NOT_BUILT: build the price panel first")
+    pn = Panel(panel_path)
+    try:
+        acts = action_registry.load_index(market, pn)
+        ri = lambda d: quniverse.rule_inputs_for(market, d, calendar, "RECONSTRUCTED")  # noqa: E731
+        return qranking.build(pn, cfg, root=root, calendar=calendar, rule_inputs_fn=ri, actions=acts, bootstrap=bootstrap,
+                              progress=progress, extra={"origin": origin})
+    finally:
+        pn.close()
+
+
 def _run_request(ctx, req: dict) -> dict:
     from datetime import date as _date
     kind, args = req["kind"], req.get("args", {})
@@ -215,6 +240,9 @@ def _run_request(ctx, req: dict) -> dict:
     if kind == "panel_build":
         from .quant import panel as qpanel
         return {"result": qpanel.build(ctx.market, calendar=ctx.cal)}
+    if kind == "rank":
+        out = build_ranking(ctx.root, ctx.market, ctx.cal, h=args.get("h"), origin="controls")
+        return {"result": {k: out.get(k) for k in ("day", "status", "counts", "digest")} | {"forward": out.get("forward")}}
     pol = policy(ctx.root)
     from . import decisions
     from .quant import decide as qdecide, evaluate as qevaluate, universe as quniverse
@@ -506,7 +534,7 @@ class Context:
         self.root, self.market, self.symbols = root, market, list(symbols)
         if calendar is None:
             from . import sources
-            calendar, self.calendar_report = sources.load_calendar(market)
+            calendar, self.calendar_report = sources.load_calendar_for(market)
         else:
             self.calendar_report = {"source": "SUPPLIED"}
         self.cal = calendar

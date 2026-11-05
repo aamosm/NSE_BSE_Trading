@@ -343,7 +343,7 @@ def build(market: Path, path: Path | None = None, after: date | None = None, cal
     """Load every stored NSE bhavcopy and index file into the panel (idempotent), then compute implied factors."""
     panel = Panel(path or market / "panel.sqlite3")
     if calendar is None:
-        calendar = sources.load_calendar(market)[0]
+        calendar = sources.load_calendar_for(market)[0]
     db = sources.catalog(market)
     loaded, indices = 0, 0
     try:

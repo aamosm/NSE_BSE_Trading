@@ -24,7 +24,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TARGETED = ["test_decision_integrity.py", "test_replay_correctness.py", "test_history_pilot.py", "test_quant_pipeline.py",
             "test_quant_core.py", "test_paper_ledger.py", "test_corporate_action_registry.py", "test_service.py",
-            "test_webapp.py", "test_webapp_ui.py", "test_boundaries.py"]
+            "test_webapp.py", "test_webapp_ui.py", "test_boundaries.py", "test_ranking.py", "test_action_registry_api.py",
+            "test_ai_explain.py", "test_dashboard_render.py", "test_researcher.py"]
 
 
 def git(*args) -> str:

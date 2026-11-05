@@ -24,7 +24,8 @@ def paths(market: Path) -> dict:
 def provider_and_env(root: Path):
     env = login.load_env(root)
     name = env.get("RESEARCH_PROVIDER", "").strip().lower()
-    if name and name != "none":
+    # "anthropic" enables only the per-stock explainer (marketlab.ai_explain); evidence jobs keep no provider
+    if name and name not in ("none", "anthropic"):
         raise ValueError(f"No adapter is implemented for RESEARCH_PROVIDER={name}; see researcher/provider.py")
     return NullProvider(), [v for v in env.values() if v]
 

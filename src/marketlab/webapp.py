@@ -39,8 +39,9 @@ QUOTA = 256 * 1024 * 1024
 RUNS: Path | None = None  # None: runs live beside the private folder (decisions.runs_dir); tests may override
 # Known limitations that no data in this process can clear (each is listed with basis KNOWN_LIMITATION).
 KNOWN_LIMITATIONS = [
-    ("CORPORATE_ACTIONS_UNVERIFIED", "Exchange-implied factors are unverified against an action history; hypothesis "
-                                     "H-CA1 (dividends) is open, so windows with unlisted factors are excluded."),
+    ("CORPORATE_ACTIONS_PARTIAL", "Splits and bonuses are applied from NSE's corporate-action records only where listed and "
+                                  "consistent with the price jump; unlisted jumps stay excluded, dividend payment dates are "
+                                  "unknown and the API is a current response, not a point-in-time archive."),
     ("BSE_CALENDAR_UNVERIFIED", "BSE trading calendar not verified; BSE simulations are blocked."),
     ("MIS_LIST_UNAVAILABLE", "Broker intraday eligibility list unavailable; no intraday candidate exists."),
     ("CONTRACT_NOTE_UNRECONCILED", "STT/stamp aggregation not yet reconciled with a real contract note."),
@@ -250,7 +251,7 @@ def status(root: Path, market: Path, at=None, calendar=None) -> dict:
             db.close()
     timeline = decisions.timeline(root, 30)
     if calendar is None:
-        calendar, cal_report = sources.load_calendar(market)
+        calendar, cal_report = sources.load_calendar_for(market)
     else:
         cal_report = {"source": "SUPPLIED"}
     cal_report = dict(cal_report)
@@ -377,7 +378,7 @@ def data_coverage(market: Path, calendar=None) -> dict:
         finally:
             con.close()
     try:
-        cal = calendar or sources.load_calendar(market)[0]
+        cal = calendar or sources.load_calendar_for(market)[0]
         from .rules.types import Exchange
         today = now().date()
         days = [today - timedelta(days=i) for i in range(1, 31)]
@@ -405,7 +406,7 @@ def universe_view(market: Path, day: date | None = None, root: Path | None = Non
         if not sessions:
             return {"error": "PANEL_EMPTY"}
         day = day or sessions[-1]
-        cal = sources.load_calendar(market)[0]
+        cal = sources.load_calendar_for(market)[0]
         s = screen_for_day(pn, day, ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=pol["capital"]), market, cal)
         rows = []
         if s.isins:
@@ -511,10 +512,141 @@ def requests_view(root: Path) -> dict:
     return {"requests": service.list_requests(root)}
 
 
+# ---- research ranking, explanations and AI commentary --------------------------------------------------------
+
+STOCK_LIST_FIELDS = ("isin", "symbol", "name", "class", "reasons", "close", "day_change", "median_value_20", "rank", "rank_of")
+
+
+def _stock_row(s: dict) -> dict:
+    from . import explain
+    row = {k: s.get(k) for k in STOCK_LIST_FIELDS}
+    fc, c, g, f = s.get("forecast") or {}, s.get("costs") or {}, s.get("gates") or {}, s.get("features") or {}
+    row.update(mu_shrunk=fc.get("mu_shrunk"), mu_hat=fc.get("mu_hat"), q10=fc.get("q10"), q90=fc.get("q90"),
+               p_positive=fc.get("p_positive"), sigma_hat=fc.get("sigma_hat"), cost=c.get("cost_fraction"),
+               net_edge=g.get("net_edge"), selected_q=(s.get("allocation") or {}).get("q"),
+               vol_20=f.get("vol_20"), mom_12_1=f.get("mom_12_1"), ret_20=f.get("ret_20"), range_250=f.get("range_250"),
+               headline=explain.CLASS_INFO[s["class"]]["title"] + ": " + explain.reason_text((s.get("reasons") or ["-"])[0]))
+    return row
+
+
+class RankingCache:
+    """The latest ranking file, parsed once per change (files are write-once, so path + size identify it)."""
+
+    def __init__(self):
+        self.key, self.body = None, None
+
+    def latest(self, root: Path) -> dict | None:
+        from .quant import ranking
+        items = ranking.list_rankings(root)
+        if not items:
+            return None
+        p = Path(items[-1]["path"])
+        key = (str(p), p.stat().st_size)
+        if key != self.key:
+            self.body, self.key = ranking.load(root, items[-1]["digest"]), key
+        return self.body
+
+
+def stocks_view(app) -> dict:
+    from . import explain
+    r = app.rankings.latest(app.root)
+    if r is None:
+        return {"ranking": None, "hint": "No ranking yet: Controls -> Run a job -> Rank stocks, or `marketlab rank`."}
+    meta = {k: r.get(k) for k in ("version", "day", "entry_session", "status", "counts", "h", "candidate", "validation",
+                                  "universe", "policy", "created_at", "digest", "forward", "integrity", "artifact", "market",
+                                  "screen_policy")}
+    meta["data"] = {k: v for k, v in (r.get("data") or {}).items() if k != "actions"} | {
+        "actions": {k: (r["data"]["actions"] or {}).get(k) for k in ("mapped", "unmapped", "by_status", "digest")}
+        if (r.get("data") or {}).get("actions") else None}
+    m = r.get("model") or {}
+    meta["model"] = {k: m.get(k) for k in ("target_id", "lam", "n_train", "train", "calibration", "calibration_n",
+                                           "bootstraps", "beta_by_feature", "train_rows", "train_days", "z_quantiles")} if m else None
+    return {"ranking": meta, "classes": explain.CLASS_INFO, "summary": explain.day_summary(r),
+            "stocks": [_stock_row(s) for s in r.get("stocks", [])]}
+
+
+def _price_history(market: Path, isin: str, n: int = 250, actions_fn=None) -> dict:
+    """Closes in today's units (listed splits and bonuses restated; the predecessor ISIN joined after a listed split),
+    with the Nifty 50 rebased to the stock's first close, for the chart. Unexplained jumps are marked."""
+    from .quant import evaluate as qe
+    from .quant.panel import Panel
+    pp = market / "panel.sqlite3"
+    if not pp.exists():
+        return {"days": [], "close": [], "index": []}
+    pn = Panel(pp)
+    try:
+        disc = pn.discontinuities()
+        acts = actions_fn(pn) if actions_fn else None
+        h = qe.security_history(pn, isin, disc, acts)
+        s, lf = h["series"], h["level_factors"]
+        days, closes = list(s["days"])[-n:], list(s["close"])[-n:]
+        later = 1.0
+        adj = [0.0] * len(days)
+        for i in range(len(days) - 1, -1, -1):
+            adj[i] = closes[i] * later
+            if days[i] in lf:
+                later *= lf[days[i]]
+        idx = pn.index_levels("Nifty 50")
+        ix = [idx.get(d, (None, None))[1] for d in days]
+        base = next((v for v in ix if v), None)
+        rebased = [round(v / base * adj[0], 4) if (v and base and adj) else None for v in ix]
+        return {"days": [d.isoformat() for d in days], "close": [round(v, 4) for v in adj], "index": rebased,
+                "unexplained_jumps": sorted(d.isoformat() for d in h["bad_days"] if d >= days[0]) if days else [],
+                "listed_actions": sorted(d.isoformat() for d in lf if days and d >= days[0]), "lineage": h["lineage"],
+                "log_note": "closes restated for listed splits/bonuses" if lf else None}
+    finally:
+        pn.close()
+
+
+def stock_detail(app, isin: str) -> dict:
+    from . import ai_explain, explain
+    r = app.rankings.latest(app.root)
+    if r is None:
+        return {"error": "NO_RANKING"}
+    card = next((s for s in r.get("stocks", []) if s["isin"] == isin), None)
+    if card is None:
+        return {"error": "UNKNOWN_STOCK"}
+    v = explain.stock_view(card, r)
+    v["features_table"] = explain.feature_table(card)
+    try:
+        v["prices"] = _price_history(app.market, isin, actions_fn=app.actions_for)
+    except (OSError, ValueError, KeyError) as e:
+        v["prices"] = {"error": type(e).__name__}
+    v["ranking"] = {k: r.get(k) for k in ("day", "entry_session", "h", "policy", "validation", "digest", "status")}
+    v["ai_history"] = [{k: a.get(k) for k in ("id", "created_at", "state", "question", "model_served", "cost_usd", "answer",
+                                              "unsourced_numbers", "error", "label", "stop_reason", "fallback_switches")}
+                       for a in ai_explain.history(app.root, isin, 10)]
+    return _jsonable(v)
+
+
+def how_view(app) -> dict:
+    from . import explain
+    from .quant import ranking
+    r = app.rankings.latest(app.root)
+    out = explain.how_it_works(r)
+    out["today"] = explain.day_summary(r) if r else []
+    out["rankings"] = ranking.list_rankings(app.root)[-20:]
+    return _jsonable(out)
+
+
 class App:
     def __init__(self, root: Path, market: Path):
+        from . import ai_explain
         self.root, self.market = root, market
         self.states = login.StateBook(root / login.STATE_FILE)
+        self.ai_key = None  # session-only key (memory); a saved key lives in the private env file
+        self.ai_jobs = ai_explain.Jobs()
+        self.rankings = RankingCache()
+        self._actions = (None, None)
+
+    def actions_for(self, panel):
+        """The corporate-action index for this panel, rebuilt when the registry or the panel file changes."""
+        from . import action_registry
+        reg, pp = action_registry.registry_path(self.market), self.market / "panel.sqlite3"
+        key = tuple(p.stat().st_mtime_ns if p.exists() else 0 for p in (reg, pp))
+        if self._actions[0] != key:
+            self._actions = (key, action_registry.load_index(self.market, panel))
+        return self._actions[1]
 
     def env(self):
         return login.load_env(self.root)
@@ -600,6 +732,20 @@ def make_handler(app: App):
                     return self._json(200, _jsonable(research_view(app.root, app.market)))
                 if path == "/api/requests":
                     return self._json(200, _jsonable(requests_view(app.root)))
+                if path == "/api/stocks":
+                    return self._json(200, _jsonable(stocks_view(app)))
+                if path == "/api/stock":
+                    return self._json(200, stock_detail(app, q.get("isin", [""])[0]))
+                if path == "/api/how":
+                    return self._json(200, how_view(app))
+                if path == "/api/ai/status":
+                    from . import ai_explain
+                    return self._json(200, _jsonable(ai_explain.status(app.root, app.market, app.ai_key)))
+                if path == "/api/ai/job":
+                    got = app.ai_jobs.get(q.get("id", [""])[0])
+                    return self._json(200 if got else 404, _jsonable(got or {"error": "UNKNOWN_JOB"}))
+                if path == "/api/ai/estimate":
+                    return self._json(200, _jsonable(_ai_estimate(app, q.get("isin", [""])[0])))
                 if path == "/api/config":
                     from .quant import candidates
                     pol = service.policy(app.root)
@@ -653,7 +799,8 @@ def make_handler(app: App):
             path = urlsplit(self.path).path
             if not self._allowed():
                 return self._send(403, b"Forbidden", "text/plain; charset=utf-8")
-            if path not in ("/api/analysis/pause", "/api/analysis/resume", "/api/config", "/api/request"):
+            if path not in ("/api/analysis/pause", "/api/analysis/resume", "/api/config", "/api/request", "/api/ai/key",
+                            "/api/ai/settings", "/api/ai/caps", "/api/ai/ask"):
                 return self._send(405, b"This service has no order or write endpoints.", "text/plain; charset=utf-8")
             if self.headers.get("X-MarketLab-Action") != "1":
                 return self._send(403, b"Missing action header", "text/plain; charset=utf-8")
@@ -662,10 +809,51 @@ def make_handler(app: App):
                 return self._json(400, {"error": "BAD_BODY"})
             if path.startswith("/api/analysis/"):
                 return self._json(200, service.set_paused(app.root, path.endswith("/pause")))
+            if path.startswith("/api/ai/"):
+                return self._ai_post(path, body)
             try:
                 if path == "/api/config":
                     return self._json(200, {"policy": service.set_policy(app.root, body)})
                 return self._json(200, service.submit_request(app.root, str(body.get("kind", "")), body.get("args") or {}))
+            except ValueError as e:
+                return self._json(400, {"error": str(e)[:200]})
+
+        def _ai_post(self, path, body):
+            """AI settings and asks. The key is accepted here and never sent back (responses carry only whether one
+            is set and where it is kept)."""
+            from . import ai_explain
+            try:
+                if path == "/api/ai/key":
+                    if body.get("clear"):
+                        app.ai_key = None
+                        ai_explain.clear_saved_key(app.root)
+                    else:
+                        key = ai_explain.check_key_format(str(body.get("key", "")))
+                        if body.get("persist"):
+                            ai_explain.save_key(app.root, key)
+                            app.ai_key = None
+                        else:
+                            app.ai_key = key
+                    return self._json(200, _jsonable(ai_explain.status(app.root, app.market, app.ai_key)))
+                if path == "/api/ai/settings":
+                    ai_explain.save_settings(app.root, body)
+                    return self._json(200, _jsonable(ai_explain.status(app.root, app.market, app.ai_key)))
+                if path == "/api/ai/caps":
+                    ai_explain.save_caps(app.root, body)
+                    return self._json(200, _jsonable(ai_explain.status(app.root, app.market, app.ai_key)))
+                r = app.rankings.latest(app.root)
+                if r is None:
+                    return self._json(400, {"error": "NO_RANKING"})
+                isin = str(body.get("isin", ""))
+                if not any(s["isin"] == isin for s in r.get("stocks", [])):
+                    return self._json(400, {"error": "UNKNOWN_STOCK"})
+                key, _ = ai_explain.resolve_key(app.root, app.ai_key)
+                if not key:
+                    return self._json(400, {"error": "NO_KEY"})
+                jid = app.ai_jobs.start(ai_explain.ask, root=app.root, market=app.market, ranking=r, isin=isin,
+                                        question=str(body.get("question", ""))[:ai_explain.MAX_QUESTION],
+                                        preset=str(body.get("preset", "explain")), session_key=app.ai_key)
+                return self._json(200, {"id": jid})
             except ValueError as e:
                 return self._json(400, {"error": str(e)[:200]})
 
@@ -675,6 +863,29 @@ def make_handler(app: App):
         do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _refuse
 
     return Handler
+
+
+def _ai_estimate(app, isin: str) -> dict:
+    """The reservation the next ask would make (worst case) and a typical cost, before anything is sent."""
+    from decimal import Decimal
+    from . import ai_explain, explain
+    from .researcher import budget
+    r = app.rankings.latest(app.root)
+    card = next((s for s in (r or {}).get("stocks", []) if s["isin"] == isin), None)
+    if card is None:
+        return {"error": "UNKNOWN_STOCK"}
+    st = ai_explain.settings(app.root)
+    system = ai_explain.system_prompt()
+    user = ai_explain.build_context(explain.stock_view(card, r), r)
+    fb = bool(st["fallback"]) and ai_explain.MODELS[st["model"]]["fallback"]
+    worst = ai_explain.reservation_usd(st["model"], system, user, int(st["max_tokens"]), fb)
+    p = budget.CLAUDE_PRICES[st["model"]]
+    sys_t, usr_t = len(system) / ai_explain.CHARS_PER_TOKEN, len(user) / ai_explain.CHARS_PER_TOKEN
+    typical = (Decimal(sys_t) * p.cache_read + Decimal(usr_t) * p.input + Decimal(2500) * p.output) / 1_000_000
+    first = (Decimal(sys_t) * p.cache_write_5m + Decimal(usr_t) * p.input + Decimal(2500) * p.output) / 1_000_000
+    return {"model": st["model"], "reserve_usd": str(worst), "typical_usd_cached": str(typical.quantize(Decimal("0.0001"))),
+            "typical_usd_first": str(first.quantize(Decimal("0.0001"))), "input_tokens_estimate": int(sys_t + usr_t),
+            "caps": ai_explain.caps(app.root)}
 
 
 def serve(root: Path, market: Path, port=8765, host="127.0.0.1"):

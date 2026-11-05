@@ -88,11 +88,65 @@ class Dataset:
     feature_missing: int = 0
     manifest_hash: str = ""
     end: date | None = None
+    lineage: dict = field(default_factory=dict)  # isin -> ISIN chain whose bars feed its features (listed successions)
 
     @property
     def rows(self) -> list[dict]:
         """Training-eligible rows: complete features and a resolved label (statistical selection only)."""
         return [o for o in self.opportunities if not o["missing"] and o["label"].status == labels.RESOLVED]
+
+
+def security_history(view: Panel, isin: str, disc_all: dict, actions=None) -> dict:
+    """The price history used for one security's features at decision time.
+
+    Without ``actions`` (no listed-action registry): the ISIN's own bars; every PRICE_DISCONTINUITY day is bad (its
+    windows are incomplete). With ``actions``: listed, ratio-consistent splits/bonuses become return and level
+    factors instead of bad days, and when the ISIN began on an ex-date through such an action (IDENTITY_START whose
+    predecessor carries the listed factor), the predecessor's bars are prepended, so a split that issued a new ISIN
+    does not erase a year of history. An unexplained ISIN change is never stitched. Only bars up to the view's end
+    are read, so the history never contains a later price."""
+    chain = [isin]
+    links = []
+    if actions is not None:
+        cur = isin
+        while True:
+            starts = sorted((d, v[2]) for d, vs in disc_all.get(cur, {}).items() for v in vs if v[0] == "IDENTITY_START")
+            if not starts:
+                break
+            d, prev = starts[0]
+            if prev in chain or actions.factor(prev, d) is None:
+                break  # an unexplained identity change: keep the new ISIN's own history only
+            links.append((prev, d))
+            chain.insert(0, prev)
+            cur = prev
+    parts = [view.series_arrays(i) for i in chain]
+    if len(parts) == 1:
+        series = parts[0]
+    else:
+        series = {k: [] for k in parts[0]}
+        for i, part in enumerate(parts):
+            cut = links[len(links) - 1 - i][1] if i < len(parts) - 1 else None  # the successor's first day
+            for j, d in enumerate(part["days"]):
+                if cut is not None and d >= cut:
+                    break
+                for k in series:
+                    series[k].append(part[k][j])
+    rf, lf = {}, {}
+    if actions is not None:
+        for member in chain:
+            for d in actions.days_for(member):
+                f = actions.factor(member, d)
+                if f is not None:
+                    lf[d] = lf.get(d, 1.0) * f
+                    g = actions.return_factor(member, d)
+                    if g is not None:
+                        rf[d] = rf.get(d, 1.0) * g
+    bad = set()
+    for member in chain:
+        for d, v in disc_all.get(member, {}).items():
+            if any(k == "PRICE_DISCONTINUITY" for k, _, _ in v) and d not in lf:
+                bad.add(d)
+    return {"series": series, "bad_days": bad, "return_factors": rf, "level_factors": lf, "lineage": chain}
 
 
 def build_dataset(view: Panel, cfg: Config, *, calendar, rule_inputs_fn=None, listed_actions=None, progress=None,
@@ -113,11 +167,23 @@ def build_dataset(view: Panel, cfg: Config, *, calendar, rule_inputs_fn=None, li
     feats, closes, data = {}, {}, {}
     unchecked = view.unchecked_days()
     index = view.index_levels(cfg.index_name)
+    disc_all = view.discontinuities()
+    lineage = {}
     for n, isin in enumerate(isins):
-        series = view.series_arrays(isin)
-        closes[isin] = dict(zip(series["days"], series["close"]))
-        disc = view.discontinuities(isin)
-        feats[isin] = features.stock_feature_rows(series, {d for d, v in disc.items() if any(k == "PRICE_DISCONTINUITY" for k, _, _ in v)})
+        hist = security_history(view, isin, disc_all, actions)
+        series = hist["series"]
+        if len(hist["lineage"]) > 1:
+            lineage[isin] = hist["lineage"]
+        if hist["level_factors"]:  # breadth compares a close with its own 50-session average: same units needed
+            acc, cl = 0.0, []
+            for d, c in zip(series["days"], series["close"]):
+                acc += math.log(hist["level_factors"][d]) if d in hist["level_factors"] else 0.0
+                cl.append(c * math.exp(-acc))
+            closes[isin] = dict(zip(series["days"], cl))
+        else:
+            closes[isin] = dict(zip(series["days"], series["close"]))
+        disc = disc_all.get(isin, {})
+        feats[isin] = features.stock_feature_rows(series, hist["bad_days"], hist["return_factors"], hist["level_factors"])
         data[isin] = {"bars": {b.day: b for b in view.bars(isin)}, "factors": view.implied_factors(isin),
                       "unchecked": unchecked, "index": index, "disc": disc}
         if progress and n % 100 == 0:
@@ -150,7 +216,8 @@ def build_dataset(view: Panel, cfg: Config, *, calendar, rule_inputs_fn=None, li
             opps.append({"day": d, "isin": isin, "symbol": b.symbol, "ref_close": b.close, "median_value": u.median_value[isin],
                          "features": fx, "missing": miss, "sigma": (f["vol_20"] * math.sqrt(cfg.h)) if f else float("nan"),
                          "label": lab})
-    return Dataset(sessions, panel_days, missing, basis, universe, opps, counts, fmiss, view.content_hash(), view.end_limit)
+    return Dataset(sessions, panel_days, missing, basis, universe, opps, counts, fmiss, view.content_hash(), view.end_limit,
+                   lineage)
 
 
 def folds(sessions: list[date], cfg: Config, holdout_start: date | None = None) -> list[dict]:

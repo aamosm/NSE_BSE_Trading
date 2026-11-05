@@ -11,6 +11,8 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest==9.2.0", "hypothesis==6.170.14"]
+# optional: per-stock AI explanations with the owner's own Anthropic key (spend capped in researcher/budget.py)
+ai = ["anthropic>=2.5,<3"]
 
 [project.scripts]
 marketlab = "marketlab.cli:main"
