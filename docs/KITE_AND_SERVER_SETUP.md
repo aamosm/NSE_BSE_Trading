@@ -16,7 +16,11 @@ The runtime uses only the Python standard library. The lock file pins the test t
 
 1. Create the app at https://developers.kite.trade/. Quotes and historical candles need the paid Kite Connect plan (₹500/month per API key). This account has it.
 2. The redirect URL registered today is `http://127.0.0.1:8766/`. A Kite app has **one** redirect URL. When the server is ready it changes to `https://marketlab.<tailnet>.ts.net/kite/callback` (`DEPLOYMENT.md` §3.7).
-3. Create `data/private/.env`. Both `data/private/` and `.env*` are git-ignored.
+3. For the research workspace, create `data/research/private/.env` (or use
+   `data/private/.env` when running without `--private-dir`). Both private
+   directories and `.env*` are git-ignored. The research login command is:
+
+       .\.venv\Scripts\python.exe -m marketlab --private-dir data\research\private auth
 
        KITE_API_KEY=your_api_key
        KITE_API_SECRET=your_api_secret
@@ -28,8 +32,8 @@ Only the keys listed in `deploy/env.example` are accepted. Any key whose name co
 
 Restrict the folder to your Windows user:
 
-    icacls data\private /inheritance:r /grant:r "$env:USERNAME:(OI)(CI)F"
-    Get-ChildItem -Force data\private | ForEach-Object { icacls $_.FullName /reset }
+    icacls data\research\private /inheritance:r /grant:r "$env:USERNAME:(OI)(CI)F"
+    Get-ChildItem -Force data\research\private | ForEach-Object { icacls $_.FullName /reset }
 
 `data/private/kite_app.json` from earlier versions is no longer read. You may delete it.
 
