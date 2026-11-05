@@ -6,6 +6,12 @@ Tables (SQLite, ``market/panel.sqlite3``, rebuildable from the raw files):
   index_levels(name, day, open, high, low, close, pe, pb, dy)
   implied_factors(isin, day, factor) exchange-implied corporate-action factors (spec section 2.4)
   factor_coverage(day, status)       CHECKED when the calendar's previous session is stored, else UNCHECKED
+  discontinuities(isin, day, kind, ratio, other_isin)
+      PRICE_DISCONTINUITY  close / exchange base price outside [0.8, 1.25]: in the 2025 UDiFF files the base price
+                           (PrvsClsgPric) is NOT adjusted on split or bonus ex-dates (pilot, 5 Nov 2026), so an action
+                           shows up as a price jump that no band permits, not as an implied factor
+      IDENTITY_END / IDENTITY_START  the same NSE symbol moves to a new ISIN between consecutive sessions (splits
+                           usually issue a new ISIN); the old ISIN stops trading, the new one starts without history
 
 ``Panel.view(end)`` gives a read-only view whose every query stops at ``end``: the development evaluation reads the
 panel only through a view ending before the frozen holdout, so later prices cannot reach it, and
@@ -31,6 +37,10 @@ from ..master import parse_bhavcopy
 
 EQUITY_SERIES = ("EQ", "BE", "BZ", "SM", "ST", "SZ")
 FACTOR_TOLERANCE = 0.0005  # |prev_close/prior_close - 1| above this is an adjustment (or a data problem)
+# One-session close/base-price ratio outside this is an unexplained jump. Just beyond the widest static band (20%), so
+# a close pinned at a 20% circuit (ratio 0.80 / 1.20) is real trading, not an action. Unbanded (F&O) stocks can move
+# further on news; without an action history such moves are excluded too and counted (a known bias risk).
+DISCONTINUITY_LOW, DISCONTINUITY_HIGH = 0.795, 1.255
 ETF_MARKERS = ("ETF", "BEES", "EXCHANGE TRADED")  # spec 3.1: names containing ETF, plus INF-prefixed ISINs
 
 
@@ -73,6 +83,8 @@ class Panel:
             CREATE TABLE IF NOT EXISTS implied_factors (isin TEXT NOT NULL, day TEXT NOT NULL, factor REAL NOT NULL,
                 prior_close REAL, prev_close REAL, PRIMARY KEY (isin, day));
             CREATE TABLE IF NOT EXISTS factor_coverage (day TEXT PRIMARY KEY, status TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS discontinuities (isin TEXT NOT NULL, day TEXT NOT NULL, kind TEXT NOT NULL,
+                ratio REAL, other_isin TEXT, PRIMARY KEY (isin, day, kind));
         """)
         self.end_limit: date | None = None
 
@@ -219,6 +231,55 @@ class Panel:
                                                   (self.end_limit.isoformat(),))]
         return [r[0] for r in self.db.execute("SELECT DISTINCT isin FROM bars ORDER BY isin")]
 
+    def compute_discontinuities(self, calendar=None) -> dict:
+        """Price discontinuities and ISIN successions (see the module docstring). Recomputed from scratch."""
+        from ..rules.calendar import MarketCalendar
+        from ..rules.types import Exchange, RuleUnknown
+        cal = calendar or MarketCalendar()
+        days = self.sessions()
+        have = set(days)
+        n_price = n_id = 0
+        with self.db:
+            self.db.execute("DELETE FROM discontinuities")
+            for isin, day, c, pc in self.db.execute(
+                    "SELECT isin, day, close, prev_close FROM bars WHERE prev_close > 0 AND close > 0 "
+                    "AND (close / prev_close < ? OR close / prev_close > ?)", (DISCONTINUITY_LOW, DISCONTINUITY_HIGH)).fetchall():
+                self.db.execute("INSERT OR REPLACE INTO discontinuities VALUES (?,?,?,?,NULL)", (isin, day, "PRICE_DISCONTINUITY", c / pc))
+                n_price += 1
+            first = {}
+            last = {}
+            for isin, symbol, series, lo, hi in self.db.execute(
+                    "SELECT isin, symbol, series, min(day), max(day) FROM bars GROUP BY isin, symbol, series").fetchall():
+                first.setdefault((symbol, series), []).append((lo, hi, isin))
+            for (symbol, series), spans in first.items():
+                spans.sort()
+                for (lo1, hi1, old), (lo2, hi2, new) in zip(spans, spans[1:]):
+                    d2 = date.fromisoformat(lo2)
+                    try:
+                        prev = cal.previous_trading_day(Exchange.NSE, d2)
+                    except RuleUnknown:
+                        continue
+                    if old != new and date.fromisoformat(hi1) == prev and prev in have:
+                        self.db.execute("INSERT OR REPLACE INTO discontinuities VALUES (?,?,?,NULL,?)", (old, lo2, "IDENTITY_END", new))
+                        self.db.execute("INSERT OR REPLACE INTO discontinuities VALUES (?,?,?,NULL,?)", (new, lo2, "IDENTITY_START", old))
+                        n_id += 1
+        return {"price_discontinuities": n_price, "identity_changes": n_id}
+
+    def discontinuities(self, isin: str | None = None, start: date | None = None, end: date | None = None) -> dict:
+        """{isin: {day: (kind, ratio, other_isin)}} (one security when ``isin`` is given: {day: ...})."""
+        end = self._end(end)
+        q, args = "SELECT isin, day, kind, ratio, other_isin FROM discontinuities WHERE 1=1", []
+        if isin:
+            q += " AND isin = ?"; args.append(isin)
+        if start:
+            q += " AND day >= ?"; args.append(start.isoformat())
+        if end:
+            q += " AND day <= ?"; args.append(end.isoformat())
+        out: dict = {}
+        for i, d, kind, ratio, other in self.db.execute(q, args):
+            out.setdefault(i, {}).setdefault(date.fromisoformat(d), []).append((kind, ratio, other))
+        return out.get(isin, {}) if isin else out
+
     def unchecked_days(self, start: date | None = None, end: date | None = None) -> set[date]:
         """Days whose corporate-action factor could not be computed (previous session missing or calendar unknown)."""
         end = self._end(end)
@@ -313,10 +374,12 @@ def build(market: Path, path: Path | None = None, after: date | None = None, cal
                 if raw:
                     indices += panel.add_index_file(d, raw)
         factors = panel.compute_implied_factors(calendar)
+        factors |= panel.compute_discontinuities(calendar)
     finally:
         db.close()
     out = {"sessions_loaded": loaded, "sessions_total": len(panel.sessions()), "index_rows": indices,
            "implied_factors": factors["factors"], "factor_unchecked_days": len(factors["unchecked_days"]),
+           "price_discontinuities": factors["price_discontinuities"], "identity_changes": factors["identity_changes"],
            "isins": len(panel.isins()), "path": str(panel.path)}
     panel.close()
     return out

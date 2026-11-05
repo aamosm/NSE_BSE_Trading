@@ -44,11 +44,13 @@ class _RollingMedian:
         return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
 
 
-def stock_feature_rows(series: dict) -> dict[date, dict[str, float]]:
-    """``series`` from Panel.series_arrays. Returns {day: features} for days with full history."""
+def stock_feature_rows(series: dict, bad_days: set[date] | None = None) -> dict[date, dict[str, float]]:
+    """``series`` from Panel.series_arrays. Returns {day: features} for days with full history. A day in
+    ``bad_days`` (an unexplained price discontinuity) makes every window containing it incomplete."""
     days, o, h, l, c, pc, val = (series[k] for k in ("days", "open", "high", "low", "close", "prev_close", "value"))
     n = len(days)
-    r = [log_return(c[i], pc[i]) for i in range(n)]
+    bad_days = bad_days or set()
+    r = [float("nan") if days[i] in bad_days else log_return(c[i], pc[i]) for i in range(n)]
     hl2 = [(math.log(h[i] / l[i]) ** 2) if h[i] > 0 and l[i] > 0 else float("nan") for i in range(n)]
     ami = [abs(r[i]) / (val[i] / 1e7) if val[i] > 0 and not math.isnan(r[i]) else float("nan") for i in range(n)]
     ok = [not (math.isnan(r[i]) or math.isnan(hl2[i]) or math.isnan(ami[i])) for i in range(n)]

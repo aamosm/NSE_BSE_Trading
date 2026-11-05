@@ -108,7 +108,7 @@ def coverage(view: Panel, calendar, market: Path, start: date, end: date, *, pol
     isins = sorted({i for u in unis.values() for i in u.isins})
     unchecked, index = view.unchecked_days(), view.index_levels(index_name)
     data = {i: {"bars": {b.day: b for b in view.bars(i)}, "factors": view.implied_factors(i), "unchecked": unchecked,
-                "index": index} for i in isins}
+                "index": index, "disc": view.discontinuities(i)} for i in isins}
     days_verified = [d for d, u in unis.items() if u.isins and not u.unverified]
     out = {"expected_sessions": len(sessions), "stored_sessions": len(stored), "missing_sessions": [d.isoformat() for d in sessions if d not in stored],
            "session_basis": {str(k): v for k, v in basis.items()},
@@ -208,7 +208,8 @@ def mechanical_trace(view: Panel, sessions: list[date], stored: set[date], isin:
         bars = {i: b for i, b in view.cross_section(day)} if have else {}
         iopen = (idx.get(day) or (None, None))[0]
         f = view.implied_factors(isin, day, day).get(day)
-        led.apply_actions(k, day, {isin: f} if f else {}, day in unchecked, listed)
+        dv = view.discontinuities(isin, day, day).get(day)
+        led.apply_actions(k, day, {isin: f} if f else {}, day in unchecked, listed, {isin: dv} if dv else None)
         led.execute_exits(k, day, have, bars, iopen)
         led.execute_entries(k, day, have, bars, h, iopen)
         led.mark(k, day, {i: b.close for i, b in bars.items()}, have)

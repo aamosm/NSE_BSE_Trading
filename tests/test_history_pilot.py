@@ -138,3 +138,51 @@ def test_filing_fields_keep_unit_and_basis_and_catch_a_unit_mislabel():
     assert f["basis"] == "Consolidated" and f["net_profit_inr"] == 70380000000 and f["presentation_unit"] == "INR (in Actuals)"
     assert pilot.check_amount(f, 40925, "crore") is True and pilot.check_amount(f, 409250000000, "crore") is False
     assert pilot.classify_factor(0.5).startswith("SPLIT_OR_BONUS") and pilot.classify_factor(0.985).startswith("SMALL_DOWN")
+
+
+# ---- observed in the 2025 pilot: unadjusted base prices on ex-dates and ISIN replacement on splits ------------
+
+def _panel_with_actions(tmp_path):
+    from marketlab.quant.panel import Panel
+    from synthetic import WeekdayCalendar, index_csv, row, sessions
+    days = sessions(14, date(2025, 1, 1))
+    p = Panel(tmp_path / "p.sqlite3")
+    for t, d in enumerate(days):
+        rows = []
+        # A: 1:1 bonus on day 6 with the base price NOT adjusted (as in the 2025 UDiFF files)
+        pa, ca = (400.0, 200.0) if t == 6 else ((400.0, 400.0) if t < 6 else (200.0, 200.0))
+        rows.append(row("INE00AA01001", "AAA", ca, ca * 1.01, ca * 0.99, ca, pa, 1e5, 1e8))
+        # B: split on day 6 issues a new ISIN under the same symbol
+        if t < 6:
+            rows.append(row("INE00BB01011", "BBB", 300.0, 303.0, 297.0, 300.0, 300.0, 1e5, 1e8))
+        else:
+            rows.append(row("INE00BB01029", "BBB", 150.0, 151.5, 148.5, 150.0, 300.0 if t == 6 else 150.0, 1e5, 1e8))
+        p.add_session(d, rows)
+        p.add_index_file(d, index_csv(d, 10000.0))
+    p.compute_implied_factors(WeekdayCalendar())
+    found = p.compute_discontinuities(WeekdayCalendar())
+    return p, days, found
+
+
+def test_an_unadjusted_ex_date_and_an_isin_replacement_are_detected_not_mistaken_for_returns(tmp_path):
+    from marketlab.quant import labels
+    p, days, found = _panel_with_actions(tmp_path)
+    assert found == {"price_discontinuities": 2, "identity_changes": 1}  # A's jump, B-new's first day, B's succession
+    assert p.implied_factors("INE00AA01001") == {}  # the base price carries no factor: the old method sees nothing
+    a = labels.forward_return(p, "INE00AA01001", days[3], 5, sessions=days)
+    assert a.status == labels.EXCLUDED and a.reason == "PRICE_DISCONTINUITY_UNEXPLAINED"  # not a -50% "return"
+    b = labels.forward_return(p, "INE00BB01011", days[3], 5, sessions=days)
+    assert b.status == labels.EXCLUDED and b.reason == "IDENTITY_CHANGE"  # not a suspension
+    assert p.discontinuities("INE00BB01011")[days[6]] == [("IDENTITY_END", None, "INE00BB01029")]
+    p.close()
+
+
+def test_the_ledger_flags_a_held_identity_change_and_keeps_the_exit_blocked(tmp_path):
+    from marketlab.quant import pilot
+    p, days, _ = _panel_with_actions(tmp_path)
+    tr = pilot.mechanical_trace(p, days, set(days), "INE00BB01011", days[2], 10, 3, median_value=1e8)
+    flags = [e for e in tr["events"] if e["event"] == "IDENTITY_CHANGED"]
+    assert flags and flags[0]["successor_isin"] == "INE00BB01029" and tr["trades"] == []
+    (op,) = tr["open_positions"]
+    assert op["status"] == "EXIT_BLOCKED" and "IDENTITY_CHANGED" in op["action_status"] and op["outcome_bounds"][0] == 0.0
+    p.close()

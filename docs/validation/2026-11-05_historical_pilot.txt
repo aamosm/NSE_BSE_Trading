@@ -1,0 +1,13 @@
+Historical pilot, 5 Nov 2026, branch historical-pilot. Windows 11, Python 3.13.7. Pass/fail only; no account data.
+
+Acquisition (official NSE archives, 1.5 s apart): 671 attempts, 584 stored, 87 not published (404), 0 failed,
+0 schema failures; 5 earlier single probe requests disclosed in the manifest. Manifest verify: PASS (0 problems).
+Format transition 3/4/5 Jul 2024 legacy vs UDiFF: PASS (identical row sets, 0 mismatches on 8 fields).
+Observed sessions: 146; closures 26 Feb, 14 Mar, 31 Mar, 10 Apr, 14 Apr, 18 Apr, 1 May; Saturday 1 Feb session.
+Infosys reconstruction: official prices equal the review's secondary values (PASS); filing units check PASS;
+ledger trace 3 shares net Rs 445.76 reconciles (gross 480.00 - slippage 8.94 - charges 25.30).
+FINDING: base price not adjusted on ex-dates; 30 ISIN replacements, 196 price discontinuities; handled by exclusion.
+
+Targeted tests (final runs PASSED): test_history_pilot (9), test_replay_correctness, test_quant_pipeline,
+test_decision_integrity, test_snapshot_chronology, test_public_data, test_boundaries, test_researcher.
+NOT RUN: older history (2016-2024), any fold, the holdout, Fable, any account query or order.

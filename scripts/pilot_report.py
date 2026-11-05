@@ -2,7 +2,8 @@
 reconstructed Infosys Q4 FY25 case).
 
     python scripts/pilot_report.py data/pilot/nse_2025 2025-01-01 2025-07-31
-Writes <root>/manifest.json and <root>/report.json once (exclusive create); a second run verifies and stops."""
+Writes <root>/manifest.json once (exclusive create; later runs verify it) and a new report version each run:
+report.json, report-2.json, ... Earlier versions are never replaced; each later one names what it supersedes."""
 import json
 import sys
 from datetime import date, datetime, time
@@ -26,8 +27,6 @@ man_path = root / "manifest.json"
 if man_path.exists():
     man = json.loads(man_path.read_text(encoding="utf-8"))
     print("manifest exists; verification problems:", history.verify_manifest(market, man))
-    if (root / "report.json").exists():
-        sys.exit("report.json exists (immutable); nothing to do")
 else:
     man = history.build_manifest(market, "nse_2025_pilot", start, end,
                                  extra={"documents": {u.rsplit("/", 1)[1]: history.fetch_document(docs, u) for u in (BOARD, FILING)},
@@ -63,8 +62,9 @@ q = pilot.size_at_cap(bar.close, policy)
 trace_ok = pilot.mechanical_trace(view, sess, stored, INFY, D, q, 20, median_value=u.median_value.get(INFY, 0.0), end=end)
 lab = labels.forward_return(view, INFY, D, 20, sessions=sess, panel_days=stored)
 idx = view.index_levels("Nifty 50")
-file_av = {sid: history.availability(sid, D.isoformat(), man["files"][sid][D.isoformat()]) for sid in history.PILOT_SOURCES
-           if D.isoformat() in man["files"].get(sid, {})}
+file_av = {sid: {k_: man["files"][sid][D.isoformat()][k_] for k_ in ("received_at", "server_last_modified",
+                                                                    "reconstructed_available_at", "availability_basis", "sha256")}
+           for sid in history.PILOT_SOURCES if D.isoformat() in man["files"].get(sid, {})}
 filing_meta = man["documents"][FILING.rsplit("/", 1)[1]]
 infosys = {
     "label": "RECONSTRUCTED_NO_FORECAST: no MarketLab forecast existed in April 2025; mechanics only",
@@ -102,26 +102,29 @@ infosys = {
                                 "nifty_open_2025-05-20": 24996.20, "close_2025-04-17": 1419.50},
 }
 
-# ---- a blocked exit from the data ----------------------------------------------------------------------------
-data_unchecked = view.unchecked_days()
-blocked = None
+# ---- blocked exits from the data: an ISIN replacement and a security that stopped trading ----------------------
+found = {}
 for d in sorted(unis):
+    if unis[d].unverified:
+        continue
     for isin in unis[d].isins:
         lb = labels.forward_return(view, isin, d, 20, sessions=sess, panel_days=stored)
-        if lb.status == labels.EXCLUDED and lb.reason == "NO_TRADE_AT_EXIT" and not unis[d].unverified:
-            blocked = (d, isin)
-            break
-    if blocked:
-        break
-blocked_trace = None
-if blocked:
-    d, isin = blocked
+        if lb.status == labels.EXCLUDED and lb.reason in ("IDENTITY_CHANGE", "NO_TRADE_AT_EXIT") and lb.reason not in found:
+            found[lb.reason] = (d, isin)
+blocked_traces = {}
+for reason, (d, isin) in found.items():
     b = next(x for x in view.bars(isin, d, d))
     qq = max(1, pilot.size_at_cap(b.close, policy))
-    blocked_trace = pilot.mechanical_trace(view, sess, stored, isin, d, qq, 20, median_value=unis[d].median_value[isin], end=end)
+    t = pilot.mechanical_trace(view, sess, stored, isin, d, qq, 20, median_value=unis[d].median_value[isin], end=end)
     later = [x.day.isoformat() for x in view.bars(isin, d, end)]
-    blocked_trace["symbol"] = b.symbol
-    blocked_trace["bars_after_decision"] = {"count": len(later), "last": later[-1] if later else None}
+    t |= {"label_reason": reason, "symbol": b.symbol, "bars_after_decision": {"count": len(later), "last": later[-1] if later else None},
+          "discontinuities": {str(k_): v for k_, v in view.discontinuities(isin).items()}}
+    blocked_traces[reason] = t
+disc_all = view.discontinuities()
+sym = dict(view.db.execute("SELECT isin, symbol FROM bars GROUP BY isin").fetchall())
+ident = sorted((str(d), sym.get(i), i, v[0][2]) for i, dd in disc_all.items() for d, vs in dd.items() for v in [vs] if v[0][0] == "IDENTITY_END")
+price = sorted((str(d), sym.get(i), i, round(k[1], 4), pilot.classify_factor(k[1]))
+               for i, dd in disc_all.items() for d, vs in dd.items() for k in vs if k[0] == "PRICE_DISCONTINUITY")
 
 transition = [history.format_transition(market, d) for d in (date(2024, 7, 3), date(2024, 7, 4), date(2024, 7, 5), date(2024, 7, 8))]
 report = {"pilot_id": man["pilot_id"], "manifest_sha256": man["content_sha256"], "window": [start.isoformat(), end.isoformat()],
@@ -129,12 +132,26 @@ report = {"pilot_id": man["pilot_id"], "manifest_sha256": man["content_sha256"],
           "corporate_actions": {"count": len(acts), "by_class": pilot._count(a["class"].split(" (")[0] for a in acts),
                                 "split_or_bonus": [a for a in acts if a["class"].startswith("SPLIT_OR_BONUS")][:20],
                                 "infy_factors": infy_factors, "infy_dividend_probe": probe},
-          "format_transition": transition, "infosys_q4fy25": infosys, "blocked_trace": blocked_trace,
+          "discontinuities": {"finding": "PrvsClsgPric is not adjusted on 2025 split/bonus ex-dates; splits often issue a new ISIN",
+                              "identity_changes": ident, "price_discontinuities": price,
+                              "in_universe_previous_session": [x for x in price if any(
+                                  x[2] in unis[dd].isins for dd in unis if dd < date.fromisoformat(x[0]) and (date.fromisoformat(x[0]) - dd).days <= 4)]},
+          "format_transition": transition, "infosys_q4fy25": infosys, "blocked_traces": blocked_traces,
           "holdout": "not frozen; the pilot is diagnostic and opens no holdout"}
 report = evaluate.jsonable(report)
-print("report sha256", history.write_once(root / "report.json", report))
+n = 1
+while (root / ("report.json" if n == 1 else f"report-{n}.json")).exists():
+    n += 1
+if n > 1:
+    report["supersedes"] = {"version": n - 1, "reason": {2: "v1 read availability from already-derived manifest fields (showed "
+                            "NO_SERVER_TIME for the Infosys inputs) and predated discontinuity detection: it counted labels "
+                            "across unadjusted split/bonus ex-dates as resolved",
+                            3: "v2 used a 0.80/1.25 discontinuity threshold, which also caught closes pinned at a 20% circuit"}.get(n, "rerun")}
+out = root / ("report.json" if n == 1 else f"report-{n}.json")
+print("report", out.name, "sha256", history.write_once(out, report))
 print(json.dumps({"coverage": {k_: v for k_, v in cov.items() if k_ != "missing_sessions"},
                   "acts": report["corporate_actions"]["by_class"], "infy_probe": probe, "transition": transition,
                   "infosys": {k_: infosys[k_] for k_ in ("eligibility", "benchmark", "label_h20", "actual_size", "unit_checks")},
-                  "trace_ok": trace_ok["trades"], "blocked": blocked and [str(blocked[0]), blocked[1]]}, indent=1, default=str)[:12000])
+                  "trace_ok": trace_ok["trades"], "blocked": {k_: (str(v[0]), v[1]) for k_, v in found.items()},
+                  "identity_changes": len(ident), "price_discontinuities": len(price)}, indent=1, default=str)[:6000])
 pn.close()

@@ -115,9 +115,10 @@ def build_dataset(view: Panel, cfg: Config, *, calendar, rule_inputs_fn=None, li
     for n, isin in enumerate(isins):
         series = view.series_arrays(isin)
         closes[isin] = dict(zip(series["days"], series["close"]))
-        feats[isin] = features.stock_feature_rows(series)
+        disc = view.discontinuities(isin)
+        feats[isin] = features.stock_feature_rows(series, {d for d, v in disc.items() if any(k == "PRICE_DISCONTINUITY" for k, _, _ in v)})
         data[isin] = {"bars": {b.day: b for b in view.bars(isin)}, "factors": view.implied_factors(isin),
-                      "unchecked": unchecked, "index": index}
+                      "unchecked": unchecked, "index": index, "disc": disc}
         if progress and n % 100 == 0:
             progress(f"features {n}/{len(isins)}")
     breadth = features.breadth_50({d: s.isins for d, s in universe.items()}, closes, sessions)

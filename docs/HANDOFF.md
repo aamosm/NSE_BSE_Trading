@@ -1,5 +1,16 @@
 # Handoff
 
+## Historical pilot (Claude Opus 5.5, 5 Nov 2026, branch `historical-pilot` on `integrity-replay`)
+
+Bounded NSE pilot for January–July 2025 from official archives, plus the format-transition check (3–5 Jul 2024) and the reconstructed Infosys Q4 FY25 case. Results are in `docs/pilot/PILOT_2025.md`, the immutable manifest in `docs/pilot/nse_2025_manifest.json` (SHA-256 `93501484…`), and the questions for GPT in `docs/pilot/GPT_SOURCE_QUESTIONS.md`. The data stays in `data/pilot/nse_2025` (git-ignored). The holdout was not frozen.
+
+**Headline:** exchange base prices are not adjusted on 2025 ex-dates, and splits change ISINs. The implied-factor method therefore misses actions. Detection and exclusion are implemented (`docs/SPEC_ERRATA.md` E16), and an official action history is now the critical source.
+
+**Verify:** `pytest tests/test_history_pilot.py tests/test_replay_correctness.py tests/test_quant_pipeline.py -q` from the worktree, then `python scripts/pilot_report.py data/pilot/nse_2025 2025-01-01 2025-07-31`. The second command verifies the manifest and writes the next report version.
+
+---
+
+
 ## Integrity and replay repair (Claude Opus 5.5, 5 Nov 2026)
 
 Branch `integrity-replay` (worktree `C:\Users\d_hru\try\tradebot\marketlab-integrity`), made from `114589a`, the commit GPT reviewed (`MarketLab_Quant_Guild_Review.md`). `cash-research-reset` has not been touched. Nothing has been pushed.

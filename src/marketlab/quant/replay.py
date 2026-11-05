@@ -152,7 +152,8 @@ def simulate(view, sessions: list[date], panel_days: set[date], start_k: int, en
             f = view.implied_factors(isin, day, day).get(day)
             if f is not None:
                 factors[isin] = f
-        led.apply_actions(k, day, factors, day in unchecked, listed)
+        disc = {i: v[day] for i in held if (v := view.discontinuities(i, day, day)) and day in v}
+        led.apply_actions(k, day, factors, day in unchecked, listed, disc)
         led.execute_exits(k, day, have, bars, iopen)
         led.execute_entries(k, day, have, bars, h, iopen)
         led.mark(k, day, {i: b.close for i, b in bars.items()}, have)

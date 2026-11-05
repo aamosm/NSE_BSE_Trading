@@ -75,18 +75,26 @@ def forward_return(panel: Panel, isin: str, decision_day: date, h: int, *, sessi
         return out(EXCLUDED, "DATA_GAP")  # the horizon is never stretched over a missing session
     bars = data["bars"] if data else {b.day: b for b in panel.bars(isin, entry_day, exit_day)}
     eb, xb = bars.get(entry_day), bars.get(exit_day)
+    ends = data.get("disc", {}) if data else panel.discontinuities(isin, entry_day, exit_day)
     if eb is None or not (eb.open > 0) or not (eb.volume > 0):
         return out(EXCLUDED, "NO_TRADE_AT_ENTRY")
     if xb is None or not (xb.open > 0) or not (xb.volume > 0):
+        if any(k == "IDENTITY_END" for d, v in ends.items() if entry_day < d <= exit_day for k, _, _ in v):
+            return out(EXCLUDED, "IDENTITY_CHANGE")  # the ISIN was replaced (usually a split): not a suspension
         return out(EXCLUDED, "NO_TRADE_AT_EXIT")
     if data:
         unchecked = any(d in data["unchecked"] for d in sessions[i + 2:i + h + 2])
         found = {d: f for d, f in data["factors"].items() if entry_day <= d <= exit_day}
+        disc = {d: v for d, v in data.get("disc", {}).items() if entry_day < d <= exit_day}
     else:
         unchecked = bool(panel.unchecked_days(sessions[i + 2], exit_day))
         found = panel.implied_factors(isin, entry_day, exit_day)
+        disc = {d: v for d, v in panel.discontinuities(isin, entry_day, exit_day).items() if d > entry_day}
     if unchecked:  # (entry, exit]: an ex-date there could not be checked
         return out(EXCLUDED, "ACTION_COVERAGE_UNKNOWN")
+    if any(k == "PRICE_DISCONTINUITY" for v in disc.values() for k, _, _ in v):
+        # the base price is not adjusted on ex-dates, so an action is a price jump of unknown ratio: no label
+        return out(EXCLUDED, "PRICE_DISCONTINUITY_UNEXPLAINED")
     factor, basis = 1.0, "VERIFIED"
     for d, f in sorted(found.items()):
         if d == entry_day:  # the entry bar's own base price is before our entry at the open

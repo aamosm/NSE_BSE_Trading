@@ -197,11 +197,19 @@ class Ledger:
         return True
 
     # ---- the open of session k -----------------------------------------------------------------------
-    def apply_actions(self, k: int, day: date, factors: dict[str, float], unchecked: bool, listed=None):
-        """Ex-date adjustments for lots held overnight into ``day`` (entered before it)."""
+    def apply_actions(self, k: int, day: date, factors: dict[str, float], unchecked: bool, listed=None,
+                      discontinuities: dict | None = None):
+        """Ex-date adjustments for lots held overnight into ``day`` (entered before it). ``discontinuities``
+        ({isin: [(kind, ratio, other_isin)]}) flags an unexplained price jump or an ISIN replacement: the units
+        cannot be restated without a listed action, so valuation and exit continuity are unknown."""
         for lot in self.lots.values():
             if lot.entry_index >= k:
                 continue
+            for kind, ratio, other in (discontinuities or {}).get(lot.isin, []):
+                flag = "IDENTITY_CHANGED" if kind == "IDENTITY_END" else "PRICE_DISCONTINUITY_UNEXPLAINED"
+                if flag not in lot.action_flags:
+                    lot.action_flags.add(flag)
+                    self.event(flag, day, isin=lot.isin, ratio=ratio, successor_isin=other)
             if unchecked:
                 lot.action_flags.add("ACTION_COVERAGE_UNKNOWN")
             f = factors.get(lot.isin)
