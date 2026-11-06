@@ -75,3 +75,36 @@ def test_a_zero_net_edge_sorts_by_its_value_not_last():
              {"gates": {"net_edge": 0.002}}]
     order = [c["gates"]["net_edge"] for c in sorted(cards, key=ranking.edge_order)]
     assert order == [0.002, 0.0, -0.001, None]
+
+
+def test_legacy_bhavcopy_maps_to_the_fields_the_panel_reads():
+    import io
+    import zipfile
+    from marketlab.master import parse_legacy_bhavcopy
+    csv_text = ("SYMBOL,SERIES,OPEN,HIGH,LOW,CLOSE,LAST,PREVCLOSE,TOTTRDQTY,TOTTRDVAL,TIMESTAMP,TOTALTRADES,ISIN,\n"
+                "AAA,EQ,10,11,9.5,10.5,10.4,10,1000,10450.5,04-JAN-2016,12,INE000A01001,\n"
+                ",EQ,1,1,1,1,1,1,1,1,04-JAN-2016,1,INE000A01002,\n")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("cm04JAN2016bhav.csv", csv_text)
+    rows = parse_legacy_bhavcopy(buf.getvalue())
+    assert len(rows) == 1  # a row without a symbol is dropped
+    r = rows[0]
+    assert (r["ISIN"], r["TckrSymb"], r["SctySrs"], r["FinInstrmTp"]) == ("INE000A01001", "AAA", "EQ", "STK")
+    assert (r["OpnPric"], r["ClsPric"], r["PrvsClsgPric"], r["TtlTradgVol"], r["TtlTrfVal"], r["TtlNbOfTxsExctd"]) == \
+        ("10", "10.5", "10", "1000", "10450.5", "12")
+
+
+def test_calendar_reads_publication_in_either_bhavcopy_format(tmp_path, monkeypatch):
+    from datetime import date
+    from marketlab import history
+    from marketlab.rules.types import Exchange
+    fake = {"nse_bhavcopy_legacy": {"2020-02-01": {"result": "STORED"}, "2020-02-03": {"result": "STORED"},
+                                    "2020-02-21": {"result": "NOT_PUBLISHED"}},
+            "nse_bhavcopy": {"2024-07-08": {"result": "STORED"}}}
+    monkeypatch.setattr(history, "attempts", lambda market: fake)
+    cal = history.ObservedCalendar(tmp_path, date(2020, 1, 1), date(2024, 12, 31))
+    assert cal.is_trading_day(Exchange.NSE, date(2020, 2, 1)) is True  # Budget Saturday seen in a legacy file
+    assert cal.is_trading_day(Exchange.NSE, date(2020, 2, 21)) is False  # a holiday the legacy archive refused
+    assert cal.is_trading_day(Exchange.NSE, date(2024, 7, 8)) is True
+    assert cal.previous_trading_day(Exchange.NSE, date(2020, 2, 3)) == date(2020, 2, 1)

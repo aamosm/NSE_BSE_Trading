@@ -64,6 +64,29 @@ def parse_bhavcopy(raw: bytes, zipped: bool):
     return [_clean(r) for r in _rows(raw) if (r.get("FinInstrmTp") or "STK").strip() == "STK"]
 
 
+# Legacy (pre-UDiFF, before 8 Jul 2024) bhavcopy column -> the UDiFF field the panel reads. Same exchange, same
+# day: verified on 3-5 Jul 2024, when NSE published both formats (scripts/legacy_parity.py). The legacy file has no
+# security name, instrument type or FinInstrmId; every row is a cash-market security, so all are taken as STK.
+LEGACY_TO_UDIFF = {"SYMBOL": "TckrSymb", "SERIES": "SctySrs", "ISIN": "ISIN", "OPEN": "OpnPric", "HIGH": "HghPric",
+                   "LOW": "LwPric", "CLOSE": "ClsPric", "LAST": "LastPric", "PREVCLOSE": "PrvsClsgPric",
+                   "TOTTRDQTY": "TtlTradgVol", "TOTTRDVAL": "TtlTrfVal", "TOTALTRADES": "TtlNbOfTxsExctd"}
+
+
+def parse_legacy_bhavcopy(raw: bytes, zipped: bool = True):
+    """Rows of the legacy cm<DD><MON><YYYY>bhav.csv in the UDiFF field names parse_bhavcopy returns."""
+    if zipped:
+        with zipfile.ZipFile(io.BytesIO(raw)) as z:
+            raw = z.read(z.namelist()[0])
+    out = []
+    for r in map(_clean, _rows(raw)):
+        if not r.get("ISIN") or not r.get("SYMBOL"):
+            continue
+        row = {u: r.get(k, "") for k, u in LEGACY_TO_UDIFF.items()}
+        row.update(FinInstrmTp="STK", FinInstrmNm="", TradDt=r.get("TIMESTAMP", ""))
+        out.append(row)
+    return out
+
+
 def parse_sec_list(raw: bytes):
     out = {}
     for r in map(_clean, _rows(raw)):

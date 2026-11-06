@@ -28,7 +28,7 @@ from ..common import now
 from ..metrics.performance import moments
 from ..metrics.selection import (MetricUnavailable, deflated_sharpe_ratio, min_track_record_length,
                                  probabilistic_sharpe_ratio, probability_of_backtest_overfitting)
-from . import allocate, candidates, features, forecast, labels, monitor, registry, replay
+from . import baselines, allocate, candidates, features, forecast, labels, monitor, registry, replay
 from .ledger import ExecutionPolicy
 from .linalg import quantile, spearman
 from .panel import Panel
@@ -355,9 +355,17 @@ def run_fold(ds: Dataset, fold: dict, cfg: Config, trial_id: str, view: Panel, l
                 "action_unverified_positions": len(flagged)}
     evidence["verified"] = (evidence["sessions_from_calendar"] and unverified_days == 0 and not flagged
                             and evidence["missing_sessions_in_test"] == 0)
+    # Stage 3: the same stocks, dates, execution timing and costs, picked by simple rules instead of the model.
+    feats = {(o["day"], o["isin"]): o for o in test}
+    brows = [{"day": pr["day"], "isin": pr["isin"], "mu": pr["mu_shrunk"], "label": pr["label"],
+              "mom": (feats[(pr["day"], pr["isin"])].get("features") or {}).get("mom_12_1"),
+              "median_value": feats[(pr["day"], pr["isin"])].get("median_value"),
+              "ref_close": feats[(pr["day"], pr["isin"])].get("ref_close")} for pr in preds]
+    bper = baselines.fold_periods(brows, s, ts, te, cfg.h, policy, seed=cfg.seed)
     return {"fold": fold_dates, "trial_id": trial_id, "model": model.to_json(), "n_train": len(train),
             "n_test": len(test), "metrics": metrics, "simulation": {k: v for k, v in sim.items() if k != "events"},
-            "events_sample": sim["events"][:200], "stresses": stresses, "evidence": evidence}
+            "events_sample": sim["events"][:200], "stresses": stresses, "evidence": evidence,
+            "baselines_periods": bper}
 
 
 def jsonable(x):
@@ -388,6 +396,37 @@ def _trade_stats(trades: list[dict]) -> dict:
         out["skew"], out["kurtosis"] = moments(rets)
     except (MetricUnavailable, ValueError, ZeroDivisionError):
         out["skew"], out["kurtosis"] = 0.0, 3.0
+    return out
+
+
+def strategy_metrics(done: list[dict]) -> dict:
+    """The owner's stage-3 table for the FULL strategy (gates, allocator, EXIT.v1, the replay ledger): net rupees,
+    win rate, mean and median trade, profit factor, costs paid, turnover, and from the daily NAV the maximum
+    drawdown and annualized Sharpe and Sortino ratios."""
+    trades = [t for r in done for t in r["simulation"]["trades"]]
+    rets = [t["net_return"] for t in trades]
+    charges = sum(float(t["charges"]["total"]) for t in trades)
+    slip = sum(t.get("slippage_rupees", 0.0) for t in trades)
+    daily = list(_daily_returns(done).values())
+    out = {"trades": len(trades), "net_rupees": round(sum(t["net_rupees"] for t in trades), 2),
+           "charges_rupees": round(charges, 2), "slippage_rupees": round(slip, 2),
+           "trade_win_rate": (sum(r > 0 for r in rets) / len(rets)) if rets else None,
+           "mean_trade_return": (sum(rets) / len(rets)) if rets else None,
+           "median_trade_return": sorted(rets)[len(rets) // 2] if len(rets) % 2 else
+           (sum(sorted(rets)[len(rets) // 2 - 1:len(rets) // 2 + 1]) / 2 if rets else None)}
+    gains, losses = sum(r for r in rets if r > 0), -sum(r for r in rets if r < 0)
+    out["profit_factor"] = gains / losses if losses > 0 else None
+    buys = sum(float(t["buy_value"]) for t in trades)
+    sessions = len(daily)
+    W = done[0]["simulation"]["policy"]["W"] if done else None
+    out["turnover_per_year"] = (buys / W) * (252 / sessions) if W and sessions else None
+    if len(daily) > 1:
+        m = sum(daily) / len(daily)
+        sd = math.sqrt(sum((x - m) ** 2 for x in daily) / (len(daily) - 1))
+        dn = math.sqrt(sum(min(0.0, x) ** 2 for x in daily) / len(daily))
+        out["sharpe_annualized"] = m / sd * math.sqrt(252) if sd > 0 else None
+        out["sortino_annualized"] = m / dn * math.sqrt(252) if dn > 0 else None
+        out["max_drawdown"] = baselines._max_drawdown(daily)
     return out
 
 
@@ -589,7 +628,8 @@ def summarize(results: list[dict], cfg: Config, ds: Dataset, trial_id: str) -> d
             "eligibility_unverified_days": sum(1 for u in ds.universe.values() if u.unverified),
             "folds": results, "net_rupees_by_fold": net_by_fold, "net_rupees_total": round(sum(net_by_fold), 2),
             "folds_positive": sum(1 for v in net_by_fold if v > 0), "folds_done": len(done), "n_trades": len(trades),
-            "pooled": st, "daily_returns": _daily_returns(done),
+            "pooled": st, "daily_returns": _daily_returns(done), "strategy_metrics": strategy_metrics(done),
+            "baselines": baselines.compare(baselines.merge(done), cfg.h) if done else None,
             "profitability_proven": False,
             "note": "Research diagnostic from a causal replay ledger. Net rupees include open positions at liquidation "
                     "value. Promotion requires every spec 8.6 criterion (see 'promotion')."}

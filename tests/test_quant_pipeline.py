@@ -168,6 +168,16 @@ def test_walk_forward_report_shape_and_simulation(panel, tmp_path):
         assert float(t["buy_value"]) <= 0.5 * c.W * (1 + 0.05) and float(t["charges"]["dp"]) == 15.34
     assert (tmp_path / "runs" / "eval" / report["trial_id"] / (report["run_id"] + ".json")).exists()
     assert report["promotion"]["verdict"] == "INSUFFICIENT EVIDENCE"  # no rule inputs: eligibility unverified
+    # stage 3: the model's ranking against simple strategies, on the same folds, dates and costs
+    b = report["baselines"]
+    assert set(b["strategies"]) == {"model", "momentum", "nifty", "random"}
+    n = b["strategies"]["model"]["periods"]
+    assert n > 0 and b["strategies"]["momentum"]["periods"] == n == b["strategies"]["nifty"]["periods"]
+    assert b["strategies"]["random"]["draws"] == 200 and b["model_minus_nifty"]["n"] == n
+    assert b["strategies"]["model"]["costs_rupees"] > 0  # every pick paid charges and slippage
+    sm = report["strategy_metrics"]
+    assert sm["trades"] == report["n_trades"] and abs(sm["net_rupees"] - sum(
+        t["net_rupees"] for r in report["folds"] if "skipped" not in r for t in r["simulation"]["trades"])) < 0.01
 
 
 def test_holdout_fold_starts_at_the_frozen_date(panel):

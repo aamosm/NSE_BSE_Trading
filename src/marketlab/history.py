@@ -99,6 +99,19 @@ def availability(source: str, key: str, rec: dict) -> dict:
 
 # ---- sessions reconstructed from publication -------------------------------------------------------------
 
+BHAVCOPY_SOURCES = ("nse_bhavcopy", "nse_bhavcopy_legacy")  # UDiFF from 8 Jul 2024; the legacy format before
+
+
+def bhavcopy_results(market: Path) -> dict[str, set[str]]:
+    """{day: results} over both bhavcopy formats, so publication observed in either decides the session."""
+    out: dict[str, set[str]] = {}
+    att = attempts(market)
+    for sid in BHAVCOPY_SOURCES:
+        for k, r in att.get(sid, {}).items():
+            out.setdefault(k, set()).add(r.get("result"))
+    return out
+
+
 class ObservedCalendar:
     """Sessions in [start, end] from the bhavcopy attempts: STORED = session, NOT_PUBLISHED (404) = closed,
     anything else = unknown (RuleUnknown). Outside the window it defers to ``fallback`` if given."""
@@ -106,15 +119,14 @@ class ObservedCalendar:
 
     def __init__(self, market: Path, start: date, end: date, fallback=None):
         self.start, self.end, self.fallback = start, end, fallback
-        recs = attempts(market).get("nse_bhavcopy", {})
         self.sessions, self.closed = set(), set()
-        for k, r in recs.items():
+        for k, results in bhavcopy_results(market).items():
             d = date.fromisoformat(k)
             if not start <= d <= end:
                 continue
-            if r.get("result") == "STORED":
+            if "STORED" in results:  # either format published that day: a session
                 self.sessions.add(d)
-            elif r.get("result") == "NOT_PUBLISHED":
+            elif "NOT_PUBLISHED" in results:
                 self.closed.add(d)
         self.unknown = set()
         d = start
@@ -433,8 +445,7 @@ def research_calendar(market: Path, documents: Path, circulars: list[dict], base
         except ValueError as e:
             report["circulars"][str(y)] = {"source": sid, "result": "PARSE_FAILED", "error": str(e)}
     verified = MarketCalendar(tuple(years))
-    recs = attempts(market).get("nse_bhavcopy", {})
-    days = sorted(_date.fromisoformat(k) for k in recs)
+    days = sorted(_date.fromisoformat(k) for k in bhavcopy_results(market))
     if not days:
         return verified, report
     observed = ObservedCalendar(market, days[0], days[-1])

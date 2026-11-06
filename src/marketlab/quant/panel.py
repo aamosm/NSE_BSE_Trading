@@ -33,7 +33,7 @@ from datetime import date
 from pathlib import Path
 
 from .. import sources
-from ..master import parse_bhavcopy
+from ..master import parse_bhavcopy, parse_legacy_bhavcopy
 
 EQUITY_SERIES = ("EQ", "BE", "BZ", "SM", "ST", "SZ")
 FACTOR_TOLERANCE = 0.0005  # |prev_close/prior_close - 1| above this is an adjustment (or a data problem)
@@ -345,7 +345,7 @@ def build(market: Path, path: Path | None = None, after: date | None = None, cal
     if calendar is None:
         calendar = sources.load_calendar_for(market)[0]
     db = sources.catalog(market)
-    loaded, indices = 0, 0
+    loaded, indices, legacy = 0, 0, 0
     try:
         rows = db.db.execute("SELECT subject, payload FROM observations WHERE kind='source_file'").fetchall()
         import json
@@ -355,9 +355,10 @@ def build(market: Path, path: Path | None = None, after: date | None = None, cal
             if p.get("result") != "STORED":
                 continue
             path_ = p.get("path", "")
-            if path_.startswith("raw/nse_bhavcopy/") or path_.startswith("raw/nse_indices_close/"):
+            if path_.startswith(("raw/nse_bhavcopy/", "raw/nse_bhavcopy_legacy/", "raw/nse_indices_close/")):
                 files.append((subj, path_, p.get("sha256", "")))
         have = {d.isoformat() for d in panel.sessions()}
+        udiff_days = {s for s, p_, _ in files if p_.startswith("raw/nse_bhavcopy/")}
         for subj, path_, sha in sorted(files):
             d = date.fromisoformat(subj)
             if after and d < after:
@@ -369,6 +370,14 @@ def build(market: Path, path: Path | None = None, after: date | None = None, cal
                 if raw:
                     panel.add_session(d, parse_bhavcopy(raw, zipped=True), sha)
                     loaded += 1
+            elif path_.startswith("raw/nse_bhavcopy_legacy/"):
+                if subj in have or subj in udiff_days:  # the UDiFF file is preferred where both exist
+                    continue
+                raw = sources.read_raw(market, "nse_bhavcopy_legacy", d)
+                if raw:
+                    panel.add_session(d, parse_legacy_bhavcopy(raw), sha)
+                    loaded += 1
+                    legacy += 1
             else:
                 raw = sources.read_raw(market, "nse_indices_close", d)
                 if raw:
@@ -377,7 +386,7 @@ def build(market: Path, path: Path | None = None, after: date | None = None, cal
         factors |= panel.compute_discontinuities(calendar)
     finally:
         db.close()
-    out = {"sessions_loaded": loaded, "sessions_total": len(panel.sessions()), "index_rows": indices,
+    out = {"sessions_loaded": loaded, "legacy_sessions_loaded": legacy, "sessions_total": len(panel.sessions()), "index_rows": indices,
            "implied_factors": factors["factors"], "factor_unchecked_days": len(factors["unchecked_days"]),
            "price_discontinuities": factors["price_discontinuities"], "identity_changes": factors["identity_changes"],
            "isins": len(panel.isins()), "path": str(panel.path)}
