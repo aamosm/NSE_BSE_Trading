@@ -38,7 +38,7 @@ LOGIN_HOST = "https://kite.zerodha.com/connect/login"
 ALLOWED_ENV = frozenset({
     "KITE_API_KEY", "KITE_API_SECRET", "KITE_USER_ID", "KITE_REDIRECT_URL",
     "MARKETLAB_HEARTBEAT_URL", "MARKETLAB_ALERT_URL", "MARKETLAB_TAILNET_USER",
-    "RESEARCH_PROVIDER", "RESEARCH_PROVIDER_KEY",  # optional future research adapter; spend is capped in software
+    "RESEARCH_PROVIDER", "RESEARCH_PROVIDER_KEY",  # optional research adapter; spend is capped in software
 })
 FORBIDDEN_ENV = ("PASSWORD", "PASSWD", "PIN", "TOTP", "OTP")
 

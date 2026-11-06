@@ -446,7 +446,7 @@ function priceChart(p, sym) {
 const PRESET_LABELS = { explain: "Explain everything", maths: "The maths, step by step", together: "What it means together", risks: "What could go wrong", change: "What would change the call" };
 function aiPanel(c, d) {
   const p = card("Ask AI about " + c.symbol, "wide");
-  p.append(el("p", "Optional. Uses your own Anthropic API key and spending caps (Controls & AI). The model sees only this stock's card, the explanation above and the glossary: no account data. Its answer is labelled commentary and never changes the ranking.", "muted"));
+  p.append(el("p", "Optional. Uses your own Google Gemini or Anthropic API key and spending caps (Controls & AI). The model sees only this stock's card, the explanation above and the glossary: no account data. Its answer is labelled commentary and never changes the ranking.", "muted"));
   const status = el("p", "Checking AI settings…", "muted"); p.append(status);
   const presets = el("div", null, "presets"); const qa = el("textarea"); qa.placeholder = "Or ask your own question about " + c.symbol + " (optional)…"; qa.maxLength = 1500;
   const est = el("p", "", "muted"), out = el("div"), btn = el("button", "Ask", "button primary"); btn.type = "button";
@@ -456,9 +456,9 @@ function aiPanel(c, d) {
   get("/api/ai/status").then(ai => {
     const k = ai.key || {};
     if (!k.set) { status.textContent = "No API key set. Add one in Controls & AI to enable explanations."; btn.disabled = true; const go = el("button", "Open AI settings", "button small"); go.type = "button"; go.addEventListener("click", () => { closeSheet(); show("controls"); }); status.append(" ", go); return; }
-    if (!ai.sdk_installed) { status.textContent = "The Anthropic SDK is not installed on the server (pip install anthropic)."; btn.disabled = true; return; }
-    status.textContent = "Model " + ai.settings.model + " · effort " + ai.settings.effort + " · up to " + ai.settings.max_tokens + " output tokens · spent today $" + ai.spent.day_usd + " of $" + ai.caps.daily_usd + ".";
-    get("/api/ai/estimate?isin=" + encodeURIComponent(c.isin)).then(e => { if (!e.error) est.textContent = "This ask reserves up to $" + e.reserve_usd + " against your caps; typical cost about $" + e.typical_usd_first + " (first ask) or $" + e.typical_usd_cached + " once the shared instructions are cached."; }).catch(() => {});
+    if (!ai.sdk_installed && ai.provider === "anthropic") { status.textContent = "The Anthropic SDK is not installed on the server (pip install anthropic)."; btn.disabled = true; return; }
+    status.textContent = (ai.provider === "gemini" ? "Google Gemini · " + (ai.active_model || ai.settings.gemini_model) + (ai.settings.fallback ? " (falls back to Flash-Lite when busy)" : "") : "Model " + ai.settings.model) + " · up to " + ai.settings.max_tokens + " output tokens · spent today $" + ai.spent.day_usd + " of $" + ai.caps.daily_usd + ".";
+    get("/api/ai/estimate?isin=" + encodeURIComponent(c.isin)).then(e => { if (!e.error) est.textContent = e.provider === "gemini" ? "This ask reserves up to $" + e.reserve_usd + " against your caps (list-price equivalent, about $" + e.typical_usd_first + " typical). On the free tier Google bills $0." : "This ask reserves up to $" + e.reserve_usd + " against your caps; typical cost about $" + e.typical_usd_first + " (first ask) or $" + e.typical_usd_cached + " once the shared instructions are cached."; }).catch(() => {});
   }).catch(e => { status.textContent = "AI status unavailable: " + e.message; });
   btn.addEventListener("click", async () => {
     btn.disabled = true; out.replaceChildren(el("p", "Asking… a detailed answer can take a minute or two.", "muted"));

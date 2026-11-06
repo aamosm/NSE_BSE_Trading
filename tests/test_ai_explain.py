@@ -100,6 +100,69 @@ def test_prices_are_verified_and_the_worst_case_covers_any_outcome(ranked):
     actual_max, _ = budget.token_cost_usd("claude-opus-5-5", input_tokens=int(usr_t), output_tokens=6000, cache_write_tokens=int(sys_t))
     assert worst > actual_max * 2 * Decimal("0.99")  # a full fallback attempt is reserved too
     assert ai_explain.reservation_usd("claude-haiku-5-5", system, user, 6000, True) < Decimal("0.02")  # no fallback on Haiku
+    # Gemini: the dearest model in the fallback chain, verified list prices, a second attempt when fallback is on
+    g1 = ai_explain.reservation_usd("gemini-3.8-flash", system, user, 6000, False, ai_explain.GEMINI_PROVIDER)
+    g2 = ai_explain.reservation_usd("gemini-3.8-flash", system, user, 6000, True, ai_explain.GEMINI_PROVIDER)
+    top, _ = budget.token_cost_usd("gemini-3.8-flash", input_tokens=int(sys_t + usr_t), output_tokens=6000)
+    assert g1 >= top * Decimal("0.99") and g2 >= 2 * top * Decimal("0.99") and g2 < Decimal("0.10")
+    assert budget.GEMINI_PRICE_SOURCE["verified_on"] == "2026-11-06" and "aistudio.google.com" in budget.GEMINI_PRICE_SOURCE["url"]
+
+
+def test_gemini_ask_falls_back_when_busy_and_settles_at_the_answering_models_price(tmp_path, ranked):
+    from marketlab import gemini
+    root, market, r = fresh(tmp_path, ranked)
+    ai_explain.save_key(root, "AQ.Ab8RN6-test-auth-key-format-0123456789abcdef", ai_explain.GEMINI_PROVIDER)
+    ai_explain.save_caps(root, {"daily_usd": "2", "monthly_usd": "8", "per_ask_usd": "1"})
+    seen = []
+
+    def transport(method, url, headers, body):
+        model = url.split("/models/")[1].split(":")[0]
+        seen.append((model, headers.get("x-goog-api-key", "")[:3]))
+        if model == "gemini-3.8-flash":
+            return 503, {"error": {"code": 503, "status": "UNAVAILABLE", "message": "high demand"}}
+        return 200, {"candidates": [{"content": {"parts": [{"text": "## Summary\nGemini explanation",
+                                                             "thoughtSignature": "abc"},
+                                                            {"text": "hidden reasoning", "thought": True}]},
+                                     "finishReason": "STOP"}],
+                     "usageMetadata": {"promptTokenCount": 9000, "candidatesTokenCount": 1500, "thoughtsTokenCount": 500},
+                     "modelVersion": model}
+
+    rec = ai_explain.ask(root, market, r, stock(r)["isin"], session_key=None,
+                         client_factory=lambda key: gemini.Client(key, transport=transport, sleep=lambda s: None))
+    assert [m for m, _ in seen] == ["gemini-3.8-flash", "gemini-3.5-flash-lite"] and seen[0][1] == "AQ."
+    assert rec["state"] == "DONE" and rec["answer"] == "## Summary\nGemini explanation"  # thought parts excluded
+    assert rec["model_requested"] == "gemini-3.8-flash" and rec["model_served"] == "gemini-3.5-flash-lite"
+    assert rec["provider"] == "gemini" and rec["usage"][0]["output_tokens"] == 2000  # thinking billed as output
+    want, known = budget.token_cost_usd("gemini-3.5-flash-lite", input_tokens=9000, output_tokens=2000)
+    assert known and Decimal(rec["cost_usd"]) == want and "free tier" in rec["cost_basis"]
+    assert "AQ." not in json.dumps(rec)  # the key is never stored with an answer
+    led = budget.Ledger(ai_explain._ledger_path(market), budget.Policy.load(root / ai_explain.POLICY_FILE))
+    assert led.spent()["open_reservations"] == 0
+    led.close()
+
+
+def test_gemini_failure_releases_or_charges_and_explains(tmp_path, ranked):
+    from marketlab import gemini
+    root, market, r = fresh(tmp_path, ranked)
+    ai_explain.save_key(root, "AQ.Ab8RN6-test-auth-key-format-0123456789abcdef", ai_explain.GEMINI_PROVIDER)
+    ai_explain.save_caps(root, {"daily_usd": "2", "monthly_usd": "8", "per_ask_usd": "1"})
+    busy = lambda m, u, h, b: (503, {"error": {"status": "UNAVAILABLE", "message": "high demand"}})  # noqa: E731
+    with pytest.raises(ai_explain.AIError) as e:
+        ai_explain.ask(root, market, r, stock(r)["isin"],
+                       client_factory=lambda k: gemini.Client(k, transport=busy, sleep=lambda s: None))
+    assert e.value.label == "UNAVAILABLE" and "Lite" in e.value.detail
+    led = budget.Ledger(ai_explain._ledger_path(market), budget.Policy.load(root / ai_explain.POLICY_FILE))
+    assert led.spent()["day"] == 0 and led.spent()["open_reservations"] == 0  # every model busy: nothing billed
+    led.close()
+    bad_key = lambda m, u, h, b: (400, {"error": {"status": "INVALID_ARGUMENT", "message": "API key not valid",  # noqa: E731
+                                                  "details": [{"reason": "API_KEY_INVALID"}]}})
+    with pytest.raises(ai_explain.AIError) as e:
+        ai_explain.ask(root, market, r, stock(r)["isin"],
+                       client_factory=lambda k: gemini.Client(k, transport=bad_key, sleep=lambda s: None))
+    assert e.value.label == "AUTH"
+    hist = ai_explain.history(root)
+    assert {h["error"] for h in hist} == {"UNAVAILABLE", "AUTH"} and all(h["cost_usd"] == "0" for h in hist)
+    assert len(next(h for h in hist if h["error"] == "UNAVAILABLE")["attempts"]) == 3  # 3.8 -> 3.5 lite -> 3.1 lite
 
 
 def test_context_is_the_card_and_never_account_data_or_secrets(tmp_path, ranked):

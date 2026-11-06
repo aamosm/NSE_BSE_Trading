@@ -850,9 +850,12 @@ def make_handler(app: App):
                         app.ai_key = None
                         ai_explain.clear_saved_key(app.root)
                     else:
-                        key = ai_explain.check_key_format(str(body.get("key", "")))
+                        selected_provider = str(body.get("provider", ai_explain.provider(app.root))).lower()
+                        key = (ai_explain.check_gemini_key_format(str(body.get("key", "")))
+                               if selected_provider == ai_explain.GEMINI_PROVIDER
+                               else ai_explain.check_key_format(str(body.get("key", ""))))
                         if body.get("persist"):
-                            ai_explain.save_key(app.root, key)
+                            ai_explain.save_key(app.root, key, selected_provider)
                             app.ai_key = None
                         else:
                             app.ai_key = key
@@ -899,10 +902,20 @@ def _ai_estimate(app, isin: str) -> dict:
     st = ai_explain.settings(app.root)
     system = ai_explain.system_prompt()
     user = ai_explain.build_context(explain.stock_view(card, r), r)
+    sys_t, usr_t = len(system) / ai_explain.CHARS_PER_TOKEN, len(user) / ai_explain.CHARS_PER_TOKEN
+    if ai_explain.provider(app.root) == ai_explain.GEMINI_PROVIDER:
+        m = st["gemini_model"]
+        worst = ai_explain.reservation_usd(m, system, user, int(st["max_tokens"]), bool(st["fallback"]),
+                                           ai_explain.GEMINI_PROVIDER)
+        p = budget.GEMINI_PRICES[m]
+        typical = (Decimal(sys_t + usr_t) * p.input + Decimal(2500) * p.output) / 1_000_000
+        return {"model": m, "provider": "gemini", "reserve_usd": str(worst),
+                "typical_usd_cached": str(typical.quantize(Decimal("0.0001"))),
+                "typical_usd_first": str(typical.quantize(Decimal("0.0001"))), "input_tokens_estimate": int(sys_t + usr_t),
+                "billed_usd_free_tier": "0", "caps": ai_explain.caps(app.root)}
     fb = bool(st["fallback"]) and ai_explain.MODELS[st["model"]]["fallback"]
     worst = ai_explain.reservation_usd(st["model"], system, user, int(st["max_tokens"]), fb)
     p = budget.CLAUDE_PRICES[st["model"]]
-    sys_t, usr_t = len(system) / ai_explain.CHARS_PER_TOKEN, len(user) / ai_explain.CHARS_PER_TOKEN
     typical = (Decimal(sys_t) * p.cache_read + Decimal(usr_t) * p.input + Decimal(2500) * p.output) / 1_000_000
     first = (Decimal(sys_t) * p.cache_write_5m + Decimal(usr_t) * p.input + Decimal(2500) * p.output) / 1_000_000
     return {"model": st["model"], "reserve_usd": str(worst), "typical_usd_cached": str(typical.quantize(Decimal("0.0001"))),

@@ -50,11 +50,26 @@ CLAUDE_PRICES: dict[str, TokenPrice] = {
     "claude-opus-4-8": TokenPrice(D("5"), D("6.25"), D("0.50"), D("25")),
     "claude-sonnet-5": TokenPrice(D("2"), D("2.50"), D("0.20"), D("10")),
 }
+# Verified 2026-11-06 against https://aistudio.google.com/docs/pricing (paid "Standard" tier, text input and text
+# output, output price including thinking tokens). Each model is also listed "Free of charge" on the free tier, where
+# Google bills $0 and states free-tier content IS used to improve its products. The ledger records the list price
+# regardless, so the owner's caps still bound spend if billing is ever enabled on the project. The page announces
+# price increases from December 2026 / January 2027: re-verify then. No context caching is used, so the cache rates
+# are set equal to the input rate (never used; never under-charged).
+GEMINI_PRICE_SOURCE = {"url": "https://aistudio.google.com/docs/pricing", "verified_on": "2026-11-06",
+                       "free_tier": "listed free of charge; free-tier content is used to improve Google's products"}
+GEMINI_PRICES: dict[str, TokenPrice] = {
+    "gemini-3.8-flash": TokenPrice(D("0.75"), D("0.75"), D("0.75"), D("3.75")),
+    "gemini-3.6-flash": TokenPrice(D("0.75"), D("0.75"), D("0.75"), D("3.75")),
+    "gemini-3.5-flash-lite": TokenPrice(D("0.30"), D("0.30"), D("0.30"), D("2.50")),
+    "gemini-3.1-flash-lite": TokenPrice(D("0.25"), D("0.25"), D("0.25"), D("1.50")),
+}
+PRICES: dict[str, TokenPrice] = CLAUDE_PRICES | GEMINI_PRICES
 # The most expensive verified rate, used for an attempt whose model is not in the table (never under-charged).
 CEILING_PRICE = TokenPrice(D("10"), D("12.50"), D("1"), D("50"))  # Claude Fable 5 / 5.1 (same page)
 # USD per 1M tokens (input, output). A provider is enabled only after its price is verified against the provider's
 # published list and recorded here with the source and date (spec: no invented capabilities).
-MODEL_PRICES: dict[str, tuple[Decimal, Decimal]] = {m: (p.input, p.output) for m, p in CLAUDE_PRICES.items()}
+MODEL_PRICES: dict[str, tuple[Decimal, Decimal]] = {m: (p.input, p.output) for m, p in PRICES.items()}
 # USD per tool invocation, likewise recorded with their source when a provider is enabled.
 TOOL_PRICES: dict[str, Decimal] = {"web_search": D("0.0025"), "web_search_fast": D("0.001")}
 HARD_MONTHLY_CEILING = D("10.00")  # owner's stated range is $5-10/month; config can never exceed this
@@ -64,7 +79,7 @@ def token_cost_usd(model: str, *, input_tokens: int, output_tokens: int, cache_w
                    cache_read_tokens: int = 0) -> tuple[Decimal, bool]:
     """Cost of one attempt from its reported token counts. Returns (usd, price_known); an unknown model is priced at
     the ceiling rate so the ledger never records less than could have been billed."""
-    p = CLAUDE_PRICES.get(model)
+    p = PRICES.get(model)
     known = p is not None
     p = p or CEILING_PRICE
     prompt = input_tokens + cache_write_tokens + cache_read_tokens

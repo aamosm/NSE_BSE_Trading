@@ -1,4 +1,4 @@
-"""Optional AI commentary on one stock's research card, through the Anthropic Messages API with the owner's own key.
+"""Optional AI commentary on one stock's research card, through Anthropic or Gemini with the owner's own key.
 
 What it may do: explain, in plain language and in detail, what MarketLab's numbers for one stock mean, how they
 combine into the class, what would change it, and add general context the owner can check. What it may not do:
@@ -30,7 +30,7 @@ import uuid
 from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 
-from . import decisions, explain, login
+from . import decisions, explain, gemini, login
 from .common import now
 from .researcher import budget
 
@@ -39,12 +39,14 @@ POLICY_FILE = "research_policy.json"
 FOLDER = "ai"
 JOB_KIND = "stock_explainer"
 PROVIDER = "anthropic"
+GEMINI_PROVIDER = "gemini"
 MODELS = {  # label, whether server-side fallback exists, the model assumed for a fallback's reservation
     "claude-opus-5-5": {"label": "Claude Opus 5.5 (default, most capable)", "fallback": True, "fallback_price": "claude-opus-5"},
     "claude-sonnet-5-5": {"label": "Claude Sonnet 5.5 (faster, cheaper)", "fallback": True, "fallback_price": "claude-sonnet-5"},
     "claude-haiku-5-5": {"label": "Claude Haiku 5.5 (cheapest)", "fallback": False, "fallback_price": None},
 }
-DEFAULTS = {"model": "claude-opus-5-5", "effort": "medium", "max_tokens": 6000, "fallback": True}
+DEFAULTS = {"model": "claude-opus-5-5", "gemini_model": gemini.DEFAULT_MODEL, "effort": "medium", "max_tokens": 6000,
+            "fallback": True}
 EFFORTS = ("low", "medium", "high")
 MAX_TOKENS_RANGE = (2000, 16000)
 CHARS_PER_TOKEN = 3.0  # conservative for English mixed with numbers (reservation only; billing uses reported tokens)
@@ -93,6 +95,8 @@ def save_settings(root: Path, body: dict) -> dict:
         raise ValueError(f"unknown setting {sorted(unknown)[0]}")
     if "model" in body and body["model"] not in MODELS:
         raise ValueError(f"model must be one of {', '.join(MODELS)} (models with a verified price)")
+    if "gemini_model" in body and body["gemini_model"] not in gemini.MODELS:
+        raise ValueError(f"gemini_model must be one of {', '.join(gemini.MODELS)} (models with a verified price)")
     if "effort" in body and body["effort"] not in EFFORTS:
         raise ValueError(f"effort must be one of {', '.join(EFFORTS)}")
     if "max_tokens" in body:
@@ -182,13 +186,26 @@ def check_key_format(key: str) -> str:
     return key
 
 
-def save_key(root: Path, key: str):
-    _write_env(root, {"RESEARCH_PROVIDER": PROVIDER, "RESEARCH_PROVIDER_KEY": check_key_format(key)})
+def check_gemini_key_format(key: str) -> str:
+    key = (key or "").strip()
+    if not 20 <= len(key) <= 256 or any(c.isspace() for c in key):
+        raise ValueError("that does not look like a Gemini API key")
+    return key
+
+
+def save_key(root: Path, key: str, selected_provider: str = PROVIDER):
+    if selected_provider == GEMINI_PROVIDER:
+        checked = check_gemini_key_format(key)
+    elif selected_provider == PROVIDER:
+        checked = check_key_format(key)
+    else:
+        raise ValueError("provider must be anthropic or gemini")
+    _write_env(root, {"RESEARCH_PROVIDER": selected_provider, "RESEARCH_PROVIDER_KEY": checked})
 
 
 def clear_saved_key(root: Path):
     env = login.load_env(root)
-    if env.get("RESEARCH_PROVIDER", "").lower() == PROVIDER:
+    if env.get("RESEARCH_PROVIDER", "").lower() in (PROVIDER, GEMINI_PROVIDER):
         _write_env(root, {"RESEARCH_PROVIDER": None, "RESEARCH_PROVIDER_KEY": None})
 
 
@@ -197,28 +214,51 @@ def resolve_key(root: Path, session_key: str | None) -> tuple[str | None, str | 
     if session_key:
         return session_key, "SESSION"
     env = login.load_env(root)
-    if env.get("RESEARCH_PROVIDER", "").lower() == PROVIDER and env.get("RESEARCH_PROVIDER_KEY"):
+    if env.get("RESEARCH_PROVIDER", "").lower() in (PROVIDER, GEMINI_PROVIDER) and env.get("RESEARCH_PROVIDER_KEY"):
         return env["RESEARCH_PROVIDER_KEY"], "ENV_FILE"
     return None, None
+
+
+def provider(root: Path) -> str:
+    value = login.load_env(root).get("RESEARCH_PROVIDER", PROVIDER).lower()
+    if value not in (PROVIDER, GEMINI_PROVIDER):
+        raise ValueError("RESEARCH_PROVIDER must be anthropic or gemini")
+    return value
 
 
 def status(root: Path, market: Path, session_key: str | None) -> dict:
     _, source = resolve_key(root, session_key)
     import importlib.util
-    sdk = importlib.util.find_spec("anthropic") is not None  # without importing it (slow on first import)
+    selected = provider(root)
+    sdk = importlib.util.find_spec("anthropic") is not None if selected == PROVIDER else True
     led = budget.Ledger(_ledger_path(market), budget.Policy.load(root / POLICY_FILE))
     try:
         s = led.spent()
     finally:
         led.close()
-    return {"key": {"set": source is not None, "source": source}, "sdk_installed": sdk, "settings": settings(root),
+    st = settings(root)
+    if selected == GEMINI_PROVIDER:
+        models = {m: {"label": v["label"], "fallback": True,
+                      "price_per_mtok": {"input": str(budget.GEMINI_PRICES[m].input),
+                                         "output": str(budget.GEMINI_PRICES[m].output), "cache_read": None}}
+                  for m, v in gemini.MODELS.items()}
+        active, source_doc = st["gemini_model"], budget.GEMINI_PRICE_SOURCE
+        notes = ["Free tier: Google bills $0. The ledger records the list-price equivalent, so your caps still bound "
+                 "spend if billing is ever enabled on the project.",
+                 "On the free tier Google may use what is sent to improve its products. The request holds one stock's "
+                 "public market data and MarketLab's computed numbers; no account data, keys or identifiers.",
+                 "Busy models (HTTP 503) fall back automatically to " + ", ".join(gemini.FALLBACK_CHAIN) + "."]
+    else:
+        models = {m: dict(v, price_per_mtok={"input": str(budget.CLAUDE_PRICES[m].input),
+                                             "output": str(budget.CLAUDE_PRICES[m].output),
+                                             "cache_read": str(budget.CLAUDE_PRICES[m].cache_read)})
+                  for m, v in MODELS.items()}
+        active, source_doc, notes = st["model"], budget.PRICE_SOURCE, []
+    return {"key": {"set": source is not None, "source": source}, "sdk_installed": sdk, "settings": st,
             "caps": caps(root), "spent": {"day_usd": str(s["day"]), "month_usd": str(s["month"]),
                                           "asks_today": s["day_count"].get(JOB_KIND, 0), "open_reservations": s["open_reservations"]},
-            "models": {m: dict(v, price_per_mtok={"input": str(budget.CLAUDE_PRICES[m].input),
-                                                   "output": str(budget.CLAUDE_PRICES[m].output),
-                                                   "cache_read": str(budget.CLAUDE_PRICES[m].cache_read)})
-                       for m, v in MODELS.items()},
-            "price_source": budget.PRICE_SOURCE, "presets": PRESETS}
+            "models": models, "active_model": active, "notes": notes,
+            "provider": selected, "price_source": source_doc, "presets": PRESETS}
 
 
 def _ledger_path(market: Path) -> Path:
@@ -354,9 +394,21 @@ def build_context(view: dict, ranking: dict) -> str:
     return "\n".join(L)
 
 
-def reservation_usd(model: str, system_text: str, user_text: str, max_tokens: int, fallback: bool) -> Decimal:
+def reservation_usd(model: str, system_text: str, user_text: str, max_tokens: int, fallback: bool,
+                    selected_provider: str = PROVIDER) -> Decimal:
     """Upper bound: system text at the cache-write price, the card at the input price, max_tokens of output; plus a
-    full second attempt at the fallback model's rates when fallback is on."""
+    full second attempt at the fallback model's rates when fallback is on.
+
+    Gemini: every model in the fallback chain is priced at the dearest one in it (verified list prices; the free
+    tier bills $0), and with fallback on a second attempt is reserved, because a failed attempt that may have been
+    processed (a 5xx or a dropped connection) is settled at its reservation before the next model runs."""
+    if selected_provider == GEMINI_PROVIDER:
+        chain = gemini.chain_for(model, fallback)
+        p = max((budget.GEMINI_PRICES[m] for m in chain), key=lambda q: (q.output, q.input))
+        sys_t = math.ceil(len(system_text) / CHARS_PER_TOKEN) + 50
+        usr_t = math.ceil(len(user_text) / CHARS_PER_TOKEN) + 50
+        one = (Decimal(sys_t + usr_t) * p.input + Decimal(max_tokens) * p.output) / 1_000_000
+        return (one * (2 if len(chain) > 1 else 1)).quantize(Decimal("0.0001"), rounding=ROUND_CEILING)
     p = budget.CLAUDE_PRICES[model]
     sys_t = math.ceil(len(system_text) / CHARS_PER_TOKEN) + 50
     usr_t = math.ceil(len(user_text) / CHARS_PER_TOKEN) + 50
@@ -366,8 +418,8 @@ def reservation_usd(model: str, system_text: str, user_text: str, max_tokens: in
     def one(pr):
         return (Decimal(sys_t) * pr.cache_write_5m + Decimal(usr_t) * pr.input + Decimal(max_tokens) * pr.output) / 1_000_000
     total = one(p)
-    fb = MODELS[model].get("fallback_price")
-    if fallback and MODELS[model]["fallback"] and fb:
+    fb = MODELS[model].get("fallback_price") if selected_provider == PROVIDER else None
+    if fallback and selected_provider == PROVIDER and MODELS[model]["fallback"] and fb:
         total += one(budget.CLAUDE_PRICES[fb])
     return total.quantize(Decimal("0.0001"), rounding=ROUND_CEILING)
 
@@ -483,15 +535,19 @@ def ask(root: Path, market: Path, ranking: dict, isin: str, *, question: str = "
         question = PRESETS[preset]
     key, source = resolve_key(root, session_key)
     if not key:
-        raise AIError("NO_KEY", "enter an Anthropic API key in the AI settings")
+        raise AIError("NO_KEY", "set a provider key in Controls & AI (or RESEARCH_PROVIDER / RESEARCH_PROVIDER_KEY in the "
+                                "private env file)")
+    selected_provider = provider(root)
     st = settings(root)
-    model, effort, max_tokens = st["model"], st["effort"], int(st["max_tokens"])
-    fallback = bool(st["fallback"]) and MODELS[model]["fallback"]
+    is_gemini = selected_provider == GEMINI_PROVIDER
+    model = st["gemini_model"] if is_gemini else st["model"]
+    effort, max_tokens = st["effort"], int(st["max_tokens"])
+    fallback = bool(st["fallback"]) and (is_gemini or MODELS[model]["fallback"])
     view = explain.stock_view(card, ranking)
     system = system_prompt()
     context = build_context(view, ranking)
     user = f"<stock_card>\n{context}\n</stock_card>\n\n<question>\n{question}\n</question>"
-    reserve = reservation_usd(model, system, user, max_tokens, fallback)
+    reserve = reservation_usd(model, system, user, max_tokens, fallback, selected_provider)
     ask_id = ask_id or f"{now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:8]}"
     ledger = budget.Ledger(_ledger_path(market), budget.Policy.load(root / POLICY_FILE))
     try:
@@ -504,16 +560,23 @@ def ask(root: Path, market: Path, ranking: dict, isin: str, *, question: str = "
                   "decision input", "created_at": now().isoformat(), "isin": isin, "symbol": card["symbol"],
                   "class": card["class"], "ranking_day": ranking.get("day"), "ranking_digest": ranking.get("digest"),
                   "question": question, "preset": preset if not question or question == PRESETS.get(preset) else "custom",
-                  "model_requested": model, "effort": effort, "max_tokens": max_tokens, "fallback_enabled": fallback,
-                  "key_source": source, "reserved_usd": str(reserve),
+                  "provider": selected_provider, "model_requested": model, "effort": effort, "max_tokens": max_tokens,
+                  "fallback_enabled": fallback, "key_source": source, "reserved_usd": str(reserve),
                   "context_sha256": hashlib.sha256(user.encode()).hexdigest(),
-                  "system_sha256": hashlib.sha256(system.encode()).hexdigest(), "price_source": budget.PRICE_SOURCE}
+                  "system_sha256": hashlib.sha256(system.encode()).hexdigest(),
+                  "price_source": budget.GEMINI_PRICE_SOURCE if is_gemini else budget.PRICE_SOURCE}
+        if is_gemini:
+            return _ask_gemini(root, ledger, rid, record, key, client_factory, model=model, system=system, user=user,
+                               question=question, max_tokens=max_tokens, effort=effort, fallback=fallback,
+                               reserve=reserve)
         try:
-            client = (client_factory or _default_client)(key)
-            msg = _call(client, model=model, system=system, user=user, max_tokens=max_tokens, effort=effort, fallback=fallback)
-        except AIError:
-            ledger.release(rid, "SDK_NOT_INSTALLED")
+            client = client_factory(key) if client_factory else _default_client(key)
+        except AIError as e:
+            ledger.release(rid, e.label)
             raise
+        try:
+            msg = _call(client, model=model, system=system, user=user, max_tokens=max_tokens, effort=effort,
+                        fallback=fallback)
         except Exception as e:  # noqa: BLE001 - mapped to a fixed label; provider text is not echoed
             label, billed = _error_label(e)
             if billed:
@@ -539,6 +602,44 @@ def ask(root: Path, market: Path, ranking: dict, isin: str, *, question: str = "
         return record
     finally:
         ledger.close()
+
+
+def _ask_gemini(root, ledger, rid, record, key, client_factory, *, model, system, user, question, max_tokens, effort,
+                fallback, reserve) -> dict:
+    """The Gemini call: the chosen model, then the Lite fallbacks; settled at the answering model's verified list
+    price from the reported tokens (thinking tokens are billed as output). A failure that may have been processed
+    (5xx, dropped connection) is settled at the reservation; every other failure releases it."""
+    chain = gemini.chain_for(model, fallback)
+    try:
+        client = client_factory(key) if client_factory else gemini.Client(key)
+        out, attempts = client.generate_with_fallback(chain=chain, system=system, user=user, max_tokens=max_tokens,
+                                                      effort=effort)
+    except gemini.GeminiError as e:
+        attempts = getattr(e, "attempts", None) or [{"model": e.model or model, "result": e.label, "billed": e.billed}]
+        billed = any(a.get("billed") for a in attempts)
+        if billed:
+            ledger.settle(rid, None, detail={"error": e.label, "attempts": len(attempts)})
+        else:
+            ledger.release(rid, e.label)
+        record.update(state="FAILED", error=e.label, error_hint=e.hint, provider_message=e.message,
+                      attempts=attempts, cost_usd=str(reserve) if billed else "0")
+        _store(root, record)
+        raise AIError(e.label, e.hint) from None
+    usd, known = budget.token_cost_usd(out["model"], input_tokens=out["input_tokens"], output_tokens=out["output_tokens"])
+    charged = ledger.settle(rid, usd, detail={"attempts": len(attempts), "prices_known": known,
+                                              "basis": "list-price equivalent; the free tier bills $0"})
+    text = out["text"]
+    record.update(state=out["state"], answer=text, stop_reason=out["finish_reason"], model_served=out["model"],
+                  model_version=out.get("model_version"), attempts=attempts,
+                  fallback_switches=[{"from": a["model"], "to": out["model"]} for a in attempts[:-1]
+                                     if a["model"] != out["model"]],
+                  usage=[{"model": out["model"], "type": "generateContent", "input_tokens": out["input_tokens"],
+                          "output_tokens": out["output_tokens"], "thinking_tokens": out["thinking_tokens"],
+                          "usd": str(usd), "price_known": known}],
+                  cost_usd=str(charged), cost_basis="list-price equivalent (Google bills $0 on the free tier)",
+                  unsourced_numbers=unsourced_numbers(text, user, question))
+    _store(root, record)
+    return record
 
 
 def _store(root: Path, record: dict):

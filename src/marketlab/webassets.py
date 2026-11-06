@@ -363,24 +363,26 @@ async function renderControls() {
   rl.append(rq.requests.length ? table(["Submitted", "Kind", "Args", "State", "Attempt", "Result / error"], rq.requests.map(r => [when(r.submitted_at), r.kind, JSON.stringify(r.args || {}), r.state, r.attempt || 0, r.error || (r.result == null ? "" : JSON.stringify(r.result).slice(0, 200))]), [4], { 3: v => "st-" + v }) : el("p", "none", "muted"));
 }
 function aiSettingsCard(ai) {
-  const c = card("AI explanations (optional, your own Anthropic key)", "wide");
+  const c = card("AI explanations (optional, your own provider key)", "wide");
   const k = ai.key || {};
-  c.append(el("p", k.set ? "Key: set (" + (k.source === "SESSION" ? "kept in this server's memory until it restarts" : "saved in the private env file") + "). It is never shown again or sent anywhere except Anthropic's API." : "Key: not set. Explanations are off; everything else works without it.", k.set ? "ok-text" : "muted"));
-  if (!ai.sdk_installed) c.append(el("p", "The optional Anthropic SDK is not installed: run `pip install anthropic` (or `pip install -e .[ai]`) in this environment.", "warn-text"));
-  const kr = el("div", null, "row"); const ki = el("input"); ki.type = "password"; ki.placeholder = "sk-ant-…"; ki.autocomplete = "off"; ki.size = 34;
+  const provider = el("select"); for (const [v, lab] of [["gemini", "Google Gemini"], ["anthropic", "Anthropic Claude"]]) { const o = el("option", lab); o.value = v; provider.append(o); } provider.value = ai.provider || "anthropic";
+  c.append(el("p", k.set ? "Key: set (" + (k.source === "SESSION" ? "kept in this server's memory until it restarts" : "saved in the private env file") + "). It is never shown again or sent anywhere except the selected provider's API." : "Key: not set. Explanations are off; everything else works without it.", k.set ? "ok-text" : "muted"));
+  if (!ai.sdk_installed && (ai.provider || "anthropic") === "anthropic") c.append(el("p", "The optional Anthropic SDK is not installed: run `pip install anthropic` (or `pip install -e .[ai]`) in this environment.", "warn-text"));
+  const kr = el("div", null, "row"); const ki = el("input"); ki.type = "password"; ki.placeholder = provider.value === "gemini" ? "Gemini API key" : "sk-ant-…"; ki.autocomplete = "off"; ki.size = 34;
+  provider.addEventListener("change", () => { ki.placeholder = provider.value === "gemini" ? "Gemini API key" : "sk-ant-…"; });
   const persist = el("select"); for (const [v, lab] of [["0", "Keep for this session only"], ["1", "Save to the private env file"]]) { const o = el("option", lab); o.value = v; persist.append(o); }
   const ks = el("button", "Set key", "button primary"); ks.type = "button"; const kc = el("button", "Remove key", "button"); kc.type = "button"; const km = el("p", "", "muted");
-  ks.addEventListener("click", async () => { try { await post("/api/ai/key", { key: ki.value, persist: persist.value === "1" }); ki.value = ""; renderControls(); } catch (e) { km.textContent = "Refused: " + e.message; } });
+  ks.addEventListener("click", async () => { try { await post("/api/ai/key", { provider: provider.value, key: ki.value, persist: persist.value === "1" }); ki.value = ""; renderControls(); } catch (e) { km.textContent = "Refused: " + e.message; } });
   kc.addEventListener("click", async () => { try { await post("/api/ai/key", { clear: true }); renderControls(); } catch (e) { km.textContent = "Refused: " + e.message; } });
-  kr.append(ki, persist, ks, kc); c.append(kr, km);
+  kr.prepend(provider); kr.append(ki, persist, ks, kc); c.append(kr, km);
   const s = ai.settings || {}, f = el("form", null, "policy");
-  const ms = el("select"); for (const [m, info] of Object.entries(ai.models || {})) { const o = el("option", info.label + " · $" + info.price_per_mtok.input + " in / $" + info.price_per_mtok.output + " out per M tokens"); o.value = m; ms.append(o); } ms.value = s.model;
+  const ms = el("select"); for (const [m, info] of Object.entries(ai.models || {})) { const o = el("option", info.label + " · $" + info.price_per_mtok.input + " in / $" + info.price_per_mtok.output + " out per M tokens"); o.value = m; ms.append(o); } const gem = ai.provider === "gemini"; ms.value = ai.active_model || (gem ? s.gemini_model : s.model);
   const ef = el("select"); for (const v of ["low", "medium", "high"]) { const o = el("option", v); o.value = v; ef.append(o); } ef.value = s.effort;
   const mt = el("input"); mt.type = "number"; mt.min = 2000; mt.max = 16000; mt.step = 500; mt.value = s.max_tokens;
-  const fb = el("select"); for (const [v, lab] of [["1", "on (a refused request is retried on another model)"], ["0", "off"]]) { const o = el("option", lab); o.value = v; fb.append(o); } fb.value = s.fallback ? "1" : "0";
-  for (const [lab, inp] of [["Model", ms], ["Thinking effort", ef], ["Max output tokens (answer + thinking)", mt], ["Server-side fallback", fb]]) { const l = el("label", lab); l.append(inp); f.append(l); }
+  const fb = el("select"); for (const [v, lab] of [["1", gem ? "on (a busy model falls back to Flash-Lite)" : "on (a refused request is retried on another model)"], ["0", "off"]]) { const o = el("option", lab); o.value = v; fb.append(o); } fb.value = s.fallback ? "1" : "0";
+  for (const [lab, inp] of [["Model", ms], ["Thinking effort", ef], ["Max output tokens (answer + thinking)", mt], [gem ? "Fallback model" : "Server-side fallback", fb]]) { const l = el("label", lab); l.append(inp); f.append(l); }
   const sv = el("button", "Save AI settings", "button"); sv.type = "button"; const sm = el("p", "", "muted");
-  sv.addEventListener("click", async () => { try { await post("/api/ai/settings", { model: ms.value, effort: ef.value, max_tokens: Number(mt.value), fallback: fb.value === "1" }); renderControls(); } catch (e) { sm.textContent = "Refused: " + e.message; } });
+  sv.addEventListener("click", async () => { try { await post("/api/ai/settings", Object.assign(gem ? { gemini_model: ms.value } : { model: ms.value }, { effort: ef.value, max_tokens: Number(mt.value), fallback: fb.value === "1" })); renderControls(); } catch (e) { sm.textContent = "Refused: " + e.message; } });
   const capsF = el("form", null, "policy"), cp = ai.caps || {}, ci = {};
   for (const [kk, lab] of [["monthly_usd", "Monthly cap $ (max $" + cp.hard_monthly_ceiling_usd + ")"], ["daily_usd", "Daily cap $"], ["per_ask_usd", "Per-ask cap $"], ["asks_per_day", "Asks per day"]]) { const l = el("label", lab); const i = el("input"); i.type = "number"; i.step = "any"; i.value = cp[kk]; ci[kk] = i; l.append(i); capsF.append(l); }
   const cs = el("button", "Save spending caps", "button"); cs.type = "button";
@@ -389,6 +391,7 @@ function aiSettingsCard(ai) {
   c.append(el("h3", "Model and output"), f, el("div", null, "actions").appendChild(sv).parentNode, el("h3", "Spending caps (enforced before every call)"), capsF, el("div", null, "actions").appendChild(cs).parentNode, sm,
     dl([["Spent today", "$" + sp.day_usd + " of $" + cp.daily_usd + " (" + sp.asks_today + " asks)"], ["Spent this month", "$" + sp.month_usd + " of $" + cp.monthly_usd], ["Prices verified", (ai.price_source || {}).verified_on + " · " + (ai.price_source || {}).url]]),
     el("p", "Every ask first reserves its worst case (the whole prompt at the cache-write price plus every output token, plus a second attempt if fallback is on) and is refused if that would break a cap; afterwards the actual tokens are charged. The model sees only the stock's card and MarketLab's glossary: no account data.", "muted"));
+  for (const n of ai.notes || []) c.append(el("p", n, "muted"));
   return c;
 }
 
