@@ -4,23 +4,42 @@
 with evidence instead of argument: *when the model is shown only what was knowable on a past date, do the
 predictions it makes about random stocks match what those stocks actually did?*
 
-Nothing in this plan is a strategy change. It measures the model that exists (`A.h20.v2`: ridge over 14 features,
-shrinkage, split-conformal intervals, exact costs, two gates). Section 9 says what happens if the answer is "no".
+Nothing in this plan is a strategy change. It measures the model that exists (ridge over 14 features, separate shrinkage of the market and
+stock parts (E19), split-conformal intervals, exact costs, two gates with the tail gate on capital (E20)). Section 9 says what happens if the answer is "no".
 
 ---
 
-## 1. Why this is the next thing worth building
+## 1. Where the evidence stands (6 Nov 2026)
 
-What is proven today: the arithmetic is exact. Audited on the 5 Nov 2026 ranking, all 801 stocks with forecasts
-reproduce from the stored model with zero mismatches — the ridge prediction from β·x, the shrinkage identity
-μ̃ = μ̂·τ²/(τ²+se²), the per-feature contributions summing to μ̂, the Zerodha charges recomputed from the
-schedule, and both gate decisions. The 617-test suite passes.
+**The arithmetic is exact.** All 801 forecast stocks of the 5 Nov ranking reproduce from the stored model with zero
+mismatches (β·x, shrinkage, contributions, Zerodha charges, both gates). The suite passes.
 
-What is **not** proven, at all: that μ̂ has any relationship with the future. Internal consistency and predictive
-accuracy are different claims, and only the second one is worth money. Every number on the dashboard today is a
-correct computation of a quantity whose usefulness is unmeasured.
+**A first, thin out-of-sample measurement exists.** The model's own calibration window (8 Jul–6 Oct 2026, purged
+from training, 50,324 stock-days) gives:
 
-This plan measures it.
+| Measure | Value | Why it is not yet proof |
+|---|---|---|
+| Daily IC, stock-specific forecast vs realized 20-session excess return | +0.13 mean, positive on 63 of 63 dates | 63 dates overlap: only **4** independent 20-session periods |
+| Mean realized excess return by predicted decile (worst → best) | −2.31, −1.79, −1.34, −1.37, −0.67, −0.91, +0.12, +0.44, +1.27, +0.75 % | One regime, three months; λ was chosen on this window |
+| Top-minus-bottom decile | +3.06% per 20 sessions | Against a 0.56–0.76% round trip, but before shrinkage and on gross returns |
+
+The same diagnosis found two logic faults, now fixed (errata E19, E20): one bootstrap se for the whole forecast let
+the market-timing uncertainty crush the stock signal (shrink 0.12 instead of 0.53), and the tail limit was applied
+to a single position instead of the account (18 of 801 stocks could pass). Both changed what the model *says*;
+neither changed what it *knows*. This plan measures what it knows.
+
+**Target figures this plan must beat or refute** (registered now, before any trial runs):
+
+| Hypothesis | Pass if (over all block-A trials, bootstrap CI over trials) | If it fails |
+|---|---|---|
+| H1 signal exists | mean IC of μ̃ > 0.02 and its 95% CI excludes 0 | The model has no edge at h = 20; stop tuning it |
+| H2 signal pays | top-minus-bottom decile, net of each stock's own costs at ₹30,000, > 0 with CI excluding 0 | Real but untradeable at retail size |
+| H3 monotone | Spearman of decile means vs decile number ≥ 0.8 in ≥ 70% of trials | Two lucky ends, not a ranking |
+| H4 calibrated range | outcomes below q10 in 7–13% of stock-days, above q90 in 7–13% | Tail gate and ranges are wrong: fix calibration before anything else |
+| H5 shrinkage honest | slope of realized excess on μ̃ in [0.5, 1.5] | μ̃ is too timid (> 1.5) or too bold (< 0.5) |
+| H6 classes mean something | mean realized excess: buy/qualifies > hold off > high risk > avoid, after costs | The labels are decoration |
+| H7 market timing is noise | IC of the common part (time series of μ_common vs universe excess) ≈ 0 | If it has skill, shrink it less |
+| H8 history helps | IC with 1,000+ sessions of training ≥ IC with 300 | The backfill was not the constraint |
 
 ## 2. What one trial is
 
@@ -77,6 +96,42 @@ recorded in the trial file, so any trial can be re-run exactly.
 **Block E cases** (~20 each): dates within 5 sessions of a listed split or bonus; stocks newly listed (<120
 sessions); stocks entering or leaving surveillance within the window; the most volatile 5% of weeks in the panel;
 the thinnest-liquidity quartile that still passes the screen.
+
+## 3b. Cohorts that share one factor (the owner's batch idea)
+
+Random samples answer "on average"; cohorts answer "for which kind of stock". Block B's fixed cohort is extended to
+**six cohorts of 100 stocks, each sharing one factor**, drawn at the first `T` and then held fixed across 25 random
+`T` each (150 trials, replacing block B's single cohort):
+
+| Cohort | Shared factor | Question |
+|---|---|---|
+| B1 | Top liquidity tercile (≥ ₹10 cr median value) | Does it work where costs are lowest? |
+| B2 | Below the old ₹5 cr floor (now analysed, E21) | Is the illiquid tail predictable, or noise and manipulation? |
+| B3 | One sector (largest by count at `T`) | Is the signal sector rotation in disguise? |
+| B4 | Listed < 2 years before `T` | Do young stocks behave differently (see docs/NEXT_MODELS.md)? |
+| B5 | Highest volatility tercile | Do the tail gate and q10 hold where risk is largest? |
+| B6 | Nifty 50 members at `T` | The benchmark's own stocks: any edge where the market is most efficient? |
+
+Each cohort's IC, decile spread and coverage are reported against block A's, with the difference's CI.
+
+## 3c. Knowing exactly what the model was told
+
+Every trial file carries an **information ledger**: the as-of instant `T`; the last session whose bar was used;
+the last label resolution date used in training (must be ≤ `T` minus the 20-session embargo); the corporate-action
+registry cut (`as-of` or `full`); the universe screen used; and a SHA-256 of the training row set. The scorer refuses
+a trial whose ledger shows any input dated after `T`. The point is the owner's request, made mechanical: *know when
+you took it away*.
+
+## 3d. What the results may tune, and what they may not
+
+| May be tuned from these trials | Must not be |
+|---|---|
+| τ for each part (H5), via a pre-declared grid {0.25, 0.5, 1.0}% — declared as new registered trials | The tail limit L, the minimum edge, the cost model |
+| Slippage tiers (E21) from realized spreads, if a measured estimator is built | Anything using the sealed holdout |
+| Whether to drop the common part (H7) | Feature definitions chosen by looking at decile tables |
+
+Every change chosen from these results is a new registered candidate and must pass the walk-forward evaluation and
+the promotion rule on its own; these 1,000 trials are not that evaluation.
 
 ## 4. What is computed from the results
 

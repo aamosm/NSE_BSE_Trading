@@ -508,7 +508,7 @@ def main():
             pn = Panel(args.market_dir / "panel.sqlite3")
             try:
                 pol = service.policy(root)
-                sc = quniverse.screen_for_day(pn, args.date, quniverse.ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=pol["capital"]),
+                sc = quniverse.screen_for_day(pn, args.date, service.screen_policy(pol, pol["capital"]),
                                               args.market_dir, sources.load_calendar_for(args.market_dir)[0])
             finally:
                 pn.close()
@@ -588,7 +588,7 @@ def main():
             cand, h = args.candidate or pol["candidate"], args.h or int(pol["h"])
             cfg = qevaluate.Config(candidate=cand, h=h, W=eff.W, bootstrap=args.bootstrap if args.command == "evaluate" else 50,
                                    ablate=tuple(args.ablate) if args.command == "evaluate" else (), evaluate_holdout=getattr(args, "holdout", False),
-                                   screen=ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=eff.W), policy=eff)
+                                   screen=service.screen_policy(pol, eff.W), policy=eff)
             cal = sources.load_calendar_for(args.market_dir)[0]
             panel_path = args.market_dir / "panel.sqlite3"
             pn = Panel(panel_path) if panel_path.exists() else None

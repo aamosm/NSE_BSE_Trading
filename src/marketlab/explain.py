@@ -99,7 +99,7 @@ CLASS_INFO = {
     "BUY_CANDIDATE": {"title": "Buy candidate", "tone": "ok",
                       "means": "Clears both gates at the whole-share quantity your capital allows AND the portfolio "
                                "allocator chose it for one of your K positions.",
-                      "rule": "shrunk forecast - round-trip cost >= minimum edge; 10% outcome - cost >= -tail limit; "
+                      "rule": "shrunk forecast - round-trip cost >= minimum edge; (position ÷ capital) × (10% outcome - cost) >= -tail limit; "
                               "selected by the allocator"},
     "QUALIFIES": {"title": "Qualifies, not selected", "tone": "ok",
                   "means": "Clears both gates, but the allocator preferred other stocks (only K positions, the per-stock "
@@ -112,7 +112,7 @@ CLASS_INFO = {
     "HIGH_RISK": {"title": "High risk", "tone": "warn",
                   "means": "In one month out of ten the model expects this position to lose more than the policy's "
                            "tail limit after costs. Too volatile for the current risk settings, whatever the expected edge.",
-                  "rule": "10% outcome - cost < -tail limit"},
+                  "rule": "(position ÷ capital) × (10% outcome - cost) < -tail limit"},
     "AVOID": {"title": "Avoid", "tone": "bad",
               "means": "Either the model expects it to lag the Nifty 50 by more than a buy would need to beat it, or the "
                        "exchange has flagged it (surveillance, suspension, call auction, narrow price band).",
@@ -144,6 +144,9 @@ REASON_TEXT = {
     "ETF": "An exchange-traded fund, not a company share.",
     "NOT_TRADED_EVERY_SESSION": "Did not trade in every one of the last 20 sessions (including new listings and ISINs that changed recently).",
     "BELOW_V_MIN": "Median daily traded value over 20 sessions is below the ₹5 crore liquidity floor.",
+    "ONE_SHARE_ABOVE_POSITION_CAP": "Analysed and forecast, but one share costs more than the per-stock cap at this capital, "
+                                    "so no whole share can be bought. A larger capital (the capital switch) changes this.",
+    "LOW_LIQUIDITY": "Thinly traded: the cost model assumes wider slippage, and entering or leaving may move the price.",
     "PRICE_ABOVE_HALF_POSITION": "One share costs more than half your capital, so not even one share fits the per-stock cap.",
     "SUSPENDED": "Trading is suspended by the exchange.",
     "PERIODIC_CALL_AUCTION": "Trades only in periodic call auctions (an exchange measure for illiquid or risky stocks).",
@@ -233,11 +236,12 @@ def glossary() -> dict:
                      "0.10% each way for stocks whose median daily traded value is at least ₹10 crore, 0.25% each way below."},
         "min_edge": {"term": "Minimum edge", "plain": "The extra expected return, after costs, the policy demands before "
                      "buying (default 0.10%)."},
-        "tail_limit": {"term": "Tail limit", "plain": "The worst bad-month loss, after costs, the policy accepts "
-                       "(default 8%): q10 - cost must be at least -8%."},
+        "tail_limit": {"term": "Tail limit", "plain": "The worst bad-month loss of CAPITAL, after costs, the policy accepts "
+                       "(default 8%): (position ÷ capital) × (q10 - cost) must be at least -8%."},
         "edge_gate": {"term": "Edge gate", "plain": "μ̃ - round-trip cost ≥ minimum edge, checked at the whole-share "
                       "quantity the cap allows."},
-        "tail_gate": {"term": "Tail gate", "plain": "q10 - round-trip cost ≥ -tail limit, at the same quantity."},
+        "tail_gate": {"term": "Tail gate", "plain": "(position ÷ capital) × (q10 - round-trip cost) ≥ -tail limit, at the same "
+                      "quantity: a bad month in this one stock may not cost the account more than the limit."},
         "allocator": {"term": "Allocator", "plain": "Chooses whole-share quantities across the stocks that pass both gates, "
                       "maximising expected net rupees minus a risk penalty (γ/2 × portfolio variance, using correlations "
                       "over 60 sessions), with at most K positions, a per-stock cap, a cash reserve and exact charges."},
@@ -374,7 +378,10 @@ def narrative(card: dict, ranking: dict) -> list[dict]:
                 "text": f"Edge gate: shrunk forecast {pct(fc['mu_shrunk'])} - cost {pct(costs['cost_fraction'], sign=False)} = "
                         f"{pct(gates['net_edge'])}; it must be at least the minimum edge {pct(pol.get('min_edge'), sign=False)} → "
                         f"{'pass' if edge_ok else 'fail'}. Tail gate: 10% outcome {pct(fc['q10'])} - cost = "
-                        f"{pct(fc['q10'] - costs['cost_fraction'])}; it must be at least -{pct(pol.get('tail_limit'), sign=False)} "
+                        f"{pct(fc['q10'] - costs['cost_fraction'])} on the position, which is "
+                        f"{pct((costs.get('value') or 0) / (pol.get('W') or 1), 0, sign=False)} of capital, so "
+                        f"{pct((costs.get('value') or 0) / (pol.get('W') or 1) * (fc['q10'] - costs['cost_fraction']))} of capital; "
+                        f"it must be at least -{pct(pol.get('tail_limit'), sign=False)} "
                         f"→ {'pass' if tail_ok else 'fail'}."
                         + (f" P(excess return covers the costs) = {card['p_beats_costs']:.0%}." if card.get("p_beats_costs") is not None else "")})
     out.append({"title": "What would change the call", "text": flip_text(card, pol)})
@@ -407,8 +414,8 @@ def flip_text(card: dict, pol: dict) -> str:
                             "not enough on its own: several signals would have to improve together."))
     if cls == "HIGH_RISK" or (f.get("tail_margin") is not None and f["tail_margin"] < 0):
         parts.append(f"The tail gate is short by {pct(-f['tail_margin'], sign=False)}: the stock would need to be calmer (its "
-                     "10% outcome is the forecast minus about 1.3 typical moves) for a bad month to stay within the "
-                     f"{pct(pol.get('tail_limit'), 0, sign=False)} tail limit, which the frozen spec fixes.")
+                     "10% outcome is the forecast minus about 1.3 typical moves), or the position smaller, for a bad "
+                     f"month to cost the account less than the {pct(pol.get('tail_limit'), 0, sign=False)} tail limit.")
     bigger = card.get("costs", {}).get("bigger_accounts") or []
     if len(bigger) > 1 and cls not in ("BUY_CANDIDATE", "QUALIFIES"):
         parts.append("Account size: round-trip cost is " + ", ".join(
@@ -541,8 +548,8 @@ def day_summary(ranking: dict) -> list[str]:
         tail = sum(1 for s in fc if "TAIL_LIMIT_AT_QUANTITY" in s["gates"]["at_quantity"])
         edge = sum(1 for s in fc if "EDGE_BELOW_COST_AT_QUANTITY" in s["gates"]["at_quantity"])
         sig = _q([s["forecast"]["sigma_hat"] for s in fc], 0.5)
-        out.append(f"Risk is the main constraint: {tail} of {len(fc)} forecast stocks have a bad-month (10% outcome) loss beyond "
-                   f"the {pct(pol.get('tail_limit'), 0, sign=False)} limit after costs; the median stock's typical {r.get('h', 20)}-session "
+        out.append(f"Risk is the main constraint: {tail} of {len(fc)} forecast stocks have a bad-month (10% outcome) that would cost the account more than "
+                   f"the {pct(pol.get('tail_limit'), 0, sign=False)} limit after costs at their position size; the median stock's typical {r.get('h', 20)}-session "
                    f"move is ±{pct(sig, 1, sign=False)}.")
         mus = [s["forecast"]["mu_shrunk"] for s in fc]
         lo, hi = _q(mus, 0.05), _q(mus, 0.95)

@@ -20,10 +20,11 @@ LOOKBACK = 20
 class ScreenPolicy:
     v_min: float = V_MIN
     lookback: int = LOOKBACK
-    price_max_fraction: float = 0.5  # of W: at least one share fits a half-position
+    price_max_fraction: float | None = 0.5  # of W: at least one share fits a half-position; None = analyse anyway
     W: float = 10_000.0
     min_band_pct: float = 10.0
     exclude_etfs: bool = True
+    series: tuple[str, ...] = ("EQ",)  # BE (trade-for-trade, delivery only) is fine for a delivery investor
 
 
 @dataclass
@@ -142,7 +143,7 @@ def screen(panel: Panel, day: date, policy: ScreenPolicy = ScreenPolicy(), rule_
     for isin, b in today.items():
         sym = b.symbol
         series = (rule_inputs or {}).get("series", {}).get(sym, b.series)
-        if series != "EQ":
+        if series not in policy.series:
             excluded[isin] = f"SERIES_{series}"
             continue
         if policy.exclude_etfs and is_etf_name(isin, names.get(isin)):  # the name printed on that day
@@ -157,7 +158,7 @@ def screen(panel: Panel, day: date, policy: ScreenPolicy = ScreenPolicy(), rule_
         if med < policy.v_min:
             excluded[isin] = "BELOW_V_MIN"
             continue
-        if b.close > policy.price_max_fraction * policy.W:
+        if policy.price_max_fraction is not None and b.close > policy.price_max_fraction * policy.W:
             excluded[isin] = "PRICE_ABOVE_HALF_POSITION"
             continue
         reg = (rule_inputs or {}).get("reg", {}).get(sym)

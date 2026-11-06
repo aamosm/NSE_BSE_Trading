@@ -102,7 +102,7 @@ def entry_gate(c: Candidate, policy: Policy) -> tuple[bool, list[str]]:
         reasons.append("PRICE_ABOVE_CAP")
     if c.mu - break_even(best) - c.slippage < policy.min_edge:
         reasons.append("EDGE_BELOW_COST")
-    if not math.isnan(c.q10) and c.q10 - break_even(best) - c.slippage < -policy.tail_limit:
+    if not math.isnan(c.q10) and capital_tail_loss(c.q10, break_even(best) + c.slippage, best, policy) < -policy.tail_limit:
         reasons.append("TAIL_LIMIT")
     return (not reasons), reasons
 
@@ -121,6 +121,15 @@ def position_costs(c: Candidate, q: int) -> dict:
             "slippage": round(v * c.slippage, 2), "charge_fraction": total / v, "cost_fraction": total / v + c.slippage}
 
 
+def capital_tail_loss(q10: float, cost_fraction: float, position_value: float, policy: "Policy") -> float:
+    """Gate 5 as a loss of capital (erratum E20): the bad-month (10%) outcome net of costs, times the position's share
+    of capital. The spec compared q10 - cost to -L for the position alone, which rejects nearly every single stock
+    (a typical month's 10% outcome is about -15%) and tightens perversely as positions shrink with diversification;
+    the limit L is a statement about the account, so it is applied to the account."""
+    w = position_value / policy.W if policy.W > 0 else 1.0
+    return w * (q10 - cost_fraction)
+
+
 def position_gate(c: Candidate, q: int, policy: "Policy") -> tuple[list[str], dict]:
     """Gates 4 and 5 at the actual whole-share quantity: mu - costs(q) >= m_min and q10 - costs(q) >= -L."""
     pc = position_costs(c, q)
@@ -128,7 +137,7 @@ def position_gate(c: Candidate, q: int, policy: "Policy") -> tuple[list[str], di
     net = c.mu - pc["cost_fraction"]
     if net < policy.min_edge:
         reasons.append("EDGE_BELOW_COST_AT_QUANTITY")
-    if not math.isnan(c.q10) and c.q10 - pc["cost_fraction"] < -policy.tail_limit:
+    if not math.isnan(c.q10) and capital_tail_loss(c.q10, pc["cost_fraction"], pc["value"], policy) < -policy.tail_limit:
         reasons.append("TAIL_LIMIT_AT_QUANTITY")
     return reasons, pc | {"net_edge": net, "threshold": pc["cost_fraction"] + policy.min_edge}
 

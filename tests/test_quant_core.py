@@ -83,8 +83,12 @@ def test_gate_worked_examples():
     assert allocate.entry_gate(weak, pol) == (False, ["EDGE_BELOW_COST"])
     strong = Candidate("INE000A01001", 100.0, forecast.shrink(0.03, 0.005), 0.06)  # 1.5%: passes at Rs 5,000
     assert allocate.entry_gate(strong, pol) == (True, [])
-    tail = Candidate("INE000A01001", 100.0, 0.015, 0.06, q10=-0.10)
+    # Erratum E20: the tail limit is a loss of capital. At Rs 10,000 the largest position is half the capital, so a
+    # -10% bad month costs the account about -5% (passes) and a -20% one about -10% (fails the 8% limit).
+    assert "TAIL_LIMIT" not in allocate.entry_gate(Candidate("INE000A01001", 100.0, 0.015, 0.06, q10=-0.10), pol)[1]
+    tail = Candidate("INE000A01001", 100.0, 0.015, 0.06, q10=-0.20)
     assert "TAIL_LIMIT" in allocate.entry_gate(tail, pol)[1]
+    assert allocate.capital_tail_loss(-0.20, 0.008, 5_000, pol) == pytest.approx(0.5 * (-0.208))
     assert "PRICE_ABOVE_CAP" in allocate.entry_gate(Candidate("INE000A01001", 6000.0, 0.02, 0.06), pol)[1]
 
 
@@ -161,3 +165,38 @@ def test_calibration_metrics():
     assert monitor.brier([1.0, 0.0], [1, 0]) == 0.0
     assert monitor.brier_skill([0.5, 0.5], [1, 0]) == pytest.approx(0.0)
     assert monitor.pit_ks([0.1, 0.5, 0.9]) == pytest.approx(0.2333, abs=1e-3)
+
+
+def test_market_timing_uncertainty_no_longer_crushes_the_stock_signal():
+    """E19: a bootstrap where the common part (intercept + market features) is very uncertain and the stock part is
+    stable. Shrinking the sum by the total se would cut the stock signal to almost nothing; each part is shrunk by
+    its own se instead."""
+    from marketlab.quant.features import FEATURES, MARKET_FEATURES
+    k = len(FEATURES) + 1
+    j_stock = 1 + FEATURES.index("mom_12_1")
+    base = [0.0] * k
+    base[j_stock] = 0.02  # +1% on a stock at rank +0.5
+    boots = []
+    for i in range(40):
+        b = list(base)
+        b[0] = (0.03 if i % 2 else -0.03)  # common part swings +-3% between refits
+        b[j_stock] = 0.02 + (0.001 if i % 3 else -0.001)
+        boots.append(b)
+    m = forecast.Model("t", 20, base, 1.0, FEATURES, [-1.3, 0.0, 1.4] * 100, 300, 1000, None, None, None, None,
+                       bootstrap_betas=boots)
+    x = {f: 0.0 for f in FEATURES} | {"mom_12_1": 0.5}
+    p = forecast.predict(m, x, 0.1)
+    assert p["mu_specific"] == pytest.approx(0.01) and p["mu_common"] == pytest.approx(0.0)
+    assert p["se_common"] > 0.025 and p["se_specific"] < 0.001
+    assert p["mu_shrunk"] == pytest.approx(forecast.shrink(0.01, p["se_specific"]))  # ~ the full 1%
+    assert p["mu_shrunk"] > 5 * forecast.shrink(0.01, p["se"])  # the old total-se shrink would have kept ~3%
+    assert set(MARKET_FEATURES) and forecast.COMMON_IDX[0] == 0
+
+
+def test_illiquid_stocks_are_costed_not_excluded():
+    from marketlab.quant import labels
+    tiers = [labels.slippage_for(v) for v in (20e7, 7e7, 2e7, 5e6, 1e6)]
+    assert tiers == [0.0010, 0.0025, 0.0050, 0.0100, 0.0200] and tiers == sorted(tiers)
+    from marketlab import service
+    sp = service.screen_policy(service.POLICY_DEFAULTS, 3_000)
+    assert sp.v_min == 0 and sp.price_max_fraction is None and sp.series == ("EQ", "BE")

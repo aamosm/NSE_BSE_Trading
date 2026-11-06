@@ -166,3 +166,24 @@ def test_restating_at_another_capital_changes_costs_and_classes_but_never_the_fo
 def test_restate_keeps_an_unranked_body_untouched():
     out = ranking.restate({"version": ranking.VERSION, "status": "NO_PANEL", "stocks": []}, 5_000.0)
     assert out["restated"]["basis"] == "NOT_RANKED" and out["stocks"] == []
+
+
+def test_owner_screen_analyses_every_price_and_liquidity_and_labels_unaffordable(tmp_path):
+    """E21: no price rule and no liquidity floor. A stock whose one share exceeds the per-stock cap keeps its forecast
+    and is labelled ONE_SHARE_ABOVE_POSITION_CAP; no eligibility check refers to price or median value."""
+    from marketlab import service
+    p = make_panel(tmp_path / "p.sqlite3", n=420, n_stocks=30, bonus_at=10_000)
+    root = tmp_path / "private"
+    root.mkdir()
+    W = 1_000.0  # tiny capital: a Rs 500 cap, so the dearer synthetic stocks cannot be bought
+    c = evaluate.Config(h=20, train_sessions=200, W=W, screen=service.screen_policy({"v_min_crore": 0.0}, W),
+                        policy=allocate.Policy.for_capital(W))
+    out = ranking.build(p, c, root=root, calendar=CAL, bootstrap=10, write=False)
+    p.close()
+    assert out["status"] == "RANKED" and out["screen_policy"]["price_max"] is None
+    for s in out["stocks"]:
+        assert {ch["rule"] for ch in s["checks"]}.isdisjoint({"PRICE_FITS_HALF_POSITION", "MEDIAN_VALUE_20"})
+        assert s["class"] != "INELIGIBLE" or s["reasons"][0] not in ("PRICE_ABOVE_HALF_POSITION", "BELOW_V_MIN")
+        if s.get("costs", {}).get("q") == 0:
+            assert s["class"] == "HOLD_OFF" and s["reasons"][0] == "ONE_SHARE_ABOVE_POSITION_CAP" and s["forecast"]
+    json.dumps(ranking.restate(out | {"digest": "x"}, 5_000.0), allow_nan=False)  # no Infinity reaches the browser

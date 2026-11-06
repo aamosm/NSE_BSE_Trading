@@ -46,6 +46,7 @@ from .sessions import next_session
 VERSION = "RANK.v1"
 FOLDER = "rankings"
 CLASSES = ("BUY_CANDIDATE", "QUALIFIES", "HOLD_OFF", "HIGH_RISK", "AVOID", "INELIGIBLE", "NO_FORECAST")
+LOW_LIQUIDITY_VALUE = 5 * 10_000_000  # the old screen floor: below it the stock is analysed and flagged (E21)
 RISK_EXCLUSIONS = ("UNDER_SURVEILLANCE", "SUSPENDED", "PERIODIC_CALL_AUCTION", "SURVEILLANCE_UNKNOWN")
 
 
@@ -72,14 +73,17 @@ def eligibility_checks(view, day: date, isin: str, bar, sp, rule_inputs: dict | 
     traded, med = window_stats.get(isin, (0, None))
     reg = ri.get("reg", {}).get(bar.symbol)
     band = ri.get("band", {}).get(bar.symbol, "absent") if ri.get("have_band") else "unknown"
+    allowed = tuple(getattr(sp, "series", ("EQ",)))
     checks = [
-        {"rule": "SERIES_EQ", "value": series, "need": "EQ", "pass": series == "EQ"},
+        {"rule": "SERIES", "value": series, "need": " or ".join(allowed), "pass": series in allowed},
         {"rule": "NOT_AN_ETF", "value": names.get(isin), "need": "an operating company's share", "pass": not is_etf_name(isin, names.get(isin))},
         {"rule": "TRADED_EVERY_SESSION", "value": traded, "need": sp.lookback, "pass": traded >= sp.lookback},
-        {"rule": "MEDIAN_VALUE_20", "value": _f(med, 0), "need": sp.v_min, "pass": med is not None and med >= sp.v_min},
-        {"rule": "PRICE_FITS_HALF_POSITION", "value": bar.close, "need": sp.price_max_fraction * sp.W,
-         "pass": bar.close <= sp.price_max_fraction * sp.W},
     ]
+    if sp.v_min > 0:  # E21: no liquidity floor by default; illiquidity is costed and flagged instead
+        checks.append({"rule": "MEDIAN_VALUE_20", "value": _f(med, 0), "need": sp.v_min, "pass": med is not None and med >= sp.v_min})
+    if sp.price_max_fraction is not None:  # E21: no price rule by default; affordability is decided when buying
+        checks.append({"rule": "PRICE_FITS_HALF_POSITION", "value": bar.close, "need": sp.price_max_fraction * sp.W,
+                       "pass": bar.close <= sp.price_max_fraction * sp.W})
     if not ri.get("have_reg"):
         checks.append({"rule": "SURVEILLANCE", "value": "unknown (file not admissible)", "need": "not under ASM/GSM", "pass": None})
     elif reg is None:
@@ -130,7 +134,8 @@ def _flip(card: dict, policy: allocate.Policy, model: forecast.Model) -> dict:
     fc, costs = card["forecast"], card["costs"]
     thr = costs["cost_fraction"] + policy.min_edge
     out = {"edge_threshold": _f(thr), "edge_margin": _f(fc["mu_shrunk"] - thr),
-           "tail_margin": _f(fc["q10"] - costs["cost_fraction"] + policy.tail_limit) if fc.get("q10") is not None else None,
+           "tail_margin": _f(allocate.capital_tail_loss(fc["q10"], costs["cost_fraction"], costs.get("value") or 0.0, policy)
+                             + policy.tail_limit) if fc.get("q10") is not None and costs.get("value") else None,
            "avoid_threshold": _f(-thr), "avoid_margin": _f(-thr - fc["mu_shrunk"])}
     shrink = fc.get("shrink_factor") or 0.0
     best = None
@@ -173,6 +178,8 @@ def classify(card: dict, policy: allocate.Policy) -> tuple[str, list[str]]:
         return "BUY_CANDIDATE", ["PASSES_GATES_AND_ALLOCATOR"]
     if not gates:
         return "QUALIFIES", [card["allocation"].get("why_not") or "NOT_SELECTED"]
+    if "NO_WHOLE_SHARE_FITS" in gates:  # analysed, but one share costs more than the per-stock cap at this capital
+        return "HOLD_OFF", ["ONE_SHARE_ABOVE_POSITION_CAP"] + (["LEANS_NEGATIVE"] if fc["mu_shrunk"] < 0 else ["LEANS_POSITIVE"])
     tail = "TAIL_LIMIT_AT_QUANTITY" in gates
     if fc["mu_shrunk"] <= -thr:
         return "AVOID", ["MODEL_EXPECTS_UNDERPERFORMANCE"] + (["DOWNSIDE_TAIL_BEYOND_LIMIT"] if tail else [])
@@ -214,7 +221,8 @@ def restate(body: dict, capital: float) -> dict:
         return dict(body, restated={"capital": float(capital), "basis": "NOT_RANKED", "changed": 0})
     policy = policy_for_capital(body.get("policy") or {}, capital)
     cap = min(policy.cap_fraction * policy.W, policy.W * (1 - policy.reserve_fraction))
-    price_max = policy.W * 0.5
+    old_rule = (body.get("screen_policy") or {}).get("price_max")  # artifacts before E21 screened on price
+    price_max = policy.W * 0.5 if old_rule is not None else float("inf")
     out, priced_out, newly = [], 0, 0
     for src in body["stocks"]:
         card = dict(src)
@@ -287,7 +295,7 @@ def restate(body: dict, capital: float) -> dict:
     new["counts"] = {k: sum(1 for s in out if s["class"] == k) for k in CLASSES}
     new["policy"] = policy.to_json()
     new["policy_digest"] = policy.digest()
-    new["screen_policy"] = dict(body.get("screen_policy") or {}, price_max=price_max)
+    new["screen_policy"] = dict(body.get("screen_policy") or {}, price_max=price_max if old_rule is not None else None)
     new["restated"] = {"capital": float(policy.W), "from_capital": float((body.get("policy") or {}).get("W") or 0),
                        "from_digest": body.get("digest"), "from_day": body.get("day"), "basis": RESTATE_BASIS,
                        "priced_out": priced_out, "newly_eligible_needs_run": newly,
@@ -327,8 +335,8 @@ def build(panel, cfg: evaluate.Config, *, root: Path, calendar, rule_inputs_fn=N
     body = {"version": VERSION, "day": day.isoformat(), "entry_session": entry.isoformat() if entry else None,
             "candidate": cfg.candidate, "h": cfg.h, "candidate_spec": candidates.describe(spec, cfg.ablate),
             "policy": policy.to_json(), "policy_digest": policy.digest(), "execution": cfg.execution_json(),
-            "screen_policy": {"v_min": sp.v_min, "lookback": sp.lookback, "price_max": sp.price_max_fraction * sp.W,
-                              "min_band_pct": sp.min_band_pct},
+            "screen_policy": {"v_min": sp.v_min, "lookback": sp.lookback, "price_max": sp.price_max_fraction * sp.W if sp.price_max_fraction is not None else None,
+                              "min_band_pct": sp.min_band_pct, "series": list(sp.series)},
             "validation": _validation(ds, cfg, runs, promo, problems),
             "data": {"panel_first": min(stored).isoformat(), "panel_last": max(stored).isoformat(),
                      "sessions": len(ds.sessions), "stored_sessions": len(ds.panel_days),
@@ -400,7 +408,8 @@ def build(panel, cfg: evaluate.Config, *, root: Path, calendar, rule_inputs_fn=N
         x = o["x"]
         card["x"] = {f: _f(x.get(f), 6) for f in features.FEATURES}
         shrink = fc["mu_shrunk"] / fc["mu_hat"] if fc["mu_hat"] else forecast.TAU_DEFAULT ** 2 / (forecast.TAU_DEFAULT ** 2 + fc["se"] ** 2)
-        card["forecast"] = {k: _f(fc.get(k), 8) for k in ("mu_hat", "se", "mu_shrunk", "sigma_hat", "q10", "q50", "q90", "p_positive")}
+        card["forecast"] = {k: _f(fc.get(k), 8) for k in ("mu_hat", "se", "mu_shrunk", "sigma_hat", "q10", "q50", "q90", "p_positive",
+                                                       "mu_common", "mu_specific", "se_common", "se_specific")}
         card["forecast"].update(shrink_factor=_f(shrink, 6), tau=fc["tau"], h=cfg.h, calibration_n=fc["calibration_n"])
         card["contributions"] = _contributions(model, x)
         c = cands[isin]
@@ -424,6 +433,8 @@ def build(panel, cfg: evaluate.Config, *, root: Path, calendar, rule_inputs_fn=N
             card["allocation"]["why_not"] = ("NOT_SELECTED_K_LIMIT" if len(selected) >= policy.K else
                                              "NOT_IN_TOP_10_POOL" if c not in passing[:10] else "NOT_SELECTED_PORTFOLIO_FIT")
         card["class"], card["reasons"] = classify(card, policy)
+        if (card.get("median_value_20") or 0) < LOW_LIQUIDITY_VALUE:
+            card["reasons"].append("LOW_LIQUIDITY")
         card["flip"] = _flip(card, policy, model)
         stocks.append(card)
     ranked = sorted([s for s in stocks if "gates" in s], key=lambda s: -(s["gates"]["net_edge"] or -9))

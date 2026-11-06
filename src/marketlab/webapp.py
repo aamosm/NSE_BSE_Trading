@@ -407,7 +407,7 @@ def universe_view(market: Path, day: date | None = None, root: Path | None = Non
             return {"error": "PANEL_EMPTY"}
         day = day or sessions[-1]
         cal = sources.load_calendar_for(market)[0]
-        s = screen_for_day(pn, day, ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=pol["capital"]), market, cal)
+        s = screen_for_day(pn, day, service.screen_policy(pol, pol["capital"]), market, cal)
         rows = []
         if s.isins:
             xs = {isin: b for isin, b in pn.cross_section(day)}

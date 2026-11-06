@@ -6,12 +6,15 @@ import random
 from dataclasses import dataclass, field
 from datetime import date
 
-from .features import FEATURES, design_vector
+from .features import FEATURES, MARKET_FEATURES, design_vector
 from .linalg import add_gram, dot, gram, ridge_from_gram, zeros
 
 MIN_CALIBRATION = 200
 LAM_GRID = (1.0, 10.0, 100.0)  # multiplied by n/1000 (spec section 4.2)
 TAU_DEFAULT = 0.005  # prior scale of true 20-session edges (spec section 4.4)
+# Design-vector positions of the common part: the intercept and the market features take the same value for every
+# stock on a date, so together they are a market-timing forecast (the universe against the Nifty 50).
+COMMON_IDX = (0,) + tuple(1 + FEATURES.index(f) for f in MARKET_FEATURES)
 
 
 @dataclass
@@ -69,6 +72,11 @@ def conformal_probability_above(z_sorted: list[float], c: float) -> float:
 def shrink(mu_hat: float, se: float, tau: float = TAU_DEFAULT) -> float:
     """Empirical-Bayes shrinkage toward 0: mu * tau^2 / (tau^2 + se^2). 1.5%, 0.6% -> 0.6148%."""
     return mu_hat * tau * tau / (tau * tau + se * se)
+
+
+def _sd(v: list[float]) -> float:
+    m = sum(v) / len(v)
+    return math.sqrt(sum((a - m) ** 2 for a in v) / (len(v) - 1))
 
 
 def pinball(y: float, q: float, tau: float) -> float:
@@ -168,14 +176,24 @@ def predict(model: Model, x: dict[str, float], sigma: float, *, tau: float = TAU
         return {"abstain": "INSUFFICIENT_CALIBRATION", "calibration_n": model.calibration_n}
     xv = design_vector(x)
     mu = dot(model.beta, xv)
-    se = 0.0
-    if model.bootstrap_betas:
-        preds = [dot(b, xv) for b in model.bootstrap_betas]
-        m = sum(preds) / len(preds)
-        se = math.sqrt(sum((p - m) ** 2 for p in preds) / (len(preds) - 1)) if len(preds) > 1 else 0.0
+    common = sum(model.beta[j] * xv[j] for j in COMMON_IDX)
+    specific = mu - common
+    se = se_c = se_s = 0.0
+    if len(model.bootstrap_betas) > 1:
+        tot, com = [], []
+        for b in model.bootstrap_betas:
+            tot.append(dot(b, xv))
+            com.append(sum(b[j] * xv[j] for j in COMMON_IDX))
+        se, se_c, se_s = _sd(tot), _sd(com), _sd([t - c for t, c in zip(tot, com)])
+    # Erratum E19: shrink each part by its own uncertainty. The common part is estimated from only as many
+    # independent periods as the training window holds (about 15 at 311 dates and h = 20), the stock-specific part
+    # from the whole cross-section; shrinking their sum by the total se let the market-timing uncertainty crush the
+    # stock-selection signal (5 Nov 2026: se_common 1.30%, se_specific 0.47%, shrink 0.12 instead of 0.53).
+    mu_shrunk = shrink(common, se_c, tau) + shrink(specific, se_s, tau) if model.bootstrap_betas else shrink(mu, se, tau)
     z = model.z_sorted
     return {
-        "mu_hat": mu, "se": se, "mu_shrunk": shrink(mu, se, tau), "sigma_hat": sigma, "tau": tau,
+        "mu_hat": mu, "se": se, "mu_shrunk": mu_shrunk, "sigma_hat": sigma, "tau": tau,
+        "mu_common": common, "mu_specific": specific, "se_common": se_c, "se_specific": se_s,
         "q10": mu + sigma * conformal_z(z, 0.1), "q50": mu + sigma * conformal_z(z, 0.5), "q90": mu + sigma * conformal_z(z, 0.9),
         "p_positive": conformal_probability_above(z, (0.0 - mu) / sigma) if sigma > 0 else float("nan"),
         "calibration_n": model.calibration_n, "target_id": model.target_id, "h": model.h, "lam": model.lam,

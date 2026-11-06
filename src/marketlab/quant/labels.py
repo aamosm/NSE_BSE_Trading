@@ -48,8 +48,19 @@ class Label:
         return self.reason if self.status == EXCLUDED else None
 
 
+# Erratum E21 (owner decision 2026-11-06): every stock is analysed, so stocks below the old Rs 5 crore floor are
+# costed instead of excluded. Per-side slippage widens as the median traded value falls (an assumption standing in
+# for a measured spread estimator; see docs/SPEC_ERRATA.md E21).
+ILLIQUID_TIERS = ((5 * 10_000_000, SLIPPAGE_OTHER), (1 * 10_000_000, 0.0050), (25 * 100_000, 0.0100), (0.0, 0.0200))
+
+
 def slippage_for(median_value_20: float) -> float:
-    return SLIPPAGE_LIQUID if median_value_20 >= LIQUID_VALUE else SLIPPAGE_OTHER
+    if median_value_20 >= LIQUID_VALUE:
+        return SLIPPAGE_LIQUID
+    for floor, s in ILLIQUID_TIERS:
+        if median_value_20 >= floor:
+            return s
+    return ILLIQUID_TIERS[-1][1]
 
 
 def forward_return(panel: Panel, isin: str, decision_day: date, h: int, *, sessions: list[date],

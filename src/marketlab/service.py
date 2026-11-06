@@ -89,11 +89,11 @@ def set_paused(root: Path, paused: bool, at=None) -> dict:
 
 POLICY_FILE = "policy.json"
 # K and cap_fraction default to None: the spec 5.4 tier for the capital applies until the owner sets a value.
-POLICY_DEFAULTS = {"capital": 10000.0, "K": None, "cap_fraction": None, "reserve_fraction": 0.2, "v_min_crore": 5.0,
+POLICY_DEFAULTS = {"capital": 10000.0, "K": None, "cap_fraction": None, "reserve_fraction": 0.2, "v_min_crore": 0.0,
                    "h": 20, "candidate": "A", "symbols": [], "families": {"A": True, "B": False, "C": False},
                    "risk_multiplier": 1.0}
 POLICY_BOUNDS = {"capital": (1000.0, 1e8), "K": (1, 10), "cap_fraction": (0.05, 1.0), "reserve_fraction": (0.0, 0.9),
-                 "v_min_crore": (0.1, 1000.0), "h": (5, 250), "risk_multiplier": (0.25, 1.0)}
+                 "v_min_crore": (0.0, 1000.0), "h": (5, 250), "risk_multiplier": (0.25, 1.0)}
 NULLABLE = {"K", "cap_fraction"}
 # Stored but not read by any job yet: the scheduler collects broker data for its --symbols argument.
 UNSUPPORTED_POLICY_KEYS = {"symbols": "stored only; the scheduler uses its --symbols argument"}
@@ -199,6 +199,16 @@ def list_requests(root: Path, limit=30) -> list:
     return list(reversed(out))
 
 
+def screen_policy(pol: dict, W: float):
+    """The owner's universe screen (errata E21, owner decision 2026-11-06): every listed EQ and BE share is analysed.
+    No liquidity floor by default (illiquidity is costed through wider slippage and flagged, not excluded) and no
+    price rule (capital decides only whether a whole share is affordable when buying, never whether a stock is
+    analysed). ETFs, SME and non-compliant (BZ) series, surveillance, suspension and narrow bands stay screened."""
+    from .quant.universe import ScreenPolicy
+    return ScreenPolicy(v_min=float(pol.get("v_min_crore") or 0.0) * 1e7, W=float(W), price_max_fraction=None,
+                        series=("EQ", "BE"))
+
+
 def build_ranking(root: Path, market: Path, calendar, *, h: int | None = None, candidate: str | None = None,
                   bootstrap: int = 50, progress=None, origin: str = "cli", capital: float | None = None) -> dict:
     """Today's research ranking (quant.ranking) with the saved policy, the corporate-action registry and rule files
@@ -217,7 +227,7 @@ def build_ranking(root: Path, market: Path, calendar, *, h: int | None = None, c
         pol = dict(pol, capital=float(capital))
     eff = effective_policy(root, pol)
     cfg = qevaluate.Config(candidate=candidate or pol["candidate"], h=int(h or pol["h"]), W=eff.W,
-                           screen=ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=eff.W), policy=eff)
+                           screen=screen_policy(pol, eff.W), policy=eff)
     panel_path = market / "panel.sqlite3"
     if not panel_path.exists():
         raise ValueError("PANEL_NOT_BUILT: build the price panel first")
@@ -257,7 +267,7 @@ def _run_request(ctx, req: dict) -> dict:
     from .quant.panel import Panel
     from .quant.universe import ScreenPolicy
     cfg = qevaluate.Config(candidate=args.get("candidate", pol["candidate"]), h=int(args.get("h", pol["h"])), W=float(pol["capital"]),
-                           screen=ScreenPolicy(v_min=pol["v_min_crore"] * 1e7, W=float(pol["capital"])),
+                           screen=screen_policy(pol, float(pol["capital"])),
                            policy=effective_policy(ctx.root, pol))
     panel_path = ctx.market / "panel.sqlite3"
     pn = Panel(panel_path) if panel_path.exists() else None
