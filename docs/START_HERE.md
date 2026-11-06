@@ -107,15 +107,20 @@ stock is analysed, only whether a whole share can be bought; illiquidity is cost
 | Exchange risk flags (ASM/GSM 324, 5% band 71, call auction 2) | 397 | Avoided on the exchange's own warning, before any model |
 | **Forecast** | **1,804** | of 3,458 listed securities (801 before E21) |
 
-**The corrected ranking of 5 Nov 2026** (errata E19–E21; independently audited, zero mismatches):
+**The ranking of 6 Nov 2026** (errata E19–E23; recorded at 01:10 on 7 Nov, before the next session, the Diwali
+Muhurat session of 8 Nov, opened: forward evidence):
 
 | Call | Count | What it means |
 |---|---|---|
-| Buy candidate | 1 | BALAMINES: the allocator's risk-adjusted pick at ₹10,000 (calmer than the higher-edge stocks) |
-| Qualifies | 38 | Clear both gates; not chosen for portfolio fit (e.g. CGPOWER, GESHIP, THANGAMAYL) |
-| Hold off | 633 | 581 edge below cost; 52 the model likes but one share is above the ₹5,000 cap (APARINDS, POWERINDIA, SOLARINDS rank #1, #2, #5) |
-| High risk | 1,118 | A bad month would cost the account more than 8%; 737 of them are illiquid |
-| Avoid | 411 | 324 under ASM/GSM surveillance, 71 on 5% bands, 2 call auction, **14 the model's own view** (e.g. NETWORK18, AWFIS, POKARNA) |
+| Buy candidate | 0 | Nothing clears both gates at ₹10,000 once the stock signal is capped at what held up out of sample (58%) |
+| Qualifies | 2 | RRKABEL, CGPOWER |
+| Hold off | 612 | Edge below cost, or the model likes it but one share is above the ₹5,000 cap (APARINDS, POWERINDIA rank #1, #2) |
+| High risk | 1,182 | The stock's own bad month would cost the account more than 8% |
+| Avoid | 408 | Exchange flags, plus the model's own view (e.g. IXIGO, NETWORK18, INOXWIND) |
+
+The 5 Nov re-run had named BALAMINES a buy candidate. An external review questioned it, and the review was right:
+that call rested on an overconfident stock-part shrinkage (E23) and on a tail check that used returns versus the
+Nifty instead of money (E22). With both fixed, BALAMINES is hold off.
 
 Capital changes the answer, never the forecast: the same day restated gives 0 buys at ₹3,000, 110 qualifying at
 ₹30,000, and APARINDS and POWERINDIA as buys at ₹1,00,000, once a share fits the cap.
