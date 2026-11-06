@@ -25,9 +25,9 @@ The classes are checked in this order:
 | Buy candidate | shrunk forecast − round-trip cost ≥ minimum edge (0.10%) **and** 10% outcome − cost ≥ −tail limit (8%) **and** chosen by the allocator (K positions, cap, cash reserve, correlation) |
 | Qualifies | both gates pass; the allocator preferred other stocks |
 | Avoid | shrunk forecast ≤ −(cost + minimum edge), the mirror of a buy; or an exchange risk flag (ASM/GSM surveillance, suspension, periodic call auction, unreadable status, price band < 10%) |
-| High risk | 10% outcome − cost < −tail limit: a bad month (1 in 10) would lose more than the policy accepts |
+| High risk | (position ÷ capital) × (10% outcome − cost) < −tail limit: a bad month (1 in 10) in this stock would cost the account more than the policy accepts (E20) |
 | Hold off | everything between: the edge does not cover a round trip in either direction |
-| Not eligible | outside the universe: not EQ series, an ETF, median traded value < ₹5 crore, not traded every session, or one share > half the capital |
+| Not eligible | outside the universe: not EQ or BE series (SME, BZ), an ETF, or not traded every session. Since E21 there is no liquidity floor and no price rule: illiquid stocks are costed and flagged `LOW_LIQUIDITY`; a share above the per-stock cap is forecast and labelled hold off (`ONE_SHARE_ABOVE_POSITION_CAP`) |
 | No forecast | in the universe, but fewer than 251 clean sessions or an unexplained price jump inside a feature window |
 
 ## What each card contains
@@ -91,3 +91,13 @@ marketlab --private-dir data/research/private --market-dir data/research/market 
 
 `data/research/market/calendar_sources.json` declares the stored circulars. Years without one are reconstructed
 from publication. `data/research/` is git-ignored: the exchange files are not redistributed.
+
+## Corrected run (5 Nov 2026 data, ranked 7 Nov after errata E19–E21)
+
+| Item | Result |
+|---|---|
+| Forecasts | 1,804 stocks (801 before), audited against an independent recomputation: zero mismatches |
+| Calls | 1 buy candidate (BALAMINES), 38 qualify, 633 hold off, 1,118 high risk (737 illiquid), 411 avoid (14 the model's own view), 959 not eligible, 298 no forecast |
+| What changed the answer | Shrinking the market-timing and stock-selection parts separately (E19); the tail limit applied to the account (E20); every EQ/BE share analysed (E21) |
+| Capital | Restated: 0 buys at ₹3,000; 2 at ₹30,000 (CGPOWER, GESHIP); APARINDS and POWERINDIA at ₹1,00,000 |
+| Still true | Unvalidated: the first out-of-sample window shows skill (IC +0.13, top-minus-bottom decile +3.06% per 20 sessions) over only four independent periods |

@@ -91,28 +91,39 @@ evaluation, the holdout is frozen but unused, and no forward prediction has yet 
 [BACKTEST_PLAN.md](BACKTEST_PLAN.md) runs, there is no evidence that μ̃ predicts anything. The arithmetic is
 verified exact; the usefulness is not measured.
 
-## 4. Why most stocks are "not checked"
+## 4. Which stocks are analysed, and what the 5 Nov 2026 ranking says
 
-Of 3,458 listed securities on 5 Nov 2026, only 801 got a forecast. That is not a gap in the work — it is the
-screen doing its job:
+Every listed EQ and BE share is analysed (owner decision 2026-11-06, erratum E21). Capital never decides whether a
+stock is analysed, only whether a whole share can be bought; illiquidity is costed with wider slippage and flagged
+`LOW_LIQUIDITY`, not excluded. What is still screened, and why:
 
-| Reason | Count | Why it is excluded |
+| Not forecast | Count | Why |
 |---|---|---|
-| Median traded value < ₹5 crore | 1,304 | Your order would move the price; the cost model would be fiction |
-| Not EQ series (SME 406, trade-to-trade 203, ST 75, BZ 33, other 2) | 719 | Different settlement or trading rules; not cash delivery |
-| ETFs | 356 | Not single stocks; a different instrument |
-| Not traded every session | 62 | No continuous price to compute features from |
-| One share above half the capital | 46 | At ₹10,000 only; the capital switch admits these at ₹30,000+ |
-| **Too new to have a year of history** | 110 | Recent listings — one had 23 sessions of bars where 251 are needed |
+| SME platform (SM 406, ST 75) | 481 | Trade in lots often worth ₹1 lakh or more; designed in docs/NEXT_MODELS.md |
+| ETFs | 356 | An index, not a company; belongs with mutual funds (docs/NEXT_MODELS.md) |
+| Not traded every session (last 20) | 87 | No continuous prices to compute features from |
+| BZ and other special series | 35 | Non-compliant companies, trade-for-trade with restrictions |
+| Too new or too gappy for a year of features | 298 | Mostly recent listings; the young-stock model is designed in docs/NEXT_MODELS.md |
+| Exchange risk flags (ASM/GSM 324, 5% band 71, call auction 2) | 397 | Avoided on the exchange's own warning, before any model |
+| **Forecast** | **1,804** | of 3,458 listed securities (801 before E21) |
 
-So 2,441 are structurally outside a ₹10,000 cash-delivery account, 46 are capital-limited, and 110 are genuinely
-too young. The checkable set is 911; 801 of those have forecasts.
+**The corrected ranking of 5 Nov 2026** (errata E19–E21; independently audited, zero mismatches):
 
-**On the 60 "avoid" calls:** all 60 are exchange flags — 47 under ASM/GSM surveillance, 13 on a price band
-narrower than 10%. The model itself produced **zero** avoids (no stock had μ̃ ≤ −(cost + minimum edge)). So the
-avoid list today is an exchange-flag filter, not a model opinion, and it is correct but obvious. The model will
-only start contributing avoids when its forecasts are large enough to clear the cost threshold in the negative
-direction — the same thing the backfill is meant to fix.
+| Call | Count | What it means |
+|---|---|---|
+| Buy candidate | 1 | BALAMINES: the allocator's risk-adjusted pick at ₹10,000 (calmer than the higher-edge stocks) |
+| Qualifies | 38 | Clear both gates; not chosen for portfolio fit (e.g. CGPOWER, GESHIP, THANGAMAYL) |
+| Hold off | 633 | 581 edge below cost; 52 the model likes but one share is above the ₹5,000 cap (APARINDS, POWERINDIA, SOLARINDS rank #1, #2, #5) |
+| High risk | 1,118 | A bad month would cost the account more than 8%; 737 of them are illiquid |
+| Avoid | 411 | 324 under ASM/GSM surveillance, 71 on 5% bands, 2 call auction, **14 the model's own view** (e.g. NETWORK18, AWFIS, POKARNA) |
+
+Capital changes the answer, never the forecast: the same day restated gives 0 buys at ₹3,000, 110 qualifying at
+₹30,000, and APARINDS and POWERINDIA as buys at ₹1,00,000, once a share fits the cap.
+
+**Why nothing ranked before:** the forecast's uncertainty was dominated by its market-timing part (estimated from
+about 15 independent months), which crushed the stock-selection signal (E19); and the 8% loss limit was applied to
+one stock's month instead of the account (E20). Both are fixed. **The model is still unvalidated**: one held-out
+window (Jul–Oct 2026) shows real skill, but only four independent periods. docs/BACKTEST_PLAN.md is the test.
 
 ## 5. Commands by job
 
