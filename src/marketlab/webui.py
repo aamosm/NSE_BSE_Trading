@@ -362,24 +362,41 @@ function term(key) { const t = el("span", key.replaceAll("_", " "), "term"); t.t
 // charts for one stock -------------------------------------------------------------------------------
 function niceStep(span) { const raw = span / 5, p = Math.pow(10, Math.floor(Math.log10(raw))), m = raw / p; return (m >= 5 ? 5 : m >= 2 ? 2 : 1) * p; }
 function rangeChart(c, pol) {
-  const fc = c.forecast, cost = c.costs.cost_fraction, thr = cost + (pol.min_edge || 0), tailQ = cost - (pol.tail_limit || 0.08);
-  const vals = [fc.q10, fc.q90, thr, -thr, tailQ, fc.mu_hat, 0].filter(v => v != null);
+  // Two rows on one % axis (both are 20-session log returns): the return against the Nifty 50 (what the edge gate
+  // and the forecast are about) and the stock's own return (what the tail gate is about: money lost). E22.
+  const fc = c.forecast, fl = c.flip || {}, cost = c.costs.cost_fraction, thr = cost + (pol.min_edge || 0);
+  const absOk = fc.q10_abs != null && fc.q90_abs != null, tailQ = fl.tail_q10_threshold;
+  const vals = [fc.q10, fc.q90, thr, -thr, fc.mu_hat, fc.mu_shrunk, 0].concat(absOk ? [fc.q10_abs, fc.q90_abs] : []).concat(tailQ != null ? [tailQ] : []).filter(v => v != null);
   const lo = Math.min(...vals), hi = Math.max(...vals), padv = (hi - lo) * 0.08 || 0.01, a = lo - padv, b = hi + padv;
-  const W = 600, H = 150, L = 16, R = 16, x = v => L + (v - a) / (b - a) * (W - L - R);
-  const s = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, class: "chart", role: "img", "aria-label": "Forecast range chart" });
+  const W = 600, H = absOk ? 214 : 150, L = 16, R = 16, x = v => L + (v - a) / (b - a) * (W - L - R);
+  const r1 = 52, r2 = 150, axisY = absOk ? 178 : 112;
+  const s = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, class: "chart", role: "img", "aria-label": "Forecast range chart: against the Nifty 50 and the stock's own return" });
   const step = niceStep(b - a);
-  for (let t = Math.ceil(a / step) * step; t <= b; t += step) { s.append(svgEl("line", { x1: x(t), y1: 30, x2: x(t), y2: 112, class: "grid" }), svgText(x(t), 128, (100 * t).toFixed(Math.abs(step) < 0.01 ? 1 : 0) + "%", { "text-anchor": "middle", class: "t-lab" })); }
-  s.append(svgEl("line", { x1: L, y1: 112, x2: W - R, y2: 112, class: "axis" }));
-  const band = svgEl("rect", { x: x(fc.q10), y: 58, width: Math.max(2, x(fc.q90) - x(fc.q10)), height: 26, rx: 4, class: "band" });
-  tipOn(band, ["80% range of outcomes", spct(fc.q10) + " to " + spct(fc.q90) + " (median " + spct(fc.q50) + ")"]); s.append(band);
-  s.append(svgEl("line", { x1: x(fc.q50), y1: 58, x2: x(fc.q50), y2: 84, class: "q50" }));
-  s.append(svgEl("line", { x1: x(0), y1: 30, x2: x(0), y2: 112, class: "zero" }), svgText(x(0), 144, "index (0%)", { "text-anchor": "middle", class: "t-lab" }));
-  const lines = [[thr, "buy needs " + spct(thr)], [-thr, "avoid below " + spct(-thr)], [tailQ, "lowest 10% outcome allowed " + spct(tailQ)]];
-  lines.sort((p, q) => p[0] - q[0]);
-  lines.forEach(([v, lab], i) => { s.append(svgEl("line", { x1: x(v), y1: 24, x2: x(v), y2: 112, class: "th-line" })); const anchor = x(v) > W * 0.7 ? "end" : x(v) < W * 0.3 ? "start" : "middle"; s.append(svgText(x(v), 12 + (i % 2) * 11, lab, { "text-anchor": anchor, class: "t-val" })); });
-  if (fc.mu_hat != null) { const r0 = svgEl("circle", { cx: x(fc.mu_hat), cy: 71, r: 4.5, class: "dot-raw" }); tipOn(r0, ["Raw forecast μ̂", spct(fc.mu_hat, 3) + " before shrinkage"]); s.append(r0); }
-  const d0 = svgEl("circle", { cx: x(fc.mu_shrunk), cy: 71, r: 6, class: "dot" }); tipOn(d0, ["Shrunk forecast μ̃", spct(fc.mu_shrunk, 3) + " (keeps " + (100 * fc.shrink_factor).toFixed(0) + "% of the raw forecast)"]); s.append(d0);
-  s.append(svgText(x(fc.mu_shrunk), 100, "forecast " + spct(fc.mu_shrunk), { "text-anchor": x(fc.mu_shrunk) > W * 0.75 ? "end" : x(fc.mu_shrunk) < W * 0.25 ? "start" : "middle", class: "t-strong" }));
+  for (let t = Math.ceil(a / step) * step; t <= b; t += step) { s.append(svgEl("line", { x1: x(t), y1: 30, x2: x(t), y2: axisY, class: "grid" }), svgText(x(t), axisY + 16, (100 * t).toFixed(Math.abs(step) < 0.01 ? 1 : 0) + "%", { "text-anchor": "middle", class: "t-lab" })); }
+  s.append(svgEl("line", { x1: L, y1: axisY, x2: W - R, y2: axisY, class: "axis" }));
+  s.append(svgEl("line", { x1: x(0), y1: 30, x2: x(0), y2: axisY, class: "zero" }));
+  s.append(svgText(L, r1 - 12, "Against the Nifty 50", { class: "t-lab" }));
+  const band = svgEl("rect", { x: x(fc.q10), y: r1, width: Math.max(2, x(fc.q90) - x(fc.q10)), height: 22, rx: 4, class: "band" });
+  tipOn(band, ["Return against the Nifty 50, 80% range", spct(fc.q10) + " to " + spct(fc.q90) + " (median " + spct(fc.q50) + ")"]); s.append(band);
+  s.append(svgEl("line", { x1: x(fc.q50), y1: r1, x2: x(fc.q50), y2: r1 + 22, class: "q50" }));
+  const lines = [[thr, "buy needs " + spct(thr)], [-thr, "avoid below " + spct(-thr)]].sort((p, q) => p[0] - q[0]);
+  lines.forEach(([v, lab], i) => { s.append(svgEl("line", { x1: x(v), y1: r1 - 8, x2: x(v), y2: r1 + 30, class: "th-line" })); const an = x(v) > W * 0.7 ? "end" : x(v) < W * 0.3 ? "start" : "middle"; s.append(svgText(x(v), 12 + i * 11, lab, { "text-anchor": an, class: "t-val" })); });
+  if (fc.mu_hat != null) { const r0 = svgEl("circle", { cx: x(fc.mu_hat), cy: r1 + 11, r: 4.5, class: "dot-raw" }); tipOn(r0, ["Raw forecast μ̂", spct(fc.mu_hat, 3) + (fc.mu_common != null ? " = market part " + spct(fc.mu_common, 3) + " + stock part " + spct(fc.mu_specific, 3) : " before shrinkage")]); s.append(r0); }
+  const keep = fc.shrink_common != null ? "keeps " + (100 * fc.shrink_common).toFixed(0) + "% of the market part and " + (100 * fc.shrink_specific).toFixed(0) + "% of the stock part" : "keeps " + (100 * fc.shrink_factor).toFixed(0) + "% of the raw forecast";
+  const d0 = svgEl("circle", { cx: x(fc.mu_shrunk), cy: r1 + 11, r: 6, class: "dot" }); tipOn(d0, ["Shrunk forecast μ̃", spct(fc.mu_shrunk, 3) + " (" + keep + ")"]); s.append(d0);
+  s.append(svgText(x(fc.mu_shrunk), r1 + 40, "forecast " + spct(fc.mu_shrunk), { "text-anchor": x(fc.mu_shrunk) > W * 0.75 ? "end" : x(fc.mu_shrunk) < W * 0.25 ? "start" : "middle", class: "t-strong" }));
+  if (absOk) {
+    s.append(svgText(L, r2 - 12, "Your money: the stock's own return (no market drift assumed)", { class: "t-lab" }));
+    const b2 = svgEl("rect", { x: x(fc.q10_abs), y: r2, width: Math.max(2, x(fc.q90_abs) - x(fc.q10_abs)), height: 22, rx: 4, class: "band" });
+    tipOn(b2, ["Stock's own return, 80% range", spct(fc.q10_abs) + " to " + spct(fc.q90_abs) + " (median " + spct(fc.q50_abs) + ")", "q10 is the bad month the tail gate uses"]); s.append(b2);
+    s.append(svgEl("line", { x1: x(fc.q50_abs), y1: r2, x2: x(fc.q50_abs), y2: r2 + 22, class: "q50" }));
+    if (tailQ != null) {
+      s.append(svgEl("line", { x1: x(tailQ), y1: r2 - 8, x2: x(tailQ), y2: r2 + 30, class: "th-line" }));
+      const share = c.costs.value && pol.W ? c.costs.value / pol.W : null;
+      const lab = "worst bad month accepted " + spct(tailQ) + (share != null ? " (" + (100 * share).toFixed(0) + "% of capital at risk, limit " + spct(-(pol.tail_limit || 0.08)) + " of capital)" : "");
+      s.append(svgText(x(tailQ), r2 + 42, lab, { "text-anchor": x(tailQ) > W * 0.6 ? "end" : x(tailQ) < W * 0.4 ? "start" : "middle", class: "t-val" }));
+    }
+  }
   return s;
 }
 function contributionChart(c) {

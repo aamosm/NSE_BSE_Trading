@@ -308,7 +308,8 @@ def run_fold(ds: Dataset, fold: dict, cfg: Config, trial_id: str, view: Panel, l
     train = [o for o in features.scale_market_features(train, ms) if not features.missing_features(o["x"])]
     test = features.scale_market_features(test, ms)
     ys = features.winsorize_targets([o["label"].excess for o in train])
-    fit_rows = [{"day": o["day"], "isin": o["isin"], "x": o["x"], "y": y, "sigma": o["sigma"]} for o, y in zip(train, ys)]
+    fit_rows = [{"day": o["day"], "isin": o["isin"], "x": o["x"], "y": y, "sigma": o["sigma"],
+                 "y_abs": o["label"].gross_log, "idx": o["label"].index_log} for o, y in zip(train, ys)]
     model = forecast.fit(fit_rows, h=cfg.h, target_id=f"{cfg.candidate}.h{cfg.h}.v2", lam_grid=cfg.lam_grid, sessions=s,
                          bootstrap=cfg.bootstrap, seed=cfg.seed)
     preds, fcs = [], {}

@@ -41,7 +41,15 @@ def test_every_stock_has_a_class_and_reasons_with_numbers_that_add_up(built):
             continue
         con = s["contributions"]
         assert con["intercept"] + sum(i["contribution"] for i in con["items"]) == pytest.approx(s["forecast"]["mu_hat"], abs=1e-6)
-        assert s["forecast"]["mu_shrunk"] == pytest.approx(s["forecast"]["mu_hat"] * s["forecast"]["shrink_factor"], abs=1e-6)
+        f = s["forecast"]
+        # E19/E23: raw = common + specific; each part is shrunk by its own factor; the card states both
+        assert f["mu_common"] + f["mu_specific"] == pytest.approx(f["mu_hat"], abs=1e-6)
+        assert f["mu_shrunk"] == pytest.approx(f["shrink_common"] * f["mu_common"] + f["shrink_specific"] * f["mu_specific"],
+                                               abs=2e-6)
+        assert 0 <= f["shrink_specific"] <= 1 and 0 <= f["shrink_common"] <= 1
+        if f["calibration_slope"] is not None:
+            assert f["shrink_specific"] <= max(0.0, min(1.0, f["calibration_slope"])) + 1e-9  # E23 cap
+        assert f["q10_abs"] <= f["q50_abs"] <= f["q90_abs"]  # E22 absolute range exists and is ordered
         c = s["costs"]
         assert c["value"] <= r["policy"]["cap_rupees"] and c["q"] == int(r["policy"]["cap_rupees"] // s["close"])
         assert s["gates"]["net_edge"] == pytest.approx(s["forecast"]["mu_shrunk"] - c["cost_fraction"], abs=1e-6)

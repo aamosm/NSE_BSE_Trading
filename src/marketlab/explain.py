@@ -284,6 +284,32 @@ def glossary() -> dict:
 
 # ---- per-stock narrative -----------------------------------------------------------------------------------
 
+def _down(fc: dict) -> float:
+    """The bad-month figure the tail gate uses: the stock's own (absolute) 10% outcome when calibrated (E22)."""
+    return fc["q10_abs"] if fc.get("q10_abs") is not None else fc["q10"]
+
+
+def _shrink_story(fc: dict) -> str:
+    """How the raw forecast becomes the shrunk one, part by part (E19, E23), so the numbers reconcile on the page."""
+    if fc.get("shrink_common") is None or fc.get("mu_common") is None:
+        return (f"Its bootstrap standard error is {pct(fc['se'], sign=False)}, so it keeps {fc['shrink_factor']:.0%} of "
+                f"the forecast: the shrunk forecast used for decisions is {pct(fc['mu_shrunk'])}.")
+    c, sp = fc["mu_common"], fc["mu_specific"]
+    fcm, fsp = fc["shrink_common"], fc["shrink_specific"]
+    cap = ""
+    tau, se_s = fc.get("tau") or 0.005, fc.get("se_specific") or 0.0
+    bayes = tau * tau / (tau * tau + se_s * se_s)
+    if fsp < bayes - 1e-9:  # E23: the out-of-sample slope, not the bootstrap, set this factor
+        cap = (f" (capped at {fsp:.0%}: the share of predicted differences between stocks that actually showed up in "
+               f"held-out data; the bootstrap alone would have kept {bayes:.0%})")
+    return (f"That raw figure is the sum of two parts. The market-timing part, the same for every stock today, is "
+            f"{pct(c)} with a bootstrap standard error of {pct(fc['se_common'], sign=False)}: so uncertain that only "
+            f"{fcm:.0%} of it is kept ({pct(fcm * c)}). The stock-specific part is {pct(sp)} with a standard error of "
+            f"{pct(fc['se_specific'], sign=False)}: {fsp:.0%} of it is kept{cap} ({pct(fsp * sp)}). Together: the shrunk "
+            f"forecast used for decisions is {pct(fc['mu_shrunk'])}. It can be larger than the raw figure when an "
+            f"unreliable negative market part was hiding a reliable positive stock part.")
+
+
 def _top(items, n, positive=True):
     xs = [i for i in items if i["contribution"] is not None and (i["contribution"] > 0) == positive and i["contribution"] != 0]
     return sorted(xs, key=lambda i: -abs(i["contribution"]))[:n]
@@ -348,12 +374,15 @@ def narrative(card: dict, ranking: dict) -> list[dict]:
     fc, costs, gates, flip = card["forecast"], card["costs"], card["gates"], card.get("flip", {})
     out.append({"title": "What the model expects",
                 "text": f"Over the next {h} sessions (about {h / 20:.0f} month{'s' if h > 20 else ''}), from the next open, the "
-                        f"model's raw forecast of the return versus the Nifty 50 is {pct(fc['mu_hat'])}. Its bootstrap "
-                        f"standard error is {pct(fc['se'], sign=False)}, so it keeps {fc['shrink_factor']:.0%} of the forecast: "
-                        f"the shrunk forecast used for decisions is {pct(fc['mu_shrunk'])}. A typical {h}-session move for "
-                        f"this stock is ±{pct(fc['sigma_hat'], sign=False)}. Calibrated range: 10% of outcomes below "
-                        f"{pct(fc['q10'])}, median {pct(fc['q50'])}, 10% above {pct(fc['q90'])}. Probability of beating the "
-                        f"index before costs: {fc['p_positive']:.0%}."})
+                        f"model's raw forecast of the return versus the Nifty 50 is {pct(fc['mu_hat'])}. "
+                        + _shrink_story(fc)
+                        + f" A typical {h}-session move for this stock is ±{pct(fc['sigma_hat'], sign=False)}. Against the "
+                        f"Nifty 50: 10% of outcomes below {pct(fc['q10'])}, median {pct(fc['q50'])}, 10% above "
+                        f"{pct(fc['q90'])}."
+                        + (f" The stock's own return (your money, assuming no market drift): 10% below "
+                           f"{pct(fc['q10_abs'])}, median {pct(fc['q50_abs'])}, 10% above {pct(fc['q90_abs'])}."
+                           if fc.get('q10_abs') is not None else "")
+                        + f" Probability of beating the index before costs: {fc['p_positive']:.0%}."})
     con = card["contributions"]
     pos, neg = _top(con["items"], 3, True), _top(con["items"], 3, False)
     txt = (f"Raw forecast {pct(fc['mu_hat'])} = common part {pct(con['common_total'])} (intercept {pct(con['intercept'])} plus "
@@ -380,12 +409,13 @@ def narrative(card: dict, ranking: dict) -> list[dict]:
     out.append({"title": "The two gates",
                 "text": f"Edge gate: shrunk forecast {pct(fc['mu_shrunk'])} - cost {pct(costs['cost_fraction'], sign=False)} = "
                         f"{pct(gates['net_edge'])}; it must be at least the minimum edge {pct(pol.get('min_edge'), sign=False)} → "
-                        f"{'pass' if edge_ok else 'fail'}. Tail gate: 10% outcome {pct(fc['q10'])} - cost = "
-                        f"{pct(fc['q10'] - costs['cost_fraction'])} on the position, which is "
+                        f"{'pass' if edge_ok else 'fail'}. Tail gate (money lost, not return versus the index): the stock's own 10% outcome {pct(_down(fc))} - cost = "
+                        f"{pct(_down(fc) - costs['cost_fraction'])} on the position, which is "
                         f"{pct((costs.get('value') or 0) / (pol.get('W') or 1), 0, sign=False)} of capital, so "
-                        f"{pct((costs.get('value') or 0) / (pol.get('W') or 1) * (fc['q10'] - costs['cost_fraction']))} of capital; "
+                        f"{pct((costs.get('value') or 0) / (pol.get('W') or 1) * (_down(fc) - costs['cost_fraction']))} of capital; "
                         f"it must be at least -{pct(pol.get('tail_limit'), sign=False)} "
-                        f"→ {'pass' if tail_ok else 'fail'}."
+                        f"→ {'pass' if tail_ok else 'fail'}. Equivalently, the stock's own bad month must be no worse than "
+                        f"{pct(flip.get('tail_q10_threshold'))} at this position size."
                         + (f" P(excess return covers the costs) = {card['p_beats_costs']:.0%}." if card.get("p_beats_costs") is not None else "")})
     out.append({"title": "What would change the call", "text": flip_text(card, pol)})
     if card.get("allocation", {}).get("selected"):
@@ -450,10 +480,10 @@ def insights(card: dict, ranking: dict) -> list[dict]:
                 f"(±{pct(sg, sign=False)}). Even if the model is right on average, any single month will be dominated by "
                 "noise; the edge only shows up over many trades.", ("shrinkage", "sigma_hat"))
         if fc["shrink_factor"] is not None and fc["shrink_factor"] < 0.5:
-            add("HEAVY_SHRINKAGE", "The model is unsure about this stock",
-                f"Refits on resampled history disagree (standard error {pct(fc['se'], sign=False)} vs the 0.5% prior), so "
-                f"only {fc['shrink_factor']:.0%} of the raw forecast survives. A large raw forecast with heavy shrinkage "
-                "is weak evidence.", ("se", "shrinkage"))
+            add("HEAVY_SHRINKAGE", "The model is unsure about this stock's signal",
+                f"Only {fc['shrink_factor']:.0%} of the stock-specific forecast survives (its refits disagree, or the "
+                "signal held up only partly out of sample). A large raw signal with heavy shrinkage is weak evidence.",
+                ("se", "shrinkage"))
         if cost > abs(mu):
             add("COSTS_EXCEED_EDGE", "Costs are bigger than the expected edge",
                 f"Round-trip cost {pct(cost, sign=False)} exceeds the size of the shrunk forecast ({pct(mu)}). Trading it would "
@@ -557,12 +587,18 @@ def day_summary(ranking: dict) -> list[str]:
         mus = [s["forecast"]["mu_shrunk"] for s in fc]
         lo, hi = _q(mus, 0.05), _q(mus, 0.95)
         shrink = _q([s["forecast"]["shrink_factor"] for s in fc], 0.5)
+        shrink_c = _q([s["forecast"].get("shrink_common") for s in fc if s["forecast"].get("shrink_common") is not None], 0.5) \
+            if any(s["forecast"].get("shrink_common") is not None for s in fc) else None
         cost = _q([s["costs"]["cost_fraction"] for s in fc], 0.5)
         m = r.get("model") or {}
         out.append(f"The edge is too small to pay for trading: {edge} stocks fail the edge gate. After shrinkage, 90% of forecasts lie "
                    f"between {pct(lo)} and {pct(hi)}, while a round trip costs about {pct(cost, sign=False)} at your position size. "
-                   f"The model keeps only about {shrink:.0%} of its raw forecasts because refits on resampled history disagree; "
-                   f"it has {m.get('train_days', 'few')} training dates, and more history is what would sharpen it.")
+                   + (f"Each forecast has a market-timing part (the same for every stock) and a stock-specific part; "
+                      f"the model keeps about {shrink_c:.0%} of the first and {shrink:.0%} of the second, because the "
+                      f"market-timing part rests on few independent months. " if shrink_c is not None else
+                      f"The model keeps only about {shrink:.0%} of its raw forecasts because refits on resampled history "
+                      f"disagree. ")
+                   + f"It has {m.get('train_days', 'few')} training dates; more history is what would sharpen it.")
         best = sorted(fc, key=lambda s: -(s["gates"]["net_edge"] or -9))[:3]
         out.append("Closest to qualifying on edge: " + "; ".join(
             f"{s['symbol']} (forecast {pct(s['forecast']['mu_shrunk'])}, cost {pct(s['costs']['cost_fraction'], sign=False)}, "

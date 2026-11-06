@@ -347,9 +347,20 @@ def build_context(view: dict, ranking: dict) -> str:
     if fc:
         c = card["costs"]
         L += [f"FORECAST (excess return vs Nifty 50 over {ranking.get('h')} sessions, before costs): raw mu_hat {pct(fc['mu_hat'], 3)}; "
-              f"bootstrap se {pct(fc['se'], 3, sign=False)}; shrink factor {fc['shrink_factor']:.3f} (tau {pct(fc['tau'], 2, sign=False)}); "
-              f"shrunk mu {pct(fc['mu_shrunk'], 3)}; sigma_hat {pct(fc['sigma_hat'], 2, sign=False)}; q10 {pct(fc['q10'])}; "
-              f"q50 {pct(fc['q50'])}; q90 {pct(fc['q90'])}; P(excess>0) {fc['p_positive']:.3f}; calibration residuals {fc['calibration_n']}",
+              + (f"= market-timing part {pct(fc['mu_common'], 3)} (bootstrap se {pct(fc['se_common'], 3, sign=False)}, "
+                 f"kept {fc['shrink_common']:.3f}) + stock-specific part {pct(fc['mu_specific'], 3)} (bootstrap se "
+                 f"{pct(fc['se_specific'], 3, sign=False)}, kept {fc['shrink_specific']:.3f}"
+                 + (f"; out-of-sample calibration slope {fc['calibration_slope']:.3f} caps it" if fc.get('calibration_slope') is not None else "")
+                 + "). The two parts are shrunk separately, so the shrunk mu can exceed the raw mu when an uncertain "
+                   "negative market part offsets a reliable positive stock part; "
+                 if fc.get('shrink_common') is not None else
+                 f"bootstrap se {pct(fc['se'], 3, sign=False)}; shrink factor {fc['shrink_factor']:.3f}; ")
+              + f"(tau {pct(fc['tau'], 2, sign=False)}); "
+              f"shrunk mu {pct(fc['mu_shrunk'], 3)}; sigma_hat {pct(fc['sigma_hat'], 2, sign=False)}; vs Nifty: q10 {pct(fc['q10'])}; "
+              f"q50 {pct(fc['q50'])}; q90 {pct(fc['q90'])}"
+              + (f"; the stock's OWN return (money; tail gate uses this): q10 {pct(fc['q10_abs'])}, q50 {pct(fc['q50_abs'])}, "
+                 f"q90 {pct(fc['q90_abs'])}" if fc.get('q10_abs') is not None else "")
+              + f"; P(excess>0) {fc['p_positive']:.3f}; calibration residuals {fc['calibration_n']}",
               f"RANK: {card.get('rank')} of {card.get('rank_of')} forecast stocks by net edge",
               "CONTRIBUTIONS (beta x rank = contribution to mu_hat): intercept " + pct(card["contributions"]["intercept"], 3)
               + f"; common part {pct(card['contributions']['common_total'], 3)}; stock part {pct(card['contributions']['stock_total'], 3)}"]

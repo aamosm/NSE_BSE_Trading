@@ -118,7 +118,8 @@ def fit_today(ds, cfg: evaluate.Config, day, *, bootstrap: int = 50) -> dict:
     today_all = [o for o in ds.opportunities if o["day"] == day]
     today = features.scale_market_features([o for o in complete if o["day"] == day], ms)
     ys = features.winsorize_targets([o["label"].excess for o in train])
-    fit_rows = [{"day": o["day"], "isin": o["isin"], "x": o["x"], "y": y, "sigma": o["sigma"]} for o, y in zip(train, ys)]
+    fit_rows = [{"day": o["day"], "isin": o["isin"], "x": o["x"], "y": y, "sigma": o["sigma"],
+                 "y_abs": o["label"].gross_log, "idx": o["label"].index_log} for o, y in zip(train, ys)]
     model = forecast.fit(fit_rows, h=cfg.h, target_id=f"{cfg.candidate}.h{cfg.h}.v2", lam_grid=cfg.lam_grid,
                          sessions=ds.sessions, bootstrap=bootstrap, seed=cfg.seed)
     fc_rows, todays = [], {}

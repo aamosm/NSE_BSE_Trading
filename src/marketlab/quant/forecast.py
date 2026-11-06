@@ -33,6 +33,11 @@ class Model:
     calibration_end: date
     inner_scores: dict = field(default_factory=dict)
     bootstrap_betas: list[list[float]] = field(default_factory=list)
+    # E22: standardized residuals of the stock's ABSOLUTE log return (index centred on its calibration-window mean,
+    # i.e. no market drift assumed), for gates about money lost rather than about beating the Nifty
+    z_abs_sorted: list[float] = field(default_factory=list)
+    # E23: out-of-sample slope of realized excess on the stock-specific forecast, date-demeaned, calibration window
+    calibration_slope: float | None = None
 
     def to_json(self) -> dict:
         return {"target_id": self.target_id, "h": self.h, "beta": self.beta, "lam": self.lam,
@@ -40,7 +45,9 @@ class Model:
                 "train": [self.train_start.isoformat(), self.train_end.isoformat()],
                 "calibration": [self.calibration_start.isoformat(), self.calibration_end.isoformat()],
                 "inner_scores": self.inner_scores, "z_quantiles": {p: conformal_z(self.z_sorted, p) for p in (0.1, 0.5, 0.9)}
-                if self.z_sorted else {}, "bootstraps": len(self.bootstrap_betas)}
+                if self.z_sorted else {}, "z_abs_quantiles": {p: conformal_z(self.z_abs_sorted, p) for p in (0.1, 0.5, 0.9)}
+                if self.z_abs_sorted else {}, "calibration_slope": self.calibration_slope,
+                "bootstraps": len(self.bootstrap_betas)}
 
 
 def conformal_index(n: int, alpha: float) -> int:
@@ -72,6 +79,25 @@ def conformal_probability_above(z_sorted: list[float], c: float) -> float:
 def shrink(mu_hat: float, se: float, tau: float = TAU_DEFAULT) -> float:
     """Empirical-Bayes shrinkage toward 0: mu * tau^2 / (tau^2 + se^2). 1.5%, 0.6% -> 0.6148%."""
     return mu_hat * tau * tau / (tau * tau + se * se)
+
+
+def _specific_slope(beta, rows, min_per_date: int = 20) -> float | None:
+    """Pooled within-date OLS slope of realized excess on the stock-specific forecast over held-out rows: how much
+    of a predicted cross-sectional difference actually showed up. 1 = taken at face value; 0 = no information."""
+    by_day: dict = {}
+    for r in rows:
+        xv = design_vector(r["x"])
+        spec = dot(beta, xv) - sum(beta[j] * xv[j] for j in COMMON_IDX)
+        by_day.setdefault(r["day"], []).append((spec, r["y"]))
+    num = den = 0.0
+    for v in by_day.values():
+        if len(v) < min_per_date:
+            continue
+        ms = sum(a for a, _ in v) / len(v)
+        my = sum(b for _, b in v) / len(v)
+        num += sum((a - ms) * (b - my) for a, b in v)
+        den += sum((a - ms) ** 2 for a, _ in v)
+    return num / den if den > 0 else None
 
 
 def _sd(v: list[float]) -> float:
@@ -146,6 +172,12 @@ def fit(rows: list[dict], *, h: int, target_id: str, lam_grid=LAM_GRID, inner_fr
     z = sorted((r["y"] - dot(beta, design_vector(r["x"]))) / r["sigma"] for r in cal_rows if r["sigma"] > 0)
     model = Model(target_id, h, beta, best, FEATURES, z, len(z), sum(grams[d][2] for d in fit_days), fit_days[0],
                   fit_days[-1], cal_days[0], cal_days[-1], {str(l): s for l, s in scores.items()})
+    abs_rows = [r for r in cal_rows if r.get("y_abs") is not None and r["sigma"] > 0]
+    if abs_rows:
+        idx = [r["idx"] for r in abs_rows if r.get("idx") is not None]
+        m_idx = sum(idx) / len(idx) if idx else 0.0
+        model.z_abs_sorted = sorted((r["y_abs"] - m_idx - dot(beta, design_vector(r["x"]))) / r["sigma"] for r in abs_rows)
+    model.calibration_slope = _specific_slope(beta, cal_rows)
     if bootstrap:
         rng = random.Random(seed)
         model.bootstrap_betas = block_bootstrap_betas(grams, fit_days, best, h, bootstrap, rng)
@@ -189,11 +221,21 @@ def predict(model: Model, x: dict[str, float], sigma: float, *, tau: float = TAU
     # independent periods as the training window holds (about 15 at 311 dates and h = 20), the stock-specific part
     # from the whole cross-section; shrinking their sum by the total se let the market-timing uncertainty crush the
     # stock-selection signal (5 Nov 2026: se_common 1.30%, se_specific 0.47%, shrink 0.12 instead of 0.53).
-    mu_shrunk = shrink(common, se_c, tau) + shrink(specific, se_s, tau) if model.bootstrap_betas else shrink(mu, se, tau)
-    z = model.z_sorted
+    f_c = tau * tau / (tau * tau + se_c * se_c)
+    f_s = tau * tau / (tau * tau + se_s * se_s)
+    slope = model.calibration_slope
+    if slope is not None:  # E23: never believe the stock signal more than it held up out of sample
+        f_s = min(f_s, max(0.0, min(1.0, slope)))
+    mu_shrunk = f_c * common + f_s * specific if model.bootstrap_betas else shrink(mu, se, tau)
+    z, za = model.z_sorted, model.z_abs_sorted
     return {
         "mu_hat": mu, "se": se, "mu_shrunk": mu_shrunk, "sigma_hat": sigma, "tau": tau,
         "mu_common": common, "mu_specific": specific, "se_common": se_c, "se_specific": se_s,
+        "shrink_common": f_c if model.bootstrap_betas else None, "shrink_specific": f_s if model.bootstrap_betas else None,
+        "calibration_slope": slope,
+        "q10_abs": mu + sigma * conformal_z(za, 0.1) if za else None,
+        "q50_abs": mu + sigma * conformal_z(za, 0.5) if za else None,
+        "q90_abs": mu + sigma * conformal_z(za, 0.9) if za else None,
         "q10": mu + sigma * conformal_z(z, 0.1), "q50": mu + sigma * conformal_z(z, 0.5), "q90": mu + sigma * conformal_z(z, 0.9),
         "p_positive": conformal_probability_above(z, (0.0 - mu) / sigma) if sigma > 0 else float("nan"),
         "calibration_n": model.calibration_n, "target_id": model.target_id, "h": model.h, "lam": model.lam,

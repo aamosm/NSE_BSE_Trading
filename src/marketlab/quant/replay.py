@@ -42,8 +42,17 @@ def candidate_for(isin: str, fc: dict, execution: ExecutionPolicy) -> allocate.C
     price may be); the base slippage tier both ways (stress multipliers act only on execution)."""
     s = labels.slippage_for(fc["median_value"])
     limit = fc["ref_close"] * (1 + execution.max_entry_gap)
-    return allocate.Candidate(isin, fc["ref_close"], fc["mu_shrunk"], fc["sigma_hat"], 2 * s, fc.get("q10", float("nan")),
+    return allocate.Candidate(isin, fc["ref_close"], fc["mu_shrunk"], fc["sigma_hat"], 2 * s, downside_q10(fc),
                               fc.get("symbol", ""), cash_price=limit)
+
+
+def downside_q10(fc: dict) -> float:
+    """The bad-month (10%) outcome of the stock's OWN return, for gates and exits about money lost (E22); the
+    excess-return q10 only when a model predates absolute calibration."""
+    v = fc.get("q10_abs")
+    if v is None:
+        v = fc.get("q10")
+    return float("nan") if v is None else v
 
 
 def plan_entries(led: Ledger, view, sessions: list[date], k: int, day: date, todays: dict, policy: allocate.Policy,
@@ -105,8 +114,8 @@ def review_exits(led: Ledger, k: int, day: date, todays: dict, exclusions: dict,
         if reason and (reason in RULE_TRIGGERS or reason.startswith("SERIES_") or reason.startswith("BAND_")):
             triggers.append("RULE_" + reason)
         realized = (lot.units * lot.last_close) / (lot.q * lot.entry_open) - 1
-        q10 = lot.forecast.get("q10")
-        if q10 is not None and not math.isnan(q10) and realized < q10:
+        q10 = downside_q10(lot.forecast)  # E22: the lot's own (absolute) return against its absolute log q10
+        if not math.isnan(q10) and realized > -1 and math.log1p(realized) < q10:
             triggers.append("BELOW_ENTRY_Q10")
         expired = k >= lot.review_index
         if not expired and not triggers:

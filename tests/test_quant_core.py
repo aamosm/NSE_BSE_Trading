@@ -200,3 +200,49 @@ def test_illiquid_stocks_are_costed_not_excluded():
     from marketlab import service
     sp = service.screen_policy(service.POLICY_DEFAULTS, 3_000)
     assert sp.v_min == 0 and sp.price_max_fraction is None and sp.series == ("EQ", "BE")
+
+
+def _rows_for_fit(n_days=120, n=40, slope_true=0.5, seed=1):
+    """Synthetic panel rows: realized excess = slope_true x the stock-specific signal + noise; index drifts."""
+    import random
+    from marketlab.quant.features import FEATURES
+    rng = random.Random(seed)
+    rows, d0 = [], date(2025, 1, 1)
+    for t in range(n_days):
+        day = d0 + timedelta(days=t)
+        idx = rng.gauss(0.01, 0.04)
+        for i in range(n):
+            x = {f: 0.0 for f in FEATURES} | {"mom_12_1": (i / (n - 1)) - 0.5}
+            y = slope_true * 0.04 * x["mom_12_1"] + rng.gauss(0, 0.02)
+            rows.append({"day": day, "isin": f"I{i}", "x": x, "y": y, "sigma": 0.05, "y_abs": y + idx, "idx": idx})
+    return rows
+
+
+def test_absolute_range_and_out_of_sample_slope_cap():
+    """E22: an absolute-return range is calibrated from the stock's own outcome (index centred), so it is wider than
+    the excess range when the market moves; E23: the stock-specific shrink never exceeds the held-out slope."""
+    rows = _rows_for_fit()
+    m = forecast.fit(rows, h=20, target_id="t", bootstrap=20, seed=3)
+    assert m.z_abs_sorted and m.calibration_slope is not None
+    from marketlab.quant.features import FEATURES
+    x = {f: 0.0 for f in FEATURES} | {"mom_12_1": 0.5}
+    p = forecast.predict(m, x, 0.05)
+    assert p["q90_abs"] - p["q10_abs"] > p["q90"] - p["q10"]  # market risk is in the money range, not the excess one
+    assert p["shrink_specific"] <= max(0.0, min(1.0, m.calibration_slope)) + 1e-12
+    assert p["mu_shrunk"] == pytest.approx(p["shrink_common"] * p["mu_common"] + p["shrink_specific"] * p["mu_specific"])
+
+
+def test_tail_threshold_reconciles_exactly_with_the_gate():
+    """The chart's 'worst bad month accepted' is the gate solved for q10: (v/W)(q10 - cost) = -L."""
+    pol = Policy(10_000)
+    v, cost = 3588.0, 0.008728
+    thr = cost - pol.tail_limit * pol.W / v
+    assert allocate.capital_tail_loss(thr, cost, v, pol) == pytest.approx(-pol.tail_limit)
+    assert thr == pytest.approx(-0.2142, abs=1e-4)  # the critic's -21.43%, not the old chart's -7.13%
+
+
+def test_exit_compares_the_lots_own_return_with_its_own_downside():
+    from marketlab.quant import replay
+    assert replay.downside_q10({"q10": -0.05, "q10_abs": -0.12}) == -0.12  # money, not return vs index
+    assert replay.downside_q10({"q10": -0.05}) == -0.05  # older models without absolute calibration
+    assert math.isnan(replay.downside_q10({}))

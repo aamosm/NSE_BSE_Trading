@@ -40,6 +40,9 @@ neither changed what it *knows*. This plan measures what it knows.
 | H6 classes mean something | mean realized excess: buy/qualifies > hold off > high risk > avoid, after costs | The labels are decoration |
 | H7 market timing is noise | IC of the common part (time series of μ_common vs universe excess) ≈ 0 | If it has skill, shrink it less |
 | H8 history helps | IC with 1,000+ sessions of training ≥ IC with 300 | The backfill was not the constraint |
+| H9 entry gap does not eat the edge | realized excess of buy candidates bucketed by next-open gap (< 0%, 0–2%, 2–5%): no bucket below 0 after costs | Condition the entry on the gap (a tighter limit), or the forecast on it |
+| H10 money range calibrated (E22) | the stock's own return below q10_abs in 7–13% of stock-days | The tail gate measures the wrong risk |
+| H11 slope cap is honest (E23) | the realized slope on μ̃'s stock part in later trials ≥ 0.5 × the calibration slope used | The cap is still too generous; shrink more |
 
 ## 2. What one trial is
 

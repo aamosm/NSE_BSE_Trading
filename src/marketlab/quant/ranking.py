@@ -133,11 +133,18 @@ def _flip(card: dict, policy: allocate.Policy, model: forecast.Model) -> dict:
     move the forecast most (from its current rank to the most favourable rank, other inputs unchanged)."""
     fc, costs = card["forecast"], card["costs"]
     thr = costs["cost_fraction"] + policy.min_edge
+    q10 = replay.downside_q10(fc)  # E22: the stock's own bad month, not its month against the Nifty
+    v = costs.get("value") or 0.0
+    have = not math.isnan(q10) and v > 0
     out = {"edge_threshold": _f(thr), "edge_margin": _f(fc["mu_shrunk"] - thr),
-           "tail_margin": _f(allocate.capital_tail_loss(fc["q10"], costs["cost_fraction"], costs.get("value") or 0.0, policy)
-                             + policy.tail_limit) if fc.get("q10") is not None and costs.get("value") else None,
+           "tail_margin": _f(allocate.capital_tail_loss(q10, costs["cost_fraction"], v, policy) + policy.tail_limit)
+           if have else None,
+           # the lowest bad-month return of the stock itself that the tail gate accepts at this position size:
+           # (v / W) * (q10_abs - cost) >= -L  <=>  q10_abs >= cost - L * W / v
+           "tail_q10_threshold": _f(costs["cost_fraction"] - policy.tail_limit * policy.W / v) if v > 0 else None,
+           "tail_q10_basis": "ABSOLUTE" if fc.get("q10_abs") is not None else "EXCESS",
            "avoid_threshold": _f(-thr), "avoid_margin": _f(-thr - fc["mu_shrunk"])}
-    shrink = fc.get("shrink_factor") or 0.0
+    shrink = fc.get("shrink_specific") if fc.get("shrink_specific") is not None else (fc.get("shrink_factor") or 0.0)
     best = None
     for it in card["contributions"]["items"]:
         if it["group"] != "stock" or it["beta"] is None or it["x"] is None:
@@ -270,7 +277,7 @@ def restate(body: dict, capital: float) -> dict:
         fc = card["forecast"]
         c = allocate.Candidate(card["isin"], close, fc["mu_shrunk"], fc["sigma_hat"],
                                card["costs"].get("slippage_fraction") or 0.002,
-                               fc.get("q10", float("nan")), card.get("symbol") or "",
+                               replay.downside_q10(fc), card.get("symbol") or "",
                                cash_price=card["costs"].get("limit_price") or 0.0)
         q, pc, card["costs"], card["gates"] = cost_and_gates(c, cap, policy)
         card["p_beats_costs"] = None
@@ -422,9 +429,14 @@ def build(panel, cfg: evaluate.Config, *, root: Path, calendar, rule_inputs_fn=N
             continue
         x = o["x"]
         card["x"] = {f: _f(x.get(f), 6) for f in features.FEATURES}
-        shrink = fc["mu_shrunk"] / fc["mu_hat"] if fc["mu_hat"] else forecast.TAU_DEFAULT ** 2 / (forecast.TAU_DEFAULT ** 2 + fc["se"] ** 2)
+        # E19/E23: the two parts are shrunk separately, so no single ratio describes the forecast; the
+        # 'shrink_factor' kept for older readers is the factor on the stock-specific part (what the levers act on)
+        shrink = fc["shrink_specific"] if fc.get("shrink_specific") is not None else (
+            fc["mu_shrunk"] / fc["mu_hat"] if fc["mu_hat"] else forecast.TAU_DEFAULT ** 2 / (forecast.TAU_DEFAULT ** 2 + fc["se"] ** 2))
         card["forecast"] = {k: _f(fc.get(k), 8) for k in ("mu_hat", "se", "mu_shrunk", "sigma_hat", "q10", "q50", "q90", "p_positive",
-                                                       "mu_common", "mu_specific", "se_common", "se_specific")}
+                                                       "mu_common", "mu_specific", "se_common", "se_specific",
+                                                       "shrink_common", "shrink_specific", "calibration_slope",
+                                                       "q10_abs", "q50_abs", "q90_abs")}
         card["forecast"].update(shrink_factor=_f(shrink, 6), tau=fc["tau"], h=cfg.h, calibration_n=fc["calibration_n"])
         card["contributions"] = _contributions(model, x)
         c = cands[isin]
