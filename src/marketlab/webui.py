@@ -534,6 +534,12 @@ async function renderHow() {
   const hero = el("section", null, "hero"); hero.append(el("h2", "How MarketLab decides, and what it all means")); t.append(hero);
   const mc = card("What this all means"); const ul = el("ul"); for (const m of HOW.meaning || []) ul.append(el("li", m)); mc.append(ul); t.append(mc);
   if (HOW.today && HOW.today.length) { const tc = card("What the latest ranking says"); const tl = el("ul"); for (const m of HOW.today) tl.append(el("li", m)); tc.append(tl); t.append(tc); }
+  if (HOW.reviews && HOW.reviews.length) {
+    const rc = card("Checks on this model, and what became of each finding");
+    rc.append(el("p", "Every outside review is listed with its outcome. A finding is closed only by a fix with a test, or by evidence that it was wrong.", "muted"));
+    rc.append(table(["When", "Who", "Finding", "Outcome", "Where"], HOW.reviews.map(x => [x.date, x.by, x.finding, x.status, x.where])));
+    t.append(rc);
+  }
   const pc = card("The pipeline, step by step (live status from the latest ranking)"); t.append(pc);
   (HOW.stages || []).forEach((s, i) => {
     const st = el("div", null, "stage"); st.append(el("div", String(i + 1), "no"));

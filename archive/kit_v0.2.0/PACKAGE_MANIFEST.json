@@ -1,0 +1,590 @@
+{
+  "version": "0.2.0",
+  "upstream_commit": "19d12dcac7415b17d3a5192035517ad285f9b389",
+  "active_tests": {
+    "passed": 76,
+    "failed": 0,
+    "skipped": 0
+  },
+  "upstream_archive_files_verified": 61,
+  "patch_check": "Applied in a fresh original snapshot; all target files matched byte-for-byte; 76 tests passed there too.",
+  "wheel_build": "Passed; active marketlab package only; no archive/test files.",
+  "wheel_sha256": "aead345579095c8e4ee03a8e520442b29ad548e0e8d03977fd26aa1a3f412b1e",
+  "files_excluding_this_manifest": [
+    {
+      "path": ".gitattributes",
+      "sha256": "3e2b1b0f517b3ccd0997b2c715d94830f0ed951855b84662a309f1d4ffc01aae",
+      "bytes": 38
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "4569648289860405097cf4e81fce2f10910d17dd943a408e537271c20e2061bb",
+      "bytes": 175
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "69f790ff19f8387c99fb0a9cd79109d984447a31e965e03bfc8904738dd7f042",
+      "bytes": 2089
+    },
+    {
+      "path": "CLAUDE.md",
+      "sha256": "23b2b7b76133c2735e4c0b661dec72fe709acef1b61ea9223f250ecc772897aa",
+      "bytes": 202
+    },
+    {
+      "path": "PROJECT_BRIEF.md",
+      "sha256": "bc49e4c3d32367fe5c0d5a18be2cecf6dfa6ccfa03ee4a40d1c0a09f37a6a73f",
+      "bytes": 2256
+    },
+    {
+      "path": "README_FIRST.md",
+      "sha256": "44a3b6bdb3b3dc3a1d3070218d4fb1cafa690200f86285f4daada8dec54b9e12",
+      "bytes": 3424
+    },
+    {
+      "path": "UPGRADE.patch",
+      "sha256": "6b0f536ebe00f5a8ac09ca7f34e2d4ad89e166e7fc748f04be366e57165e41f6",
+      "bytes": 3685914
+    },
+    {
+      "path": "archive/UPSTREAM_MANIFEST.json",
+      "sha256": "1214d9acf2c25e5278f27ab210ecf415d3364bde324862f4d7e3b74b8f09462b",
+      "bytes": 6908
+    },
+    {
+      "path": "archive/phase_0_1/.gitattributes",
+      "sha256": "3e2b1b0f517b3ccd0997b2c715d94830f0ed951855b84662a309f1d4ffc01aae",
+      "bytes": 38
+    },
+    {
+      "path": "archive/phase_0_1/.gitignore",
+      "sha256": "7de8aa41d02579bef23ee05cccdd64e2193f7e893bbe738a560d41d210f822da",
+      "bytes": 286
+    },
+    {
+      "path": "archive/phase_0_1/AGENTS.md",
+      "sha256": "2aa55c2765f50c571ca1ad2e17e987561436bdd7e0b4fe98cb4bf0b29d22073c",
+      "bytes": 3301
+    },
+    {
+      "path": "archive/phase_0_1/CLAUDE.md",
+      "sha256": "97eeb762aefba8cb9c9b9b507281d3119683c00038c233bdb0c1ddfae0859538",
+      "bytes": 442
+    },
+    {
+      "path": "archive/phase_0_1/NSE_BSE_Build_Guide.md",
+      "sha256": "6886b24923802444b167eb9d4c68733bae1e3f55f588927341221c8023151b03",
+      "bytes": 36004
+    },
+    {
+      "path": "archive/phase_0_1/PROJECT_BRIEF.md",
+      "sha256": "2a9fb8af964df8aa27996b04fa1afec2b5ca3ae6b52d9fd2b6568fb621f59afa",
+      "bytes": 2612
+    },
+    {
+      "path": "archive/phase_0_1/README_FIRST.md",
+      "sha256": "41739b8ad1104e90ae82ca6b3d6a7645aa2264128ddbe2d7898b5d376440cd95",
+      "bytes": 1860
+    },
+    {
+      "path": "archive/phase_0_1/configs/example_policy.json",
+      "sha256": "7ef0ff42659fd0c8df8d476512f60a83ff850ade232a79ffb8a0cba24dad4cd5",
+      "bytes": 1935
+    },
+    {
+      "path": "archive/phase_0_1/docs/ARCHITECTURE_DECISIONS.md",
+      "sha256": "d5220589fe01c5576e70eb03d711286ff820ac1330478fe35a422867993d0069",
+      "bytes": 5903
+    },
+    {
+      "path": "archive/phase_0_1/docs/DATA_INVENTORY.md",
+      "sha256": "ba834c04e28047ef567955dc6baba69bec3bdad4dc082494f2f9c991c32170f8",
+      "bytes": 5842
+    },
+    {
+      "path": "archive/phase_0_1/docs/ENVIRONMENT.md",
+      "sha256": "9758ae77ec263703d2efe711cf5ca9f19e197e8375365895da869278e8bf05c1",
+      "bytes": 1823
+    },
+    {
+      "path": "archive/phase_0_1/docs/HANDOFF.md",
+      "sha256": "88cf3eb66558340b566ac84b31d2c772031d679a34f67b8119083822135dc333",
+      "bytes": 7030
+    },
+    {
+      "path": "archive/phase_0_1/docs/IMPLEMENTATION_CONTRACT.md",
+      "sha256": "872518c97b79035b9361e11b3e3a25844b6d24a6c5bc330e0c23f4ff823da592",
+      "bytes": 6827
+    },
+    {
+      "path": "archive/phase_0_1/docs/METRICS.md",
+      "sha256": "4c41f870c923527457b2b726a26a3f2298abc01f16e4a39976046971323c90e1",
+      "bytes": 11784
+    },
+    {
+      "path": "archive/phase_0_1/docs/PHASE_1_PLAN.md",
+      "sha256": "71b9fb7476153513b0e76484790e130b9f40eb2457089df0ca558d6ab5c13ce8",
+      "bytes": 13950
+    },
+    {
+      "path": "archive/phase_0_1/docs/REFERENCE_REVIEW.md",
+      "sha256": "8cc4903393ae6805e42bcfd76b559d4883af2c4685b1b758027e3bba69b4a674",
+      "bytes": 22822
+    },
+    {
+      "path": "archive/phase_0_1/docs/RULES_REGISTER.md",
+      "sha256": "fcc95be76154eed8550dfa2bcdd26c0a67f4161cc05c42fae456848b0252f159",
+      "bytes": 23405
+    },
+    {
+      "path": "archive/phase_0_1/docs/TASK_BOARD.md",
+      "sha256": "3ec89a81f10261d6b1f650b29fb1e7beb201043c35de92a334f81e7697df60f8",
+      "bytes": 1906
+    },
+    {
+      "path": "archive/phase_0_1/docs/VALIDATION_PLAN.md",
+      "sha256": "bad96602126242cf055b94142a97b837209dbcb9031415c20a2fe4cef54f12e6",
+      "bytes": 4436
+    },
+    {
+      "path": "archive/phase_0_1/experiments/coverage_matrix_1200.json",
+      "sha256": "06b71962e1e36e220bb065325a6d479e01aad8c021cce480acd92c79e41664a7",
+      "bytes": 627224
+    },
+    {
+      "path": "archive/phase_0_1/experiments/research_trials_1000.json",
+      "sha256": "fc8fb9540def10692fcfb8ee6143e1978110dac01780357a1969af51bc4158af",
+      "bytes": 633760
+    },
+    {
+      "path": "archive/phase_0_1/prompts/00_START_HERE.txt",
+      "sha256": "16f0d8f1b4edad763b9e5669a447b8a0da5391a075a958eff50a84dff1900b65",
+      "bytes": 2345
+    },
+    {
+      "path": "archive/phase_0_1/prompts/FABLE_REVIEW.txt",
+      "sha256": "420953b58841a3680b67711cbf199d81574975e7df37d9c0e5a418b5e4e4e738",
+      "bytes": 1289
+    },
+    {
+      "path": "archive/phase_0_1/prompts/FAILURE_REVIEW.txt",
+      "sha256": "fa2128ece76af1e0e53b5fe852a8168bf60524d03124b9187220b5afe97f7cc0",
+      "bytes": 846
+    },
+    {
+      "path": "archive/phase_0_1/prompts/PHASE_PROMPTS.md",
+      "sha256": "c28ae3195e9a5cce784d06857c68493b5a68c3c944b8da6f2fb80b2661212af3",
+      "bytes": 7973
+    },
+    {
+      "path": "archive/phase_0_1/prompts/REVIEW.txt",
+      "sha256": "23bfc7438bdf3ccd83946751195708cbc0ccdcaa97b5f517fbf5686a11a0b6e5",
+      "bytes": 1224
+    },
+    {
+      "path": "archive/phase_0_1/pyproject.toml",
+      "sha256": "de529c9a979ae1eced60acf8979aa85d690bf74426dd15406d1552bc32d40647",
+      "bytes": 510
+    },
+    {
+      "path": "archive/phase_0_1/requirements-dev.lock",
+      "sha256": "b9bafd7d8792ccd9d48c1d4e204a59a5a9fe49fb9deabd9b78570690f2ba90b6",
+      "bytes": 288
+    },
+    {
+      "path": "archive/phase_0_1/sources.json",
+      "sha256": "ed6e564b7e745cc4d4ecef0adbec2b5dc198f3dd0693fbeeffc7df0519a0cd16",
+      "bytes": 5283
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/__init__.py",
+      "sha256": "700387fb3d71256f3ce8a58f2a833e9f4dd8a94e7fafcdf581bbc3c1053c03e8",
+      "bytes": 252
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/ledger/__init__.py",
+      "sha256": "c80cb8c3d86de22b0f7b7e81fcc6cf8698499d1df42695cdb6281eed255fa068",
+      "bytes": 461
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/ledger/book.py",
+      "sha256": "fa7af492d5b20d381a2585309e8309d263694d52bafe3bbf1e68e5090124cb5a",
+      "bytes": 29528
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/ledger/demo.py",
+      "sha256": "d093bbbf73b5f870961ac6194201eab2b2b6f637fc4fb5edb24fe718a914f646",
+      "bytes": 7754
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/ledger/journal.py",
+      "sha256": "6a197538b0569575366f1075429b8b5939aa5c75d499565beaa0dae698b9c4bd",
+      "bytes": 2741
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/ledger/replay.py",
+      "sha256": "cec60e928df846c7dc7a6c1a98609fb4f7fc3b4af4488660e7554c84ef246235",
+      "bytes": 8987
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/metrics/__init__.py",
+      "sha256": "d41f062496e2ede6ee1ef7815635f0d4d9ef997eb8912c3f38ee048837aa8046",
+      "bytes": 1713
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/metrics/performance.py",
+      "sha256": "7ef56046c72c7592148f2fef61481a197cc2be7ab4f539250189cbe93686fff5",
+      "bytes": 12479
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/metrics/selection.py",
+      "sha256": "0c8575591791daa76186e33f3351bb0afa4742c41ff80d69e9ba50058ff5a4b6",
+      "bytes": 5854
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/metrics/trading.py",
+      "sha256": "a527fb3d718ebc3cf8765c8b4684f90357562adf471b6934a362a3fa9d744b1a",
+      "bytes": 7102
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/rules/__init__.py",
+      "sha256": "04b9078d5e77649969b7759d393b6bb93308fe88c56a54e58d480710a115292d",
+      "bytes": 866
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/rules/bands.py",
+      "sha256": "1c53b00975e3f375cb65817ab9958d11383a890c1041f5713c3577f863efc2aa",
+      "bytes": 3765
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/rules/broker.py",
+      "sha256": "78f8f2499b5812bd2212e43205426b7acce5614082224d7b3a45acb45e15cde5",
+      "bytes": 4024
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/rules/calendar.py",
+      "sha256": "31e7e53732c0eeb51ff11bdf810aff0a0a327001eb4c9bddae206de37bb2b5a4",
+      "bytes": 5654
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/rules/charges.py",
+      "sha256": "e8f98363a3fd07af5cbb6526061d6ad0fcadb59ee95fed55fcd7581ca172329e",
+      "bytes": 6523
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/rules/demo.py",
+      "sha256": "92b9afeee5e84f964ca7905a1d91526466042e04f3241dc1e8ab6878735a390f",
+      "bytes": 3217
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/rules/engine.py",
+      "sha256": "4826ae3a3ea35b6fe2c7b604b4e63f650868ed8aea50baa18170f314f451bfb7",
+      "bytes": 25396
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/rules/instruments.py",
+      "sha256": "29d49fae90936b49fe53648478cba60a1770e1ddf8c8c65b72ea54b83f68dc3d",
+      "bytes": 12138
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/rules/mtf.py",
+      "sha256": "a4ee2ac339c286d4484ac3ddfd73627451316eab315f9f2085da8f5fc00e0164",
+      "bytes": 2700
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/rules/provenance.py",
+      "sha256": "253653554e73c693192a27fce09f8e2c422df0aeffe96405a66f50cb136638be",
+      "bytes": 11778
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/rules/sessions.py",
+      "sha256": "051e093e75cd8efcb6fe81f8dd8b84de8581ba06a1d3600525d0bafc1a91c9db",
+      "bytes": 7021
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/rules/ticks.py",
+      "sha256": "896a2c33e0b374755df5fd9422e7090fddcfbd56be073c78d5b89cb8869a8389",
+      "bytes": 3242
+    },
+    {
+      "path": "archive/phase_0_1/src/marketlab/rules/types.py",
+      "sha256": "925d04d992339dce7dce9a6be8ee5ffcca01f5014499e0ae8adbc36a9e4b0063",
+      "bytes": 7192
+    },
+    {
+      "path": "archive/phase_0_1/tests/conftest.py",
+      "sha256": "b3321cb0abf63a676287ce5ab3e83e439134d548b5eb2046bf59b21baac232e2",
+      "bytes": 2197
+    },
+    {
+      "path": "archive/phase_0_1/tests/test_calendar_sessions.py",
+      "sha256": "1dc631a4703eb59ffde6a653f57a243245ca95b4c92dbcfeaf99b3fbb23ebe5e",
+      "bytes": 6222
+    },
+    {
+      "path": "archive/phase_0_1/tests/test_charges_mtf_broker.py",
+      "sha256": "7e51216446a5e5e82293edb6635376f9199de118ecc17bf00b69174e2314a89b",
+      "bytes": 6513
+    },
+    {
+      "path": "archive/phase_0_1/tests/test_engine.py",
+      "sha256": "d60f53c6dcc9f348b59dcc2e4d9e2819087e88973daa637aeab29c379722e675",
+      "bytes": 15573
+    },
+    {
+      "path": "archive/phase_0_1/tests/test_ledger_fixtures.py",
+      "sha256": "6fb69588abb198bd84d55eb9af3f72f44da2436f566c405013c1fa4e26967d12",
+      "bytes": 12589
+    },
+    {
+      "path": "archive/phase_0_1/tests/test_ledger_replay.py",
+      "sha256": "40b846fd5f5d98fd25f6a47f3d7c6f7d1f44ffe2c584446f6f17ae15c667e04b",
+      "bytes": 5680
+    },
+    {
+      "path": "archive/phase_0_1/tests/test_metrics.py",
+      "sha256": "a81ba02ef5803348d1ce97d88b215defaacd662535f59e1b69427edacd85028a",
+      "bytes": 13583
+    },
+    {
+      "path": "archive/phase_0_1/tests/test_prices.py",
+      "sha256": "69e651eeeba7cce7304dce9a9d48184697ab2b4805184f543f6beba65178c8cf",
+      "bytes": 3178
+    },
+    {
+      "path": "archive/phase_0_1/tests/test_properties_provenance.py",
+      "sha256": "3787b04dba05aad9a0c04e6177e27aa4bc7fe05575194612e5d57198784d3af9",
+      "bytes": 3731
+    },
+    {
+      "path": "data/examples/external_trades.csv",
+      "sha256": "6130bf9136aa026ad53ad653d0ee8cc5589a07af5c66be74a23288efcb18d4cf",
+      "bytes": 143
+    },
+    {
+      "path": "data/examples/news.xml",
+      "sha256": "885a5d021f08e9b029a206467d4e1be304ef84e406517d9bca3a20224a183d23",
+      "bytes": 368
+    },
+    {
+      "path": "deploy/marketlab-collector.service",
+      "sha256": "4cd0ae6f5c2212ab90d627ec0fe59376b0ad9cfae2b489829c47f08e43c26082",
+      "bytes": 555
+    },
+    {
+      "path": "deploy/marketlab-dashboard.service",
+      "sha256": "5640df1187e7e406127d889cf54cdb82612096b0fdea6ff894947dc5b242a082",
+      "bytes": 493
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "sha256": "be70762793470c8e0a968fcd4605715fdcb5d8d1b055671e5252f942bdb2f1ec",
+      "bytes": 3275
+    },
+    {
+      "path": "docs/FABLE_MATH_SPEC.md",
+      "sha256": "f739423bb02a6a802da85af507b70d3c845ad3b66ee3472dd878163e2bb83342",
+      "bytes": 10974
+    },
+    {
+      "path": "docs/HANDOFF.md",
+      "sha256": "c87fd85ecc377cba79f82d57a220fda449bd3406c00672975cbc8a539dae2bda",
+      "bytes": 5580
+    },
+    {
+      "path": "docs/IMPLEMENTATION_CONTRACT.md",
+      "sha256": "8b86374b711c778f5e4c66225f6d3cf14f25c1f9cb4d4316a9a47abb1437437b",
+      "bytes": 5215
+    },
+    {
+      "path": "docs/KITE_AND_SERVER_SETUP.md",
+      "sha256": "8080de7cb0a010feed14205cd7f7c1683d43b0abb8d04019d6adfcd07838a9b7",
+      "bytes": 11979
+    },
+    {
+      "path": "docs/RESEARCH_BRIEF.md",
+      "sha256": "dd8b9c8123e21767ec36c6db22838406290f87f8e8646df2fc898350dfbf2ba2",
+      "bytes": 14117
+    },
+    {
+      "path": "docs/RESET_REVIEW.md",
+      "sha256": "57de3e362812919dfa50e5927717626d0f709145a5d502ef98abb18050d85b4a",
+      "bytes": 4133
+    },
+    {
+      "path": "docs/SOURCE_PACK.md",
+      "sha256": "46d9f4e4cd0ea569996fbc373a8a31c3ca7445e3d0c6bb6bb26b51e900f1c59a",
+      "bytes": 8444
+    },
+    {
+      "path": "docs/reviews/PHASE_0_1_REVIEW.md",
+      "sha256": "ecc2c143c4ec7b476f472ee70407ba49699ed881cfac26ce3cbe78a45b493f20",
+      "bytes": 20801
+    },
+    {
+      "path": "docs/reviews/legacy_regression_results.txt",
+      "sha256": "fc25b2a11bd82a9842cd00e8523e8cf59de3e23d026865ff59e0de4dcb6c685f",
+      "bytes": 7256
+    },
+    {
+      "path": "docs/reviews/legacy_regressions.py",
+      "sha256": "b202650f4a9e5d2aa84dcec7be67b49b630b81cb6376bf5351d9f78607f0beaa",
+      "bytes": 6315
+    },
+    {
+      "path": "docs/validation/audit_demo.txt",
+      "sha256": "9344ffd7d5568ecce47fb73ffc7a36dfccea2d2fa267812c7434d8edb0f2b5d0",
+      "bytes": 86
+    },
+    {
+      "path": "docs/validation/checks.json",
+      "sha256": "626bb8b955725880ebbd434bd62bc82bd800f4a79e009a98b2ddaaa6ff4f1025",
+      "bytes": 869
+    },
+    {
+      "path": "docs/validation/cli_help.txt",
+      "sha256": "55e9ebf00081075e02b7255010ec40009561b3b53db57cb5080811a15efa9214",
+      "bytes": 437
+    },
+    {
+      "path": "docs/validation/compile.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/validation/demo.txt",
+      "sha256": "0c29d9eaa18d22d1edc3ba24f5efa71d0c023d39fb54af9524ec8e08beaed496",
+      "bytes": 51
+    },
+    {
+      "path": "docs/validation/http_smoke.txt",
+      "sha256": "417d65c019782206e1c97d79359472d7f0a1a5d7c04989ae815b57b81d7cafb8",
+      "bytes": 313
+    },
+    {
+      "path": "docs/validation/news_fixture.txt",
+      "sha256": "4b3e8f0dca874379cf373b42f11fef67aa9f0eb0db1e5a2a608f78a5bc22cef0",
+      "bytes": 46
+    },
+    {
+      "path": "docs/validation/synthetic_summary.json",
+      "sha256": "8ab26062da4bb574f9bf9d1adf2bab44fcd8946bfcc00821d0519444892c1a25",
+      "bytes": 692
+    },
+    {
+      "path": "docs/validation/tests.txt",
+      "sha256": "59a972defa7a12f3bd11411eaaf0984816d77188ca3583760c048302fee07126",
+      "bytes": 179
+    },
+    {
+      "path": "prompts/01_CLAUDE_ENGINEERING.txt",
+      "sha256": "0f2f5eb2266c1ce46230076c711ad3541610613854eadd6d56937abf956a0708",
+      "bytes": 3721
+    },
+    {
+      "path": "prompts/02_FABLE_QUANT.txt",
+      "sha256": "f66ddc400d3fe163d1b739c080b95dda4e84615e6a457d69002608292cce9cb1",
+      "bytes": 2633
+    },
+    {
+      "path": "prompts/03_VALIDATION.txt",
+      "sha256": "655887535406f48db3feb88fedd88b881b3f511cc908d32024b3c915114f74ae",
+      "bytes": 1993
+    },
+    {
+      "path": "prompts/04_INDEPENDENT_REVIEW.txt",
+      "sha256": "272ac55599830cecf07d30b831ae3057b6ad5168fff7fe11f4057e6738f3f08d",
+      "bytes": 1046
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "88be16f54025fd69ecc85500671f3bc7635f75892c5065093e9dd6551b40077d",
+      "bytes": 523
+    },
+    {
+      "path": "requirements-dev.lock",
+      "sha256": "48e375206f5718840a0e0a5a96ac0def8ed9dcc4dac6c69ad270e1dcd37868ef",
+      "bytes": 296
+    },
+    {
+      "path": "src/marketlab/__init__.py",
+      "sha256": "f84850bd1a3f03d9fb4f0ccf8d309f7b73d592ec34441626ad8b1c7b5e3ce6cb",
+      "bytes": 91
+    },
+    {
+      "path": "src/marketlab/__main__.py",
+      "sha256": "3129adff95e0f38b87ab34cddfc27082c7892bcaec267ff5d40f160fdf55b44a",
+      "bytes": 61
+    },
+    {
+      "path": "src/marketlab/audit.py",
+      "sha256": "1b6abeee84dde747c7d47ffab710b44397bd8f6247f837e0b90fe50292ae6257",
+      "bytes": 1357
+    },
+    {
+      "path": "src/marketlab/backtest.py",
+      "sha256": "8d608347b7a68742663226d92569c862e0b73ac940d1c410c09f9f9c3a7e3860",
+      "bytes": 9798
+    },
+    {
+      "path": "src/marketlab/cli.py",
+      "sha256": "1f2e6bbe42d746eeaa6dcfd1a2d1f197d220b889c3d119b061edbacf4a55876d",
+      "bytes": 16714
+    },
+    {
+      "path": "src/marketlab/common.py",
+      "sha256": "2f5b53e5fb4763b4aa5795317d1e5c823fe85281c7be6d61bbb98aca79aab878",
+      "bytes": 1295
+    },
+    {
+      "path": "src/marketlab/costs.py",
+      "sha256": "45de61ef9adc577d9e952a6cd2fbe9509ceb0711de9234224c8228878cc0f2a9",
+      "bytes": 1958
+    },
+    {
+      "path": "src/marketlab/dashboard.py",
+      "sha256": "b28d2377e4493c2b2ff7be36340f503fd9ede9c450028e78636686bbea335272",
+      "bytes": 3890
+    },
+    {
+      "path": "src/marketlab/experiments.py",
+      "sha256": "f7a0be235ccda4f52614988db9b986e91e1a60fd610f39841906c1a360d6eb77",
+      "bytes": 1484
+    },
+    {
+      "path": "src/marketlab/kite.py",
+      "sha256": "9311a107396c635a894164cfe431fafeec304067cee083fd12b6e3075591f166",
+      "bytes": 5415
+    },
+    {
+      "path": "src/marketlab/news.py",
+      "sha256": "03e3257d3e138e4441bd4f6932d884e9affdb1793613d61fdab6a377c2a4138a",
+      "bytes": 2561
+    },
+    {
+      "path": "src/marketlab/research.py",
+      "sha256": "3f34af7daac2d4cb69e9849596ea2084042017d993d71817687ba72b7c2efab7",
+      "bytes": 7890
+    },
+    {
+      "path": "src/marketlab/store.py",
+      "sha256": "6b01ac97d3af8730d66aeeecc0fb53460ab5f41ba09e781fcb4e60c2a8ddb6fa",
+      "bytes": 3963
+    },
+    {
+      "path": "tests/test_boundaries.py",
+      "sha256": "5cb2448769ddb5b32b282fe6ffff1187686e915a41fdf42677317895df28c88c",
+      "bytes": 8437
+    },
+    {
+      "path": "tests/test_integration.py",
+      "sha256": "8c3373b479ef4725c5ee78379bb597b65aec881c6869aa8d822a92a3f4e00cf2",
+      "bytes": 4289
+    },
+    {
+      "path": "tests/test_research.py",
+      "sha256": "56c33aaf78a58378006c020f7d3bc0a478373628a0f558408c266468115e469f",
+      "bytes": 7991
+    }
+  ]
+}

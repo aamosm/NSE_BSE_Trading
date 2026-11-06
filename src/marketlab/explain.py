@@ -632,6 +632,23 @@ def day_summary(ranking: dict) -> list[str]:
 
 # ---- how it works -----------------------------------------------------------------------------------------
 
+# Independent checks on this model and what became of each finding (fixed text; the evidence is in the commits and
+# tests named). Shown on How it works so the page carries its own audit trail. docs/audit/AUDIT_BRIEF.md has the detail.
+REVIEWS = [
+    {"date": "2026-11-06", "by": "Owner's diagnosis (Claude)", "finding": "Nothing could ever rank: market-timing uncertainty "
+     "crushed the stock signal; the 8% loss limit was applied to one stock instead of the account; the universe excluded "
+     "illiquid and high-priced stocks", "status": "Fixed", "where": "Errata E19, E20, E21"},
+    {"date": "2026-11-07", "by": "External review (another AI)", "finding": "BALAMINES: shrunk forecast larger than raw with a "
+     "misleading 'keeps 13%'; return versus the Nifty used as money lost; chart threshold not matching the gate",
+     "status": "Fixed; the BALAMINES buy call was withdrawn", "where": "Errata E22, E23"},
+    {"date": "2026-11-07", "by": "External audit (GPT, tradebot-india-audit)", "finding": "Promotion accepted an incomplete "
+     "development report and evidence for another horizon; trial ids ignored seed, bootstrap and index; even-count medians "
+     "and zero-edge sorting wrong", "status": "Fixed with regression tests", "where": "tests/test_audit_findings.py"},
+    {"date": "open", "by": "Independent reviewer (to do)", "finding": "Is the 1,000-trial test plan a sound design?",
+     "status": "Open", "where": "docs/audit/AUDIT_BRIEF.md job A6"},
+]
+
+
 def how_it_works(ranking: dict | None) -> dict:
     """The pipeline, stage by stage, with the maths and the live status taken from the latest ranking."""
     r = ranking or {}
@@ -704,7 +721,8 @@ def how_it_works(ranking: dict | None) -> dict:
         "Every number on a stock card is reproducible: the ranking file records the data hash, the model coefficients, the "
         "policy and the code version, and is never rewritten.",
     ]
-    return {"stages": stages, "meaning": meaning, "glossary": glossary(), "features": FEATURE_INFO, "classes": CLASS_INFO}
+    return {"stages": stages, "meaning": meaning, "glossary": glossary(), "features": FEATURE_INFO, "classes": CLASS_INFO,
+            "reviews": REVIEWS}
 
 
 def stock_view(card: dict, ranking: dict) -> dict:
