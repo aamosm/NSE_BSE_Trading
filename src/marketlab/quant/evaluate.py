@@ -69,7 +69,12 @@ class Config:
         return self.execution.to_json()
 
     def trial_id(self) -> str:
+        # Every setting that can change a result is part of the identity (audit finding 2026-11-07: seed, bootstrap,
+        # step, holdout length and benchmark index were not, so differently-run trials shared one id and repeated
+        # attempts could hide as one registered trial).
         body = json.dumps({"c": self.candidate, "h": self.h, "train": self.train_sessions, "test": self.test_sessions,
+                           "step": self.step_sessions, "holdout": self.holdout_sessions, "index": self.index_name,
+                           "seed": self.seed, "bootstrap": self.bootstrap,
                            "ablate": sorted(self.ablate), "lam": list(self.lam_grid), "W": self.W,
                            "policy": self.effective_policy().digest(), "execution": self.execution.digest(),
                            "availability": self.availability}, sort_keys=True)

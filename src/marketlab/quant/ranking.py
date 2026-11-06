@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import statistics
 from datetime import date, datetime
 from pathlib import Path
 
@@ -48,6 +49,13 @@ FOLDER = "rankings"
 CLASSES = ("BUY_CANDIDATE", "QUALIFIES", "HOLD_OFF", "HIGH_RISK", "AVOID", "INELIGIBLE", "NO_FORECAST")
 LOW_LIQUIDITY_VALUE = 5 * 10_000_000  # the old screen floor: below it the stock is analysed and flagged (E21)
 RISK_EXCLUSIONS = ("UNDER_SURVEILLANCE", "SUSPENDED", "PERIODIC_CALL_AUCTION", "SURVEILLANCE_UNKNOWN")
+
+
+def edge_order(card: dict) -> float:
+    """Sort key: best net edge first; a card without one last. (`net_edge or -9` sent an edge of exactly 0.0 to
+    the bottom, because 0.0 is falsy: audit finding 2026-11-07.)"""
+    v = (card.get("gates") or {}).get("net_edge")
+    return -v if v is not None else float("inf")
 
 
 def _f(x, nd=6):
@@ -114,7 +122,7 @@ def _window_stats(view, sessions: list[date], day: date, lookback: int) -> dict:
     out = {}
     for isin, vs in values.items():
         s = sorted(vs)
-        out[isin] = (counts.get(isin, 0), s[len(s) // 2])
+        out[isin] = (counts.get(isin, 0), statistics.median(s))  # an even count averages the middle pair
     return out
 
 
@@ -286,7 +294,7 @@ def restate(body: dict, capital: float) -> dict:
         out.append(card)
     # Greedy selection: best net edge first, whole shares, within the per-stock cap, the cash after the reserve and K.
     eligible = sorted((c for c in out if c.get("gates") and not c["gates"]["at_quantity"]),
-                      key=lambda s: -(s["gates"]["net_edge"] or -9))
+                      key=edge_order)
     free = policy.W * (1 - policy.reserve_fraction)
     for card in eligible:
         if sum(1 for s in out if (s.get("allocation") or {}).get("selected")) >= policy.K:
@@ -306,7 +314,7 @@ def restate(body: dict, capital: float) -> dict:
         if card.get("gates"):
             card["class"], card["reasons"] = classify(card, policy)
             card["flip"] = _flip(card, policy, None)
-    ranked = sorted([s for s in out if "gates" in s], key=lambda s: -(s["gates"]["net_edge"] or -9))
+    ranked = sorted([s for s in out if "gates" in s], key=edge_order)
     for s in out:
         s.pop("rank", None), s.pop("rank_of", None)
     for i, s in enumerate(ranked, 1):
@@ -455,7 +463,7 @@ def build(panel, cfg: evaluate.Config, *, root: Path, calendar, rule_inputs_fn=N
             card["reasons"].append("LOW_LIQUIDITY")
         card["flip"] = _flip(card, policy, model)
         stocks.append(card)
-    ranked = sorted([s for s in stocks if "gates" in s], key=lambda s: -(s["gates"]["net_edge"] or -9))
+    ranked = sorted([s for s in stocks if "gates" in s], key=edge_order)
     for i, s in enumerate(ranked, 1):
         s["rank"], s["rank_of"] = i, len(ranked)
     body["stocks"] = stocks

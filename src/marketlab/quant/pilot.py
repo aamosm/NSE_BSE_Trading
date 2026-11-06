@@ -115,7 +115,7 @@ def coverage(view: Panel, calendar, market: Path, start: date, end: date, *, pol
            "decision_days": len(unis), "decision_days_with_universe": sum(1 for u in unis.values() if u.isins),
            "decision_days_eligibility_verified": len(days_verified),
            "unverified_reasons": _count(r for u in unis.values() for r in u.unverified),
-           "universe_size_median": sorted(len(u.isins) for u in unis.values())[len(unis) // 2] if unis else 0,
+           "universe_size_median": __import__("statistics").median(len(u.isins) for u in unis.values()) if unis else 0,
            "horizons": {}}
     for h in horizons:
         counts, admissible, first, last = {}, 0, None, None

@@ -23,6 +23,12 @@ from pathlib import Path
 from ..common import atomic_json, now
 
 PROMOTIONS = "promotions"
+# Every spec 8.6 development criterion evaluate.promotion() writes (the holdout one is judged from the holdout
+# report). A development report must carry ALL of them and each must be True: a report with fewer keys is
+# incomplete, never "all passed" (audit finding 2026-11-07: a report carrying only holdout_net_positive passed).
+REQUIRED_DEV_CRITERIA = ("verified_folds_exist", "net_positive_pooled", "folds_positive_60pct", "n_eff_ge_mintrl",
+                         "dsr_95", "pbo_le_025", "coverage_80_in_band", "brier_skill_positive",
+                         "stresses_net_positive", "no_year_or_stock_over_half", "attribution_available")
 HOLDOUT_FILE = "holdout.json"
 REQUIRED = ("promotion_id", "candidate", "h", "trial_id", "manifest_hash", "policy_digest", "development_report",
             "development_sha256", "holdout_report", "holdout_sha256", "verdict")
@@ -121,10 +127,17 @@ def verify(runs: Path, record: dict) -> list[str]:
         reps[key] = rep
         if rep.get("trial_id") != record["trial_id"] or not rep.get("manifest_hash"):
             problems.append(f"{key.upper()}_REPORT_IDENTITY_MISMATCH")
+        cfg = rep.get("config") or {}
+        if cfg.get("candidate") != record["candidate"] or cfg.get("h") != record["h"]:
+            # audit finding 2026-11-07: an h = 20 report could back an h = 60 promotion
+            problems.append(f"{key.upper()}_REPORT_CANDIDATE_OR_HORIZON_MISMATCH")
     dev, hold = reps.get("development"), reps.get("holdout")
     if dev is not None:
         crit = (dev.get("promotion") or {}).get("criteria") or {}
-        if not crit or any(v is not True for k, v in crit.items() if k != "holdout_net_positive"):
+        missing = [k for k in REQUIRED_DEV_CRITERIA if k not in crit]
+        if missing:
+            problems.append("DEVELOPMENT_CRITERIA_MISSING:" + ",".join(missing))
+        elif any(crit[k] is not True for k in REQUIRED_DEV_CRITERIA):
             problems.append("DEVELOPMENT_CRITERIA_NOT_ALL_PASSED")
         if dev.get("policy_digest") != record["policy_digest"] or dev.get("holdout") is not False:
             problems.append("DEVELOPMENT_REPORT_POLICY_OR_KIND_MISMATCH")

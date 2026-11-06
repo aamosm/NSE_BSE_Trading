@@ -400,9 +400,9 @@ def test_concentration_and_losses_reject_when_the_evidence_is_conclusive():
 
 def test_a_promotion_record_verifies_only_with_untouched_reports(tmp_path):
     runs = tmp_path / "runs"
-    crit = {k: True for k in ("verified_folds_exist", "net_positive_pooled", "dsr_95")} | {"holdout_net_positive": None}
-    dev = {"trial_id": "A.h20.t", "manifest_hash": "m", "policy_digest": "p", "holdout": False, "promotion": {"criteria": crit}}
-    hold = {"trial_id": "A.h20.t", "manifest_hash": "m", "policy_digest": "p", "holdout": True, "net_rupees_total": 12.5}
+    crit = {k: True for k in registry.REQUIRED_DEV_CRITERIA} | {"holdout_net_positive": None}  # complete evidence
+    dev = {"trial_id": "A.h20.t", "manifest_hash": "m", "policy_digest": "p", "holdout": False, "config": {"candidate": "A", "h": 20}, "promotion": {"criteria": crit}}
+    hold = {"trial_id": "A.h20.t", "manifest_hash": "m", "policy_digest": "p", "holdout": True, "config": {"candidate": "A", "h": 20}, "net_rupees_total": 12.5}
     for kind, rep in (("eval", dev), ("holdout", hold)):
         (runs / kind / "A.h20.t").mkdir(parents=True)
         (runs / kind / "A.h20.t" / "r1.json").write_text(json.dumps(rep))

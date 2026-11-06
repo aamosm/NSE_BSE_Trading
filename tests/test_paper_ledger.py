@@ -27,10 +27,10 @@ def cfg():
 
 def promote(runs, c):
     """A promotion record whose cited reports hash correctly (the gate itself is tested in test_replay_correctness)."""
-    crit = {k: True for k in ("verified_folds_exist", "net_positive_pooled", "dsr_95")} | {"holdout_net_positive": None}
+    crit = {k: True for k in registry.REQUIRED_DEV_CRITERIA} | {"holdout_net_positive": None}  # complete evidence
     pol = c.effective_policy().digest()
-    reps = {"eval": {"trial_id": "A.h20.t", "manifest_hash": "m", "policy_digest": pol, "holdout": False, "promotion": {"criteria": crit}},
-            "holdout": {"trial_id": "A.h20.t", "manifest_hash": "m", "policy_digest": pol, "holdout": True, "net_rupees_total": 50.0}}
+    reps = {"eval": {"trial_id": "A.h20.t", "manifest_hash": "m", "policy_digest": pol, "holdout": False, "config": {"candidate": "A", "h": 20}, "promotion": {"criteria": crit}},
+            "holdout": {"trial_id": "A.h20.t", "manifest_hash": "m", "policy_digest": pol, "holdout": True, "config": {"candidate": "A", "h": 20}, "net_rupees_total": 50.0}}
     for kind, rep in reps.items():
         (runs / kind / "A.h20.t").mkdir(parents=True, exist_ok=True)
         (runs / kind / "A.h20.t" / "r.json").write_text(json.dumps(rep))

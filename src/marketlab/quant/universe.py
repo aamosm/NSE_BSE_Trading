@@ -6,6 +6,8 @@ The screen is the opportunity set. It never looks at outcomes, so a security tha
 stays in the universe of the days before that happened."""
 from __future__ import annotations
 
+import statistics
+
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -153,7 +155,7 @@ def screen(panel: Panel, day: date, policy: ScreenPolicy = ScreenPolicy(), rule_
             excluded[isin] = "NOT_TRADED_EVERY_SESSION"
             continue
         vals = sorted(values[isin])
-        med = vals[len(vals) // 2]
+        med = statistics.median(vals)  # an even count averages the middle pair (audit finding 2026-11-07)
         medians[isin] = med
         if med < policy.v_min:
             excluded[isin] = "BELOW_V_MIN"

@@ -599,7 +599,7 @@ def day_summary(ranking: dict) -> list[str]:
                       f"The model keeps only about {shrink:.0%} of its raw forecasts because refits on resampled history "
                       f"disagree. ")
                    + f"It has {m.get('train_days', 'few')} training dates; more history is what would sharpen it.")
-        best = sorted(fc, key=lambda s: -(s["gates"]["net_edge"] or -9))[:3]
+        best = sorted(fc, key=lambda s: -(s["gates"]["net_edge"]) if s["gates"]["net_edge"] is not None else float("inf"))[:3]
         out.append("Closest to qualifying on edge: " + "; ".join(
             f"{s['symbol']} (forecast {pct(s['forecast']['mu_shrunk'])}, cost {pct(s['costs']['cost_fraction'], sign=False)}, "
             f"{CLASS_INFO[s['class']]['title'].lower()})" for s in best) + ".")
