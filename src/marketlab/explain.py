@@ -365,8 +365,11 @@ def narrative(card: dict, ranking: dict) -> list[dict]:
         txt += " Pulling it down: " + "; ".join(_feature_phrase(i, card) for i in neg) + "."
     out.append({"title": "Why: what drives the forecast", "text": txt})
     out.append({"title": "Costs at your position size",
-                "text": f"{costs['q']} shares at {rupees(card['close'])} = {rupees(costs['value'])} (the per-stock cap is "
-                        f"{rupees(pol.get('cap_rupees'))}). Charges for buying and selling: {rupees(costs['charges'])} "
+                "text": (f"{costs['q']} shares at {rupees(card['close'])} = {rupees(costs['value'])} (the per-stock cap is "
+                         f"{rupees(pol.get('cap_rupees'))}). " if costs.get('q') else
+                         f"Not even one share fits: one costs {rupees(card['close'])}, above the per-stock cap of "
+                         f"{rupees(pol.get('cap_rupees'))}. The figures below are for ONE share, for reference only. ")
+                        + f"Charges for buying and selling: {rupees(costs['charges'])} "
                         f"(buy {rupees(costs['buy_charges'])}, sell including the ₹{costs['dp_charge']} DP charge "
                         f"{rupees(costs['sell_charges_incl_dp'])}); modelled slippage {rupees(costs['slippage_rupees'])} "
                         f"({pct(costs['slippage_fraction'], sign=False)} both ways). Total round trip "

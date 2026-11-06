@@ -170,19 +170,46 @@ def _bigger_account(c: allocate.Candidate, policy: allocate.Policy) -> list[dict
     return out
 
 
+def cost_and_gates(c: allocate.Candidate, cap: float, policy: allocate.Policy) -> tuple[int, dict, dict, dict]:
+    """Whole shares under the per-stock cap, exact round-trip costs and both gates at that quantity. When not even one
+    share fits (E21: such stocks are analysed, not screened out), costs and gates are computed at ONE share for
+    reference and ``NO_WHOLE_SHARE_FITS`` leads the gate reasons, so every downstream number stays defined.
+    Returns (q, position costs, the card's costs block, the card's gates block)."""
+    q = int(cap // c.price) if c.price > 0 else 0
+    q_costed = q if q > 0 else (1 if c.price > 0 else 0)
+    if q_costed == 0:
+        pc = {"value": 0.0, "charges": 0.0, "slippage": 0.0, "cost_fraction": float("inf")}
+        reasons_q, gate = ["NO_WHOLE_SHARE_FITS"], {}
+    else:
+        pc = allocate.position_costs(c, q_costed)
+        reasons_q, gate = allocate.position_gate(c, q_costed, policy)
+        if q == 0:
+            reasons_q = ["NO_WHOLE_SHARE_FITS"] + reasons_q
+    costs = {"q": q, "q_costed": q_costed, "value": pc.get("value"), "buy_charges": pc.get("buy_charges"),
+             "sell_charges_incl_dp": pc.get("sell_charges_incl_dp"), "charges": _f(pc.get("charges"), 2),
+             "slippage_rupees": _f(pc.get("slippage"), 2), "slippage_fraction": _f(c.slippage),
+             "charge_fraction": _f(pc.get("charge_fraction")), "cost_fraction": _f(pc.get("cost_fraction")),
+             "limit_price": round(c.blocked_price(), 2),
+             "cash_blocked": str(reservation(q, c.blocked_price())) if q > 0 else "0",
+             "dp_charge": allocate.FIXED_SELL, "bigger_accounts": _bigger_account(c, policy)}
+    gates = {"at_quantity": reasons_q, "at_cap": allocate.entry_gate(c, policy)[1],
+             "net_edge": _f(gate.get("net_edge")), "threshold": _f(gate.get("threshold"))}
+    return q, pc, costs, gates
+
+
 def classify(card: dict, policy: allocate.Policy) -> tuple[str, list[str]]:
     gates = card["gates"]["at_quantity"]
     fc, costs = card["forecast"], card["costs"]
-    thr = costs["cost_fraction"] + policy.min_edge
     if card["allocation"]["selected"]:
         return "BUY_CANDIDATE", ["PASSES_GATES_AND_ALLOCATOR"]
     if not gates:
         return "QUALIFIES", [card["allocation"].get("why_not") or "NOT_SELECTED"]
+    tail = "TAIL_LIMIT_AT_QUANTITY" in gates
+    thr = (costs.get("cost_fraction") if costs.get("cost_fraction") is not None else 0.0) + policy.min_edge
+    if fc["mu_shrunk"] <= -thr:  # the model's own negative view outranks affordability
+        return "AVOID", ["MODEL_EXPECTS_UNDERPERFORMANCE"] + (["DOWNSIDE_TAIL_BEYOND_LIMIT"] if tail else [])
     if "NO_WHOLE_SHARE_FITS" in gates:  # analysed, but one share costs more than the per-stock cap at this capital
         return "HOLD_OFF", ["ONE_SHARE_ABOVE_POSITION_CAP"] + (["LEANS_NEGATIVE"] if fc["mu_shrunk"] < 0 else ["LEANS_POSITIVE"])
-    tail = "TAIL_LIMIT_AT_QUANTITY" in gates
-    if fc["mu_shrunk"] <= -thr:
-        return "AVOID", ["MODEL_EXPECTS_UNDERPERFORMANCE"] + (["DOWNSIDE_TAIL_BEYOND_LIMIT"] if tail else [])
     if tail:
         return "HIGH_RISK", ["DOWNSIDE_TAIL_BEYOND_LIMIT"] + (["EDGE_BELOW_COST"] if "EDGE_BELOW_COST_AT_QUANTITY" in gates else [])
     return "HOLD_OFF", ["EDGE_BELOW_COST"] + (["LEANS_NEGATIVE"] if fc["mu_shrunk"] < 0 else ["LEANS_POSITIVE"])
@@ -245,19 +272,7 @@ def restate(body: dict, capital: float) -> dict:
                                card["costs"].get("slippage_fraction") or 0.002,
                                fc.get("q10", float("nan")), card.get("symbol") or "",
                                cash_price=card["costs"].get("limit_price") or 0.0)
-        q = int(cap // c.price) if c.price > 0 else 0
-        pc = allocate.position_costs(c, q) if q > 0 else {"value": 0.0, "charges": 0.0, "slippage": 0.0,
-                                                          "cost_fraction": float("inf")}
-        reasons_q, gate = allocate.position_gate(c, q, policy) if q > 0 else (["NO_WHOLE_SHARE_FITS"], {})
-        card["costs"] = {"q": q, "value": pc.get("value"), "buy_charges": pc.get("buy_charges"),
-                         "sell_charges_incl_dp": pc.get("sell_charges_incl_dp"), "charges": _f(pc.get("charges"), 2),
-                         "slippage_rupees": _f(pc.get("slippage"), 2), "slippage_fraction": _f(c.slippage),
-                         "charge_fraction": _f(pc.get("charge_fraction")), "cost_fraction": _f(pc.get("cost_fraction")),
-                         "limit_price": round(c.blocked_price(), 2),
-                         "cash_blocked": str(reservation(q, c.blocked_price())) if q > 0 else "0",
-                         "dp_charge": allocate.FIXED_SELL, "bigger_accounts": _bigger_account(c, policy)}
-        card["gates"] = {"at_quantity": reasons_q, "at_cap": allocate.entry_gate(c, policy)[1],
-                         "net_edge": _f(gate.get("net_edge")), "threshold": _f(gate.get("threshold"))}
+        q, pc, card["costs"], card["gates"] = cost_and_gates(c, cap, policy)
         card["p_beats_costs"] = None
         card["allocation"] = {"selected": False, "q": None, "value": None, "costs_at_plan_q": None}
         card["_c"] = c
@@ -267,7 +282,7 @@ def restate(body: dict, capital: float) -> dict:
                       key=lambda s: -(s["gates"]["net_edge"] or -9))
     free = policy.W * (1 - policy.reserve_fraction)
     for card in eligible:
-        if sum(1 for s in out if s["allocation"]["selected"]) >= policy.K:
+        if sum(1 for s in out if (s.get("allocation") or {}).get("selected")) >= policy.K:
             card["allocation"]["why_not"] = "NOT_SELECTED_K_LIMIT"
             continue
         c, q = card.pop("_c"), card["costs"]["q"]
@@ -413,17 +428,8 @@ def build(panel, cfg: evaluate.Config, *, root: Path, calendar, rule_inputs_fn=N
         card["forecast"].update(shrink_factor=_f(shrink, 6), tau=fc["tau"], h=cfg.h, calibration_n=fc["calibration_n"])
         card["contributions"] = _contributions(model, x)
         c = cands[isin]
-        q = int(cap // c.price) if c.price > 0 else 0
-        pc = allocate.position_costs(c, q) if q > 0 else {"value": 0.0, "charges": 0.0, "slippage": 0.0, "cost_fraction": float("inf")}
-        reasons_q, gate = allocate.position_gate(c, q, policy) if q > 0 else (["NO_WHOLE_SHARE_FITS"], {})
-        card["costs"] = {"q": q, "value": pc.get("value"), "buy_charges": pc.get("buy_charges"),
-                         "sell_charges_incl_dp": pc.get("sell_charges_incl_dp"), "charges": _f(pc.get("charges"), 2),
-                         "slippage_rupees": _f(pc.get("slippage"), 2), "slippage_fraction": _f(c.slippage),
-                         "charge_fraction": _f(pc.get("charge_fraction")), "cost_fraction": _f(pc.get("cost_fraction")),
-                         "limit_price": round(c.cash_price, 2), "cash_blocked": str(reservation(q, c.cash_price)) if q > 0 else "0",
-                         "dp_charge": allocate.FIXED_SELL, "bigger_accounts": _bigger_account(c, policy)}
-        card["gates"] = {"at_quantity": reasons_q, "at_cap": allocate.entry_gate(c, policy)[1],
-                         "net_edge": _f(gate.get("net_edge")), "threshold": _f(gate.get("threshold"))}
+        q, pc, card["costs"], card["gates"] = cost_and_gates(c, cap, policy)
+        reasons_q = card["gates"]["at_quantity"]
         card["p_beats_costs"] = _f(fc["_p_above"](pc["cost_fraction"]), 4) if q > 0 else None
         sel = selected.get(isin)
         pos = plan.get("positions", {}).get(isin)

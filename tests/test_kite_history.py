@@ -90,3 +90,47 @@ def test_rate_limit_backs_off_and_retries(tmp_path):
                 rate_limit_once=True)
     out = kh.download(fake, tmp_path, today=date(2026, 11, 6), sleep=waits.append)
     assert waits == [30] and out["stopped"] == "COMPLETE" and not out["errors"]
+
+
+class Flaky(Fake):
+    """Connection drops: the first ``drops`` calls fail with a connection error, or every call does (down=True)."""
+
+    def __init__(self, listed, drops=0, down=False):
+        super().__init__(listed)
+        self.drops, self.down = drops, down
+
+    def history(self, token, interval, start, end):
+        if self.down or self.drops > 0:
+            self.drops -= 1
+            self.calls.append((token, start[:10], end[:10]))
+            raise KiteError("Kite connection failed; no automatic retry")
+        return super().history(token, interval, start, end)
+
+
+def test_a_dropped_connection_is_retried_with_backoff(tmp_path):
+    waits = []
+    fake = Flaky({t: date(2026, 10, 1) for t in (1, 2, 4, 7, 256265)}, drops=2)
+    out = kh.download(fake, tmp_path, today=date(2026, 11, 6), sleep=waits.append)
+    assert waits == [10, 30] and out["stopped"] == "COMPLETE" and not out["errors"]
+
+
+def test_sustained_connection_loss_stops_instead_of_skipping_every_instrument(tmp_path, monkeypatch):
+    monkeypatch.setattr(kh, "MAX_CONSECUTIVE_FAILURES", 2)
+    fake = Flaky({}, down=True)
+    out = kh.download(fake, tmp_path, today=date(2026, 11, 6), sleep=lambda s: None)
+    assert out["stopped"] == "CONNECTION_LOST"
+    assert len({t for t, _, _ in fake.calls}) == 2  # two instruments tried (each with its retries), then stop
+    later = kh.download(Fake({}), tmp_path, today=date(2026, 11, 6), sleep=lambda s: None)
+    assert later["stopped"] == "COMPLETE"  # the run resumes from where it stopped
+
+
+def test_resume_on_a_later_day_keeps_the_first_runs_chunks_and_dump(tmp_path):
+    first = Fake({t: date(2020, 1, 1) for t in (1, 2, 4, 7, 256265)})
+    kh.download(first, tmp_path, today=date(2026, 11, 6), sleep=lambda s: None)
+
+    class NoDump(Fake):
+        def get(self, path, params=None):
+            raise AssertionError("the stored dump must be reused")
+    again = NoDump(first.listed)
+    out = kh.download(again, tmp_path, sleep=lambda s: None)  # no today: resumes the 6 Nov run
+    assert again.calls == [] and out["requests"] == 0 and out["stopped"] == "COMPLETE"

@@ -175,7 +175,7 @@ def test_owner_screen_analyses_every_price_and_liquidity_and_labels_unaffordable
     p = make_panel(tmp_path / "p.sqlite3", n=420, n_stocks=30, bonus_at=10_000)
     root = tmp_path / "private"
     root.mkdir()
-    W = 1_000.0  # tiny capital: a Rs 500 cap, so the dearer synthetic stocks cannot be bought
+    W = 400.0  # a Rs 200 per-stock cap: synthetic prices run ~100-400, so the dearer half cannot be bought
     c = evaluate.Config(h=20, train_sessions=200, W=W, screen=service.screen_policy({"v_min_crore": 0.0}, W),
                         policy=allocate.Policy.for_capital(W))
     out = ranking.build(p, c, root=root, calendar=CAL, bootstrap=10, write=False)
@@ -184,6 +184,31 @@ def test_owner_screen_analyses_every_price_and_liquidity_and_labels_unaffordable
     for s in out["stocks"]:
         assert {ch["rule"] for ch in s["checks"]}.isdisjoint({"PRICE_FITS_HALF_POSITION", "MEDIAN_VALUE_20"})
         assert s["class"] != "INELIGIBLE" or s["reasons"][0] not in ("PRICE_ABOVE_HALF_POSITION", "BELOW_V_MIN")
-        if s.get("costs", {}).get("q") == 0:
-            assert s["class"] == "HOLD_OFF" and s["reasons"][0] == "ONE_SHARE_ABOVE_POSITION_CAP" and s["forecast"]
+        if s.get("costs", {}).get("q") == 0 and "forecast" in s:
+            assert s["costs"]["q_costed"] == 1 and s["costs"]["cost_fraction"] is not None  # costed at one share
+            assert s["class"] in ("HOLD_OFF", "AVOID") and s["flip"] is not None
+            if s["class"] == "HOLD_OFF":
+                assert s["reasons"][0] == "ONE_SHARE_ABOVE_POSITION_CAP"
+            explain.stock_view(s, out)  # the narrative renders for an unaffordable stock
+    assert any(s.get("costs", {}).get("q") == 0 and "forecast" in s for s in out["stocks"])  # the case is exercised
+    assert explain.day_summary(out) and explain.how_it_works(out)  # whole-ranking text renders too
+    from marketlab import webapp
+    assert all(webapp._stock_row(s)["class"] for s in out["stocks"])
     json.dumps(ranking.restate(out | {"digest": "x"}, 5_000.0), allow_nan=False)  # no Infinity reaches the browser
+
+
+def test_restate_selects_among_passing_stocks_while_ineligible_cards_have_no_allocation(built):
+    """Regression: the greedy selection must skip cards without an allocation block (ineligible, no forecast)."""
+    import copy
+    p, root, r = built
+    body = copy.deepcopy(r)
+    fc_cards = [s for s in body["stocks"] if "forecast" in s]
+    strong = fc_cards[0]
+    strong["forecast"].update(mu_shrunk=0.05, q10=-0.02)  # clears both gates at any capital
+    body["stocks"].append({"isin": "INE000X01000", "symbol": "ZZZ", "class": "INELIGIBLE", "reasons": ["ETF"],
+                           "close": 100.0, "checks": []})
+    out = ranking.restate(body, 30_000.0)
+    json.dumps(out, allow_nan=False)
+    got = next(s for s in out["stocks"] if s["isin"] == strong["isin"])
+    assert got["class"] == "BUY_CANDIDATE" and got["allocation"]["selected"]
+    assert out["counts"]["BUY_CANDIDATE"] <= out["policy"]["K"]

@@ -132,7 +132,13 @@ class Manifest:
         self.done[(int(rec["token"]), rec["from"], rec["to"])] = rec
 
 
+CONNECTION_BACKOFF = (10, 30, 90)  # seconds between retries of a dropped connection
+MAX_CONSECUTIVE_FAILURES = 10  # instruments in a row that fail: the network or Kite is down; stop and resume later
+
+
 def _fetch(client, token: int, lo: date, hi: date, sleep=time.sleep, retries: int = 3):
+    """One chunk. A 429 waits 30 s; a dropped connection or timeout waits 10, 30, then 90 s (a laptop's network
+    blips, Kite resets idle connections); any other refusal is final for that instrument."""
     start = datetime(lo.year, lo.month, lo.day, 0, 0, tzinfo=IST).strftime("%Y-%m-%d %H:%M:%S")
     end = datetime(hi.year, hi.month, hi.day, 23, 59, tzinfo=IST).strftime("%Y-%m-%d %H:%M:%S")
     for attempt in range(retries + 1):
@@ -141,22 +147,30 @@ def _fetch(client, token: int, lo: date, hi: date, sleep=time.sleep, retries: in
         except AuthenticationRequired:
             raise
         except KiteError as e:
-            if "429" in str(e) and attempt < retries:
+            if attempt < retries and "429" in str(e):
                 sleep(30)
+                continue
+            if attempt < retries and "connection failed" in str(e).lower():
+                sleep(CONNECTION_BACKOFF[min(attempt, len(CONNECTION_BACKOFF) - 1)])
                 continue
             raise
 
 
 def download(client, out: Path, *, today: date | None = None, earliest: date = EARLIEST, limit: int | None = None,
              progress=None, sleep=time.sleep, instruments_text: str | None = None) -> dict:
-    """Download (or resume) everything. Returns a summary with counts only (no provider bodies, no secrets)."""
-    today = today or now().date()
+    """Download (or resume) everything. Returns a summary with counts only (no provider bodies, no secrets).
+
+    A resume keeps the first run's end date and instrument dump, so chunk boundaries match the manifest and nothing
+    already stored is fetched again; pass ``today`` explicitly to start a new, later backfill."""
     out.mkdir(parents=True, exist_ok=True)
+    if today is None:
+        prior = Manifest(out / "manifest.jsonl").done
+        today = max((date.fromisoformat(k[2]) for k in prior), default=None) or now().date()
+    dump = out / "instruments" / f"NSE-{today.isoformat()}.csv"
     if instruments_text is None:
-        instruments_text = client.get("/instruments/NSE")
+        instruments_text = dump.read_text(encoding="utf-8") if dump.exists() else client.get("/instruments/NSE")
     raw = instruments_text.encode("utf-8")
     sha = hashlib.sha256(raw).hexdigest()
-    dump = out / "instruments" / f"NSE-{today.isoformat()}.csv"
     if not dump.exists():
         dump.parent.mkdir(parents=True, exist_ok=True)
         dump.write_bytes(raw)
@@ -166,7 +180,13 @@ def download(client, out: Path, *, today: date | None = None, earliest: date = E
     man = Manifest(out / "manifest.jsonl")
     stats = {"instruments": len(chosen), "requests": 0, "chunks_skipped": 0, "candles": 0, "empty_stops": 0,
              "errors": {}, "stopped": None, "dump_sha256": sha}
+    streak = 0  # consecutive instruments whose first new chunk failed
     for n, ins in enumerate(chosen[:limit] if limit else chosen, 1):
+        if streak >= MAX_CONSECUTIVE_FAILURES:
+            stats["stopped"] = "CONNECTION_LOST"
+            atomic_json(out / "summary.json", stats | {"finished_at": now().isoformat(), "resume": "run again"})
+            return stats
+        failed_here = False
         for lo, hi in chunks(today, earliest):
             prior = man.has(ins.token, lo, hi)
             if prior is not None:
@@ -182,6 +202,7 @@ def download(client, out: Path, *, today: date | None = None, earliest: date = E
             except KiteError as e:
                 label = str(e).split(";")[0][:60]
                 stats["errors"][label] = stats["errors"].get(label, 0) + 1
+                failed_here = True
                 break
             stats["requests"] += 1
             candles = (data or {}).get("candles") or []
@@ -199,6 +220,7 @@ def download(client, out: Path, *, today: date | None = None, earliest: date = E
             if not candles:  # passed the listing date: nothing older exists for this instrument
                 stats["empty_stops"] += 1
                 break
+        streak = streak + 1 if failed_here else 0
         if progress and (n % 25 == 0 or n == len(chosen)):
             progress(f"{n}/{len(chosen)} instruments · {stats['requests']} requests · {stats['candles']:,} candles"
                      f" · {sum(stats['errors'].values())} errors")
