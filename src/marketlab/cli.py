@@ -351,6 +351,11 @@ def parser():
     a.add_argument("--bhavcopy", type=Path, nargs="+", required=True,
                    help="legacy or UDiFF bhavcopy CSV/ZIP files that define the historical universe")
     a.add_argument("--dry-run", action="store_true", help="required; do not authenticate or download")
+    a = sub.add_parser("kite-download", help="download Kite daily candles for every NSE equity + main indices "
+                                             "(read-only; needs today's auth; resumable)")
+    a.add_argument("--out", type=Path, default=None, help="default: <market-dir>/kite")
+    a.add_argument("--earliest", type=date.fromisoformat, default=None, help="oldest date to request (default 2000-01-01)")
+    a.add_argument("--limit", type=int, default=None, help="only the first N instruments (a trial run)")
     a = sub.add_parser("news"); a.add_argument("--file", type=Path); a.add_argument("--url")
     a = sub.add_parser("import-trades"); a.add_argument("file", type=Path)
     a = sub.add_parser("backtest"); a.add_argument("file", type=Path); a.add_argument("--output", type=Path)
@@ -431,6 +436,12 @@ def main():
                 raise ValueError("KITE_BACKFILL_REQUIRES_DRY_RUN: owner review is required before any Kite download")
             from .kite_backfill import dry_run
             print(json.dumps(dry_run(args.instrument_file, args.bhavcopy), indent=1))
+        elif args.command == "kite-download":
+            from . import kite_history
+            kw = {"earliest": args.earliest} if args.earliest else {}
+            out = kite_history.download(client(root), args.out or (args.market_dir / "kite"), limit=args.limit,
+                                        progress=lambda m: print(m, flush=True), **kw)
+            print(json.dumps(out, indent=1))
         elif args.command == "news":
             if bool(args.file) == bool(args.url):
                 raise ValueError("Choose exactly one --file or --url")
