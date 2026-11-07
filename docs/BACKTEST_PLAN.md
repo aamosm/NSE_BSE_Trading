@@ -32,6 +32,27 @@ Multiple testing: the walk-forward is one registered trial per configuration (tr
 bootstrap, step, holdout and benchmark: audit fix 87ce283); the DSR deflates by the number of registered trials and
 PBO estimates overfitting across them. Baseline comparisons are diagnostics inside one trial, not extra trials.
 
+## 0b. Additional criteria registered on 7 Nov 2026, BEFORE any walk-forward or holdout result was seen
+
+Registered while the first walk-forward was still building its dataset (started 06:03 IST, no fold output
+seen), at the second external review's request. They add to spec 8.6; none replaces a spec criterion, and none
+may be changed after a result is seen.
+
+| # | Criterion | Pass if | Reported by |
+|---|---|---|---|
+| C1 | Ranking skill | model top-K minus momentum top-K: block-bootstrap 95% CI of the per-period mean difference above 0 | `baselines.model_minus_momentum` |
+| C2 | Beats chance | fewer than 5% of 200 random portfolios do at least as well as the model's top-K | `baselines.model_vs_random` |
+| C3 | Beats the market after costs | full strategy net return above the Nifty 50 over the same periods (price index until dividend-adjusted labels exist; then the Nifty 50 TRI) | `strategy_metrics`, `baselines.strategies.nifty` |
+| C4 | Drawdown | maximum drawdown of the full strategy's daily NAV no worse than −20% | `strategy_metrics.max_drawdown` |
+| C5 | Portfolio tail | realized share of 20-session periods with a portfolio loss beyond the tail limit at most 10% (± its binomial interval) | forward outcomes; walk-forward NAV |
+| C6 | Robust to costs | net positive at slippage 0.10%, 0.25% and 0.50% each way, and at doubled charges | stresses (slippage ×2 exists; ×4 to add) |
+| C7 | Robust to τ | the sign and rank order of the result hold for τ ∈ {0.25, 0.5, 0.75, 1.0}% — tested as registered variants, never chosen by result | `--tau` trials (to add) |
+| C8 | Bootstrap stability | se and μ̃ change by less than 10% (median, relative) between 50 and 200 refits | stability run (to add) |
+| C9 | Execution | every simulated fill obeys EXEC.v1 (limit, gap rejection, deferrals); baselines obey the same rule | ledger events; `rejected_gap_picks` |
+
+Not yet testable and therefore not promotion criteria today: total-return (dividend) comparison and calibration by
+market regime; both are open jobs (docs/PROMPTS_NEXT.md 5; BACKTEST_PLAN block B).
+
 ## 1. Where the evidence stands (6 Nov 2026)
 
 **The arithmetic is exact.** All 801 forecast stocks of the 5 Nov ranking reproduce from the stored model with zero
@@ -152,7 +173,7 @@ you took it away*.
 
 | May be tuned from these trials | Must not be |
 |---|---|
-| τ for each part (H5), via a pre-declared grid {0.25, 0.5, 1.0}% — declared as new registered trials | The tail limit L, the minimum edge, the cost model |
+| τ for each part (H5), via a pre-declared grid {0.25, 0.5, 0.75, 1.0}% — declared as new registered trials | The tail limit L, the minimum edge, the cost model |
 | Slippage tiers (E21) from realized spreads, if a measured estimator is built | Anything using the sealed holdout |
 | Whether to drop the common part (H7) | Feature definitions chosen by looking at decile tables |
 

@@ -658,6 +658,10 @@ REVIEWS = [
     {"date": "2026-11-07", "by": "External audit (GPT, tradebot-india-audit)", "finding": "Promotion accepted an incomplete "
      "development report and evidence for another horizon; trial ids ignored seed, bootstrap and index; even-count medians "
      "and zero-edge sorting wrong", "status": "Fixed with regression tests", "where": "tests/test_audit_findings.py"},
+    {"date": "2026-11-07", "by": "Second external review (another AI)", "finding": "Allocator prefers cash for both "
+     "qualifying stocks yet labelled them 'not in pool'; the pool used a coarse gate; no portfolio-level loss budget; "
+     "methodology page out of date; training-date label wrong; baselines ignored the limit-order rule",
+     "status": "Fixed; objective (relative vs absolute) left to the owner", "where": "docs/audit/REVIEW_2026-11-07.md"},
     {"date": "open", "by": "Independent reviewer (to do)", "finding": "Is the 1,000-trial test plan a sound design?",
      "status": "Open", "where": "docs/audit/AUDIT_BRIEF.md job A6"},
 ]
