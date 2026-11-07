@@ -37,10 +37,15 @@ class Label:
     entry_open: float = float("nan")  # actual traded opens, no slippage
     exit_open: float = float("nan")
     factor: float = 1.0  # product of applied (listed) implied factors in (entry_day, exit_day]
-    gross: float = float("nan")  # simple return (exit_open / factor) / entry_open - 1
-    gross_log: float = float("nan")
+    gross: float = float("nan")  # price return: (exit_open / factor) / entry_open - 1
+    gross_log: float = float("nan")  # legacy price-return log target
+    dividend_cash: float = 0.0  # cash per original entry share, after split/bonus normalization
+    total_return: float = float("nan")  # price return plus dividends, no costs
+    total_return_log: float = float("nan")
     index_log: float | None = None  # benchmark open-to-open log return
     excess: float | None = None  # gross_log - index_log (the model target, spec 4.1)
+    benchmark_total_return_log: float | None = None
+    relative_total_return: float | None = None
     basis: str = "UNKNOWN"  # VERIFIED (no adjustment needed) | RECONSTRUCTED (listed action applied) | UNKNOWN
 
     @property
@@ -65,7 +70,7 @@ def slippage_for(median_value_20: float) -> float:
 
 def forward_return(panel: Panel, isin: str, decision_day: date, h: int, *, sessions: list[date],
                    panel_days: set[date] | None = None, index_name: str = "Nifty 50",
-                   listed_action_days: set[date] | None = None, data: dict | None = None, actions=None) -> Label:
+                   listed_action_days: set[date] | None = None, data: dict | None = None,                    actions=None, benchmark_total_return_index: dict[date, tuple[float, float]] | None = None) -> Label:
     """Label for a decision after the close of ``decision_day``. ``sessions`` are exchange sessions (calendar),
     truncated at the last session the caller may see; ``panel_days`` the sessions actually stored. ``data`` may
     carry the security's preloaded {"bars": {day: Bar}, "factors": {day: f}, "disc": {...}} and the panel-wide
@@ -100,6 +105,7 @@ def forward_return(panel: Panel, isin: str, decision_day: date, h: int, *, sessi
     if unchecked:  # (entry, exit]: an ex-date there could not be checked
         return out(EXCLUDED, "ACTION_COVERAGE_UNKNOWN")
     factor, basis, current = 1.0, "VERIFIED", isin
+    dividend_cash = 0.0
     # walk (entry, exit] session by session, following a listed ISIN succession
     k = i + 2
     while k <= i + h + 1:
@@ -111,6 +117,7 @@ def forward_return(panel: Panel, isin: str, decision_day: date, h: int, *, sessi
             f_imp = panel.implied_factors(current, d, d).get(d)
             dv = panel.discontinuities(current, d, d).get(d, [])
         listed = actions.factor(current, d) if actions is not None else None
+        listed_action = actions.get(current, d) if actions is not None else None
         if listed is not None:
             factor *= listed
             basis = "RECONSTRUCTED_LISTED"
@@ -119,7 +126,11 @@ def forward_return(panel: Panel, isin: str, decision_day: date, h: int, *, sessi
             succ = ends[0] if ends else (la.successor_isin if la else None)
             if succ:
                 current = succ  # the holding continues as the new ISIN from the ex-date
+            if listed_action is not None and listed_action.dividend_cash > 0:
+                dividend_cash += listed_action.dividend_cash / factor
         else:
+            if listed_action is not None and listed_action.dividend_cash > 0:
+                dividend_cash += listed_action.dividend_cash / factor
             if any(kind == "IDENTITY_END" for kind, _, _ in dv):
                 return out(EXCLUDED, "IDENTITY_CHANGE")  # the ISIN was replaced (usually a split): not a suspension
             if any(kind == "PRICE_DISCONTINUITY" for kind, _, _ in dv):
@@ -140,13 +151,24 @@ def forward_return(panel: Panel, isin: str, decision_day: date, h: int, *, sessi
         return out(EXCLUDED, "NO_TRADE_AT_EXIT")
     gross = (xb.open / factor) / eb.open - 1
     gl = math.log1p(gross)
+    total_return = ((xb.open / factor) + dividend_cash) / eb.open - 1
+    total_return_log = math.log1p(total_return)
     idx = data["index"] if data else panel.index_levels(index_name, entry_day, exit_day)
     if not (entry_day in idx and exit_day in idx and (idx[entry_day][0] or 0) > 0 and (idx[exit_day][0] or 0) > 0):
         return out(EXCLUDED, "NO_BENCHMARK", entry_open=eb.open, exit_open=xb.open, factor=factor, gross=gross,
-                   gross_log=gl, basis=basis)
+                   gross_log=gl, dividend_cash=dividend_cash, total_return=total_return,
+                   total_return_log=total_return_log, basis=basis)
     il = math.log(idx[exit_day][0] / idx[entry_day][0])
+    tri = benchmark_total_return_index or (data or {}).get("benchmark_total_return_index")
+    tri_log = None
+    relative = None
+    if tri and entry_day in tri and exit_day in tri and tri[entry_day][0] > 0 and tri[exit_day][0] > 0:
+        tri_log = math.log(tri[exit_day][0] / tri[entry_day][0])
+        relative = total_return_log - tri_log
     return out(RESOLVED, None, entry_open=eb.open, exit_open=xb.open, factor=factor, gross=gross, gross_log=gl,
-               index_log=il, excess=gl - il, basis=basis)
+               dividend_cash=dividend_cash, total_return=total_return, total_return_log=total_return_log,
+               index_log=il, excess=gl - il, benchmark_total_return_log=tri_log,
+               relative_total_return=relative, basis=basis)
 
 
 def label_end_index(decision_index: int, h: int) -> int:

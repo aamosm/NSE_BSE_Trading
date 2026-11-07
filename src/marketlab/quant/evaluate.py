@@ -155,7 +155,7 @@ def security_history(view: Panel, isin: str, disc_all: dict, actions=None) -> di
 
 
 def build_dataset(view: Panel, cfg: Config, *, calendar, rule_inputs_fn=None, listed_actions=None, progress=None,
-                  actions=None) -> Dataset:
+                  actions=None, benchmark_total_return_index=None) -> Dataset:
     """The opportunity set first (decision-time only), then features, then labels."""
     panel_days = set(view.sessions())
     if not panel_days:
@@ -192,7 +192,8 @@ def build_dataset(view: Panel, cfg: Config, *, calendar, rule_inputs_fn=None, li
         disc = disc_all.get(isin, {})
         feats[isin] = features.stock_feature_rows(series, hist["bad_days"], hist["return_factors"], hist["level_factors"])
         data[isin] = {"bars": {b.day: b for b in view.bars(isin)}, "factors": view.implied_factors(isin),
-                      "unchecked": unchecked, "index": index, "disc": disc}
+                      "unchecked": unchecked, "index": index, "disc": disc,
+                      "benchmark_total_return_index": benchmark_total_return_index}
         if progress and n % 100 == 0:
             progress(f"features {n}/{len(isins)}")
     breadth = features.breadth_50({d: s.isins for d, s in universe.items()}, closes, sessions)
@@ -321,6 +322,21 @@ def run_fold(ds: Dataset, fold: dict, cfg: Config, trial_id: str, view: Panel, l
                  "y_abs": o["label"].gross_log, "idx": o["label"].index_log} for o, y in zip(train, ys)]
     model = forecast.fit(fit_rows, h=cfg.h, target_id=f"{cfg.candidate}.h{cfg.h}.v2", lam_grid=cfg.lam_grid, sessions=s,
                          bootstrap=cfg.bootstrap, seed=cfg.seed)
+    abs_fit_rows = [{**r, "y": o["label"].total_return_log}
+                    for r, o in zip(fit_rows, train)
+                    if math.isfinite(o["label"].total_return_log)]
+    absolute_model = forecast.fit(
+        abs_fit_rows, h=cfg.h, target_id=f"{cfg.candidate}.h{cfg.h}.absolute_total_return.v1",
+        lam_grid=cfg.lam_grid, sessions=s, bootstrap=cfg.bootstrap, seed=cfg.seed,
+    ) if len({r["day"] for r in abs_fit_rows}) >= 50 else None
+    rel_fit_rows = [{**r, "y": o["label"].relative_total_return}
+                    for r, o in zip(fit_rows, train)
+                    if o["label"].relative_total_return is not None
+                    and math.isfinite(o["label"].relative_total_return)]
+    relative_model = forecast.fit(
+        rel_fit_rows, h=cfg.h, target_id=f"{cfg.candidate}.h{cfg.h}.benchmark_relative_total_return.v1",
+        lam_grid=cfg.lam_grid, sessions=s, bootstrap=cfg.bootstrap, seed=cfg.seed,
+    ) if len({r["day"] for r in rel_fit_rows}) >= 50 else None
     preds, fcs = [], {}
     abstained = sum(1 for o in ds.opportunities if test_lo <= o["day"] <= test_hi and o["missing"])
     for o in test:
@@ -330,7 +346,10 @@ def run_fold(ds: Dataset, fold: dict, cfg: Config, trial_id: str, view: Panel, l
         p = forecast.predict(model, o["x"], o["sigma"])
         if "abstain" in p:
             return {"fold": fold_dates, "skipped": p["abstain"], "calibration_n": model.calibration_n}
-        preds.append(dict(p, day=o["day"], isin=o["isin"], label=o["label"]))
+        abs_p = forecast.predict(absolute_model, o["x"], o["sigma"]) if absolute_model else None
+        rel_p = forecast.predict(relative_model, o["x"], o["sigma"]) if relative_model else None
+        preds.append(dict(p, day=o["day"], isin=o["isin"], label=o["label"],
+                          absolute_prediction=abs_p, relative_prediction=rel_p))
         z = model.z_sorted
         fcs.setdefault(o["day"], {})[o["isin"]] = dict(
             p, ref_close=o["ref_close"], symbol=o["symbol"], median_value=o["median_value"],
@@ -366,7 +385,11 @@ def run_fold(ds: Dataset, fold: dict, cfg: Config, trial_id: str, view: Panel, l
               "median_value": feats[(pr["day"], pr["isin"])].get("median_value"),
               "ref_close": feats[(pr["day"], pr["isin"])].get("ref_close")} for pr in preds]
     bper = baselines.fold_periods(brows, s, ts, te, cfg.h, policy, seed=cfg.seed, max_gap=cfg.execution.max_entry_gap)
-    return {"fold": fold_dates, "trial_id": trial_id, "model": model.to_json(), "n_train": len(train),
+    return {"fold": fold_dates, "trial_id": trial_id, "model": model.to_json(),
+            "absolute_model": absolute_model.to_json() if absolute_model else None,
+            "relative_model": relative_model.to_json() if relative_model else None,
+            "relative_model_status": ("AVAILABLE" if relative_model else "BENCHMARK_TOTAL_RETURN_UNAVAILABLE"),
+            "n_train": len(train),
             "n_test": len(test), "metrics": metrics, "simulation": {k: v for k, v in sim.items() if k != "events"},
             "events_sample": sim["events"][:200], "stresses": stresses, "evidence": evidence,
             "baselines_periods": bper}

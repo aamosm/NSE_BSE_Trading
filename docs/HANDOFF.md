@@ -39,6 +39,28 @@ prediction-only evaluation/export, capital/K/cost invariance against the real
 model fit, and the six-horizon walk-forward evaluation. No live trading
 capability was added.
 
+## Next phase checkpoint — total-return label boundary
+
+The label layer now exposes an independent absolute total-return target without
+changing Baseline V1's legacy price-return fields:
+
+- listed dividend cash is carried through split/bonus normalization and added
+  to the exit value per original entry share;
+- `Label.total_return` and `Label.total_return_log` are cost-free economic
+  returns, while `gross`/`gross_log` remain the price-only compatibility
+  fields;
+- a separately supplied point-in-time benchmark total-return series produces
+  `benchmark_total_return_log` and `relative_total_return`; no price-index
+  drift is substituted when that series is absent;
+- `evaluate.build_dataset` accepts that benchmark series explicitly, and each
+  fold can fit an independent absolute model plus an independent
+  benchmark-relative model when the target data is available. The allocator
+  still consumes only the legacy execution forecast.
+
+Focused validation passed for dividend labels, corporate-action reconciliation,
+the quant pipeline and prediction contracts. The full suite remains the next
+verification gate after this checkpoint.
+
 ## State on 7 Nov 2026 (Claude Opus 5.5, branch `main`) — read this section first
 
 **Data.** Panel 1 Jan 2016 → 6 Nov 2026: 2,688 sessions, 4,795 securities (delisted included), zero calendar gaps;
