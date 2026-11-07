@@ -74,7 +74,9 @@ class Policy:
         K = tier.K if saved.get("K") is None else int(saved["K"])
         cap = tier.cap_fraction if saved.get("cap_fraction") is None else float(saved["cap_fraction"])
         reserve = 0.20 if saved.get("reserve_fraction") is None else float(saved["reserve_fraction"])
-        return Policy(W, reserve_fraction=reserve, cap_fraction=cap, K=K, gamma=2.0 / (m * W))
+        edge = 0.001 if saved.get("min_edge") is None else float(saved["min_edge"])
+        tail = 0.08 if saved.get("tail_limit") is None else float(saved["tail_limit"])
+        return Policy(W, reserve_fraction=reserve, cap_fraction=cap, K=K, gamma=2.0 / (m * W), min_edge=edge, tail_limit=tail)
 
     def to_json(self) -> dict:
         return {"W": self.W, "reserve_fraction": self.reserve_fraction, "cap_fraction": self.cap_fraction, "K": self.K,

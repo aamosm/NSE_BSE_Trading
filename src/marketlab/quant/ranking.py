@@ -230,7 +230,8 @@ def classify(card: dict, policy: allocate.Policy) -> tuple[str, list[str]]:
     return "HOLD_OFF", ["EDGE_BELOW_COST"] + (["LEANS_NEGATIVE"] if fc["mu_shrunk"] < 0 else ["LEANS_POSITIVE"])
 
 
-def policy_for_capital(saved: dict, capital: float) -> allocate.Policy:
+def policy_for_capital(saved: dict, capital: float, *, min_edge: float | None = None,
+                       tail_limit: float | None = None) -> allocate.Policy:
     """The same owner policy at a different capital. Fractions and K come from the spec 5.4 tier for the new
     capital unless the stored policy already departed from its own tier (an explicit owner override, which is
     kept); gamma follows 2/W; min_edge and tail_limit are spec-fixed and never scale."""
@@ -242,13 +243,14 @@ def policy_for_capital(saved: dict, capital: float) -> allocate.Policy:
     m = (2.0 / w0) / g0 if g0 > 0 else 1.0  # the owner's risk multiplier, recovered from gamma = 2/(mW)
     return allocate.Policy(float(capital), reserve_fraction=float(saved.get("reserve_fraction", 0.20)),
                            cap_fraction=capf, K=k, gamma=2.0 / (m * float(capital)),
-                           min_edge=float(saved.get("min_edge", 0.001)), tail_limit=float(saved.get("tail_limit", 0.08)))
+                           min_edge=float(min_edge if min_edge is not None else saved.get("min_edge", 0.001)),
+                           tail_limit=float(tail_limit if tail_limit is not None else saved.get("tail_limit", 0.08)))
 
 
 RESTATE_BASIS = "RESTATED_GREEDY_NO_CORRELATION"
 
 
-def restate(body: dict, capital: float) -> dict:
+def restate(body: dict, capital: float, *, min_edge: float | None = None, tail_limit: float | None = None) -> dict:
     """The same day's ranking read at a different capital, from the stored forecasts alone: no refit happens,
     because capital changes only the whole-share quantity, the exact charges, the gates and the allocation.
 
@@ -261,7 +263,7 @@ def restate(body: dict, capital: float) -> dict:
     This body is never written as an artifact: it has no digest and no path."""
     if body.get("status") != "RANKED" or not body.get("stocks"):
         return dict(body, restated={"capital": float(capital), "basis": "NOT_RANKED", "changed": 0})
-    policy = policy_for_capital(body.get("policy") or {}, capital)
+    policy = policy_for_capital(body.get("policy") or {}, capital, min_edge=min_edge, tail_limit=tail_limit)
     cap = min(policy.cap_fraction * policy.W, policy.W * (1 - policy.reserve_fraction))
     old_rule = (body.get("screen_policy") or {}).get("price_max")  # artifacts before E21 screened on price
     price_max = policy.W * 0.5 if old_rule is not None else float("inf")
@@ -329,6 +331,9 @@ def restate(body: dict, capital: float) -> dict:
     new["restated"] = {"capital": float(policy.W), "from_capital": float((body.get("policy") or {}).get("W") or 0),
                        "from_digest": body.get("digest"), "from_day": body.get("day"), "basis": RESTATE_BASIS,
                        "priced_out": priced_out, "newly_eligible_needs_run": newly,
+                       "min_edge": policy.min_edge, "tail_limit": policy.tail_limit,
+                       "from_min_edge": (body.get("policy") or {}).get("min_edge"),
+                       "from_tail_limit": (body.get("policy") or {}).get("tail_limit"),
                        "note": "Costs, gates and classes recomputed at this capital from the stored forecasts; "
                                "the model was not refitted. Selection is greedy by net edge, not the "
                                "correlation-aware allocator, and P(beats costs) is unavailable here."}

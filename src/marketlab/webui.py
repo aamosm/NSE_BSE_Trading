@@ -132,7 +132,8 @@ const CLASS_ORDER = ["BUY_CANDIDATE", "QUALIFIES", "HOLD_OFF", "HIGH_RISK", "AVO
 const CLASS_ICON = { BUY_CANDIDATE: "▲", QUALIFIES: "●", HOLD_OFF: "○", HIGH_RISK: "!", AVOID: "✕", NO_FORECAST: "?", INELIGIBLE: "–" };
 const CLASS_FILL = { BUY_CANDIDATE: "var(--good)", QUALIFIES: "var(--s3)", HOLD_OFF: "var(--line2)", HIGH_RISK: "var(--warn)", AVOID: "var(--bad)", NO_FORECAST: "var(--muted)", INELIGIBLE: "var(--line)" };
 let STOCKS = null, CLASSES = {};
-const SV = { show: new Set(["BUY_CANDIDATE", "QUALIFIES", "HOLD_OFF", "HIGH_RISK", "AVOID", "NO_FORECAST"]), q: "", sort: "rank", limit: 150, capital: null };
+const SV = { show: new Set(["BUY_CANDIDATE", "QUALIFIES", "HOLD_OFF", "HIGH_RISK", "AVOID", "NO_FORECAST"]), q: "", sort: "rank", limit: 150, capital: null, min_edge: null, tail_limit: null };
+function stocksQuery() { const p = []; for (const k of ["capital", "min_edge", "tail_limit"]) if (SV[k] != null) p.push(k + "=" + encodeURIComponent(SV[k])); return p.length ? "?" + p.join("&") : ""; }
 function classTitle(c) { return (CLASSES[c] && CLASSES[c].title) || c; }
 function badge(c) { const b = el("span", null, "badge cls-" + c); b.append(el("span", CLASS_ICON[c] || "", "ic"), el("span", classTitle(c))); return b; }
 const SORTS = {
@@ -148,7 +149,10 @@ const SORTS = {
 };
 function capitalBar(r) {
   // Read the same day at another capital: the server restates costs, gates and calls from the stored forecasts.
-  const c = card("Capital used for these calls"), row = el("div", null, "toolbar");
+  const c = card("Capital and limits used for these calls (filters: the forecasts never change)"), row = el("div", null, "toolbar");
+  const pol0 = r.policy || {};
+  const edgeIn = el("input"); edgeIn.type = "number"; edgeIn.min = "0"; edgeIn.max = "5"; edgeIn.step = "0.05"; edgeIn.value = (100 * (pol0.min_edge ?? 0.001)).toFixed(2); edgeIn.setAttribute("aria-label", "Minimum edge in percent");
+  const tailIn = el("input"); tailIn.type = "number"; tailIn.min = "1"; tailIn.max = "100"; tailIn.step = "0.5"; tailIn.value = (100 * (pol0.tail_limit ?? 0.08)).toFixed(1); tailIn.setAttribute("aria-label", "Tail limit, percent of capital");
   const inp = el("input"); inp.type = "number"; inp.min = "1000"; inp.max = "100000000"; inp.step = "1000";
   inp.value = String(Math.round((r.policy || {}).W || 10000)); inp.setAttribute("aria-label", "Capital in rupees");
   const go = el("button", "Apply", "button small primary"); go.type = "button";
@@ -156,11 +160,14 @@ function capitalBar(r) {
     const w = Number(inp.value);
     if (!(w >= 1000 && w <= 100000000)) { alert("Capital must be between ₹1,000 and ₹10,00,00,000."); return; }
     go.disabled = true; go.textContent = "Recomputing…";
-    SV.capital = w; STOCKS = await get("/api/stocks?capital=" + encodeURIComponent(w)); renderStocks();
+    const e = Number(edgeIn.value) / 100, tl = Number(tailIn.value) / 100;
+    if (!(e >= 0 && e <= 0.05) || !(tl >= 0.01 && tl <= 1)) { alert("Minimum edge must be 0-5% and the tail limit 1-100% of capital."); go.disabled = false; go.textContent = "Apply"; return; }
+    SV.capital = w; SV.min_edge = e; SV.tail_limit = tl; STOCKS = await get("/api/stocks" + stocksQuery()); renderStocks();
   };
   go.addEventListener("click", apply);
   inp.addEventListener("keydown", (e) => { if (e.key === "Enter") apply(); });
-  row.append(inp, go);
+  const lab = (t, i) => { const l = el("label", t, "muted"); l.append(" ", i); return l; };
+  row.append(inp, lab("min edge %", edgeIn), lab("tail limit % of capital", tailIn), go);
   for (const w of [3000, 10000, 30000, 100000]) {
     const b = el("button", money(w), "button small"); b.type = "button";
     b.addEventListener("click", () => { inp.value = String(w); apply(); });
@@ -212,7 +219,7 @@ function topTen(r, pol) {
 }
 async function renderStocks(force) {
   const t = tab("stocks");
-  if (!STOCKS || force) { t.append(el("p", "Loading the ranking…", "muted")); STOCKS = await get("/api/stocks" + (SV.capital ? "?capital=" + encodeURIComponent(SV.capital) : "")); t.replaceChildren(); }
+  if (!STOCKS || force) { t.append(el("p", "Loading the ranking…", "muted")); STOCKS = await get("/api/stocks" + stocksQuery()); t.replaceChildren(); }
   const d = STOCKS; CLASSES = d.classes || {};
   if (!d.ranking) {
     const c = card("No ranking yet"); c.append(el("p", d.hint || "Run the ranking first.", "muted"));

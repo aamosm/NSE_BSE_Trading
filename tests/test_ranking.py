@@ -220,3 +220,28 @@ def test_restate_selects_among_passing_stocks_while_ineligible_cards_have_no_all
     got = next(s for s in out["stocks"] if s["isin"] == strong["isin"])
     assert got["class"] == "BUY_CANDIDATE" and got["allocation"]["selected"]
     assert out["counts"]["BUY_CANDIDATE"] <= out["policy"]["K"]
+
+
+def test_limits_are_owner_filters_that_move_calls_but_never_forecasts(built, tmp_path):
+    from marketlab import service
+    p, root, r = built
+    strict = ranking.restate(r, 10_000.0, tail_limit=0.02)
+    loose = ranking.restate(r, 10_000.0, tail_limit=0.50)
+    assert strict["policy"]["tail_limit"] == 0.02 and loose["restated"]["tail_limit"] == 0.50
+    by = lambda o: {s["isin"]: s for s in o["stocks"]}  # noqa: E731
+    a, b = by(strict), by(loose)
+    hr = lambda o: sum(1 for s in o["stocks"] if s["class"] == "HIGH_RISK")  # noqa: E731
+    assert hr(loose) <= hr(strict)  # a looser loss limit can only move stocks out of high risk
+    for isin, s in a.items():
+        if "forecast" in s:
+            assert s["forecast"] == b[isin]["forecast"]  # filters never touch the model
+    higher_edge = ranking.restate(r, 10_000.0, min_edge=0.05)
+    assert all(s["class"] not in ("BUY_CANDIDATE", "QUALIFIES") for s in higher_edge["stocks"]
+               if "forecast" in s and s["forecast"]["mu_shrunk"] - (s["costs"]["cost_fraction"] or 0) < 0.05)
+    pol = service.set_policy(tmp_path, {"min_edge": 0.002, "tail_limit": 0.12})
+    eff = service.effective_policy(tmp_path, pol)
+    assert (eff.min_edge, eff.tail_limit) == (0.002, 0.12) and eff.digest() != service.effective_policy(
+        tmp_path, dict(pol, tail_limit=0.08)).digest()  # a changed limit is a different, recorded policy
+    import pytest as _pt
+    with _pt.raises(ValueError):
+        service.set_policy(tmp_path, {"tail_limit": 5.0})

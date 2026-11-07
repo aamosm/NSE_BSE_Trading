@@ -343,7 +343,7 @@ async function renderControls() {
   const lg = el("a", "Log in to Kite", "button"); lg.href = "/login/start"; an.append(el("p", "Login opens Zerodha's own page; your password is typed there, never here.", "muted"), lg);
   const pc = card("Policy (bounded; stored in the private folder; persisted with every decision and ranking)", "wide"); g.append(pc);
   const f = el("form", null, "policy"); const P = cfg.policy, B = cfg.bounds, E = cfg.policy_effective, N = cfg.nullable || [];
-  const fields = [["capital", "Capital ₹"], ["K", "Max positions K"], ["cap_fraction", "Per-stock cap (fraction)"], ["reserve_fraction", "Cash reserve (fraction)"], ["v_min_crore", "Min median traded value (₹ crore)"], ["risk_multiplier", "Risk multiplier (1 = half-Kelly)"]];
+  const fields = [["capital", "Capital ₹"], ["K", "Max positions K"], ["cap_fraction", "Per-stock cap (fraction)"], ["reserve_fraction", "Cash reserve (fraction)"], ["v_min_crore", "Min median traded value (₹ crore)"], ["risk_multiplier", "Risk multiplier (1 = half-Kelly)"], ["min_edge", "Minimum edge (fraction: 0.001 = 0.1%)"], ["tail_limit", "Tail limit (fraction of capital: 0.08 = 8%)"]];
   const inputs = {};
   for (const [k, label] of fields) { const l = el("label", label + " [" + B[k][0] + "–" + B[k][1] + "]" + (N.includes(k) ? "; empty = spec default (" + E[k] + ")" : "")); const i = el("input"); i.type = "number"; i.step = "any"; i.value = P[k] == null ? "" : P[k]; inputs[k] = i; l.append(i); f.append(l); }
   const cl = el("label", "Candidate"); const cs = el("select");

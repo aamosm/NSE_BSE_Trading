@@ -548,14 +548,17 @@ class RankingCache:
         return self.body
 
 
-def stocks_view(app, capital: float | None = None) -> dict:
+def stocks_view(app, capital: float | None = None, min_edge: float | None = None, tail_limit: float | None = None) -> dict:
     from . import explain
     r = app.rankings.latest(app.root)
     if r is None:
         return {"ranking": None, "hint": "No ranking yet: Controls -> Run a job -> Rank stocks, or `marketlab rank`."}
-    if capital is not None and abs(capital - float((r.get("policy") or {}).get("W") or 0)) > 0.005:
-        from .quant import ranking as qranking
-        r = qranking.restate(r, capital)
+    pol0 = r.get("policy") or {}
+    differs = lambda v, k: v is not None and abs(v - float(pol0.get(k) or 0)) > 1e-9  # noqa: E731
+    if differs(capital, "W") or differs(min_edge, "min_edge") or differs(tail_limit, "tail_limit"):
+        from .quant import ranking as qranking  # filters: costs, gates and calls recomputed; forecasts unchanged
+        r = qranking.restate(r, capital if capital is not None else float(pol0.get("W") or 10_000.0),
+                             min_edge=min_edge, tail_limit=tail_limit)
     meta = {k: r.get(k) for k in ("version", "day", "entry_session", "status", "counts", "h", "candidate", "validation",
                                   "universe", "policy", "created_at", "digest", "forward", "integrity", "artifact", "market",
                                   "screen_policy", "restated")}
@@ -748,14 +751,17 @@ def make_handler(app: App):
                 if path == "/api/requests":
                     return self._json(200, _jsonable(requests_view(app.root)))
                 if path == "/api/stocks":
-                    cap = q.get("capital", [""])[0]
-                    try:  # out-of-range or unparseable: the saved policy's capital, never a silent other number
-                        w = float(cap) if cap else None
-                        if w is not None and not 1000.0 <= w <= 1e8:
-                            w = None
-                    except ValueError:
-                        w = None
-                    return self._json(200, _jsonable(stocks_view(app, w)))
+                    def bounded(key, name):  # out of range or unparseable: the ranking's own value, never another
+                        raw = q.get(name, [""])[0]
+                        try:
+                            v = float(raw) if raw else None
+                        except ValueError:
+                            return None
+                        lo, hi = service.POLICY_BOUNDS[key]
+                        return v if v is not None and lo <= v <= hi else None
+                    return self._json(200, _jsonable(stocks_view(app, bounded("capital", "capital"),
+                                                                 bounded("min_edge", "min_edge"),
+                                                                 bounded("tail_limit", "tail_limit"))))
                 if path == "/api/stock":
                     return self._json(200, stock_detail(app, q.get("isin", [""])[0]))
                 if path == "/api/how":

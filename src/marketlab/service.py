@@ -91,9 +91,12 @@ POLICY_FILE = "policy.json"
 # K and cap_fraction default to None: the spec 5.4 tier for the capital applies until the owner sets a value.
 POLICY_DEFAULTS = {"capital": 10000.0, "K": None, "cap_fraction": None, "reserve_fraction": 0.2, "v_min_crore": 0.0,
                    "h": 20, "candidate": "A", "symbols": [], "families": {"A": True, "B": False, "C": False},
-                   "risk_multiplier": 1.0}
+                   "risk_multiplier": 1.0, "min_edge": 0.001, "tail_limit": 0.08}
+# min_edge and tail_limit are owner filters (owner decision 2026-11-07), not fixed rules: every ranking and
+# evaluation records them in its policy digest, so a change is visible, never silent.
 POLICY_BOUNDS = {"capital": (1000.0, 1e8), "K": (1, 10), "cap_fraction": (0.05, 1.0), "reserve_fraction": (0.0, 0.9),
-                 "v_min_crore": (0.0, 1000.0), "h": (5, 250), "risk_multiplier": (0.25, 1.0)}
+                 "v_min_crore": (0.0, 1000.0), "h": (5, 250), "risk_multiplier": (0.25, 1.0),
+                 "min_edge": (0.0, 0.05), "tail_limit": (0.01, 1.0)}
 NULLABLE = {"K", "cap_fraction"}
 # Stored but not read by any job yet: the scheduler collects broker data for its --symbols argument.
 UNSUPPORTED_POLICY_KEYS = {"symbols": "stored only; the scheduler uses its --symbols argument"}
