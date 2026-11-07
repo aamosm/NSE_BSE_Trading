@@ -1,5 +1,30 @@
 # Handoff
 
+## State on 7 Nov 2026 (Claude Opus 5.5, branch `main`) — read this section first
+
+**Data.** Panel 1 Jan 2016 → 6 Nov 2026: 2,688 sessions, 4,795 securities (delisted included), zero calendar gaps;
+legacy bhavcopies parsed with field-for-field parity to UDiFF on the overlap days (`scripts/legacy_parity.py`); 8
+special weekend sessions found by probing; Nifty 50 levels on every session but 20 Jun 2016 (archive refused it).
+Kite: every NSE equity's daily candles (5.8M) — used to verify the corporate-action registry, 613/614 split/bonus
+factors agree (`scripts/kite_factor_check.py`; the one miss is Kite's). Panel backup before the load:
+`data/research/market/panel.before-legacy.sqlite3`.
+
+**Model and decisions.** Errata E19–E23 (two-part shrinkage with an out-of-sample cap; tail gate on capital using the
+stock's own return; every EQ/BE share analysed); the second external review (docs/audit/REVIEW_2026-11-07.md): the
+allocation pool uses the gates at the real quantity, every qualifying card shows its allocator utility against cash,
+one portfolio bad-month budget, limits (min edge, tail) are owner filters. Open owner decision: objective
+benchmark-relative (current) vs absolute-return (adds expected market drift; it turns the two 6 Nov qualifiers into buys).
+
+**Testing.** Stages 1–4 built (BACKTEST_PLAN §0): `scripts/independent_check.py` (1,807 cards × 11 checks, 0
+disagreements), walk-forward with baselines (model vs momentum vs 200 random vs Nifty, block-bootstrap CIs) and
+strategy metrics, write-once forward outcomes. Extra criteria C1–C9 registered before any result (§0b). **Holdout
+frozen** 4 Nov 2025 → 6 Nov 2026 (contamination stated in §0). The first registered walk-forward (A, h=20) is running:
+`data/research/evaluate-A-h20.log`; its report lands in `data/research/runs/eval/`.
+
+**Next.** docs/PROMPTS_NEXT.md (five ready prompts with models) and docs/ROADMAP_NEXT.md. Owner-only: register the
+nightly task (`scripts/daily_update.cmd`), Kite logins, the objective decision, cleanup commands in
+docs/audit/AUDIT_BRIEF.md's predecessor message (remote branches, two redundant folders).
+
 ## Research ranking, explanations and AI commentary (Claude Opus 5.5, 5 Nov 2026, branch `research-ranking` on `2909474`)
 
 Worktree `C:\Users\d_hru\try\tradebot\marketlab-integrity`. Research data lives in `data/research/` (git-ignored):
