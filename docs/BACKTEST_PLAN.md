@@ -9,6 +9,29 @@ stock parts (E19), split-conformal intervals, exact costs, two gates with the ta
 
 ---
 
+## 0. The four stages, and what already runs (7 Nov 2026)
+
+An external review proposed a four-stage test. Three stages are built and run in code; the fourth accumulates by
+itself once the nightly job is registered. The 1,000-trial replay below (sections 2–9) is the extended diagnostic
+layer on top of them: random as-of dates, cohorts and ablations.
+
+| Stage | Question | Where it runs | Status |
+|---|---|---|---|
+| 1. Maths reproduced independently | Does every number on a card follow from its inputs? | `scripts/independent_check.py` (imports nothing from the app; Zerodha rates re-read from zerodha.com/charges) | **Run:** 1,807 cards of the 6 Nov ranking × 11 checks, 0 disagreements. Re-run on every new ranking |
+| 2. Historical walk-forward | With only what was knowable, after each close, entering at the next open: what happened? | `marketlab evaluate` (`quant/evaluate.py`): purge by each label's actual exit date plus an h-session embargo; dated universe (bhavcopy, so delisted stocks included); EXEC.v1 fills at the next open within the gap limit; exact charges; settlement; stresses (costs ×2, slippage ×2, one session late, best 5% removed); DSR, PBO, MinTRL | **Built.** Needs the frozen holdout and the extended panel (2016–2026, loading now) |
+| 3. Does it make money, and beat simple rules? | Net profit, win rate, mean/median trade, drawdown, Sharpe, Sortino, profit factor, turnover, costs; against Nifty, random and momentum | `quant/baselines.py` inside every fold + `strategy_metrics` for the full strategy: same universe, dates, entry/exit opens and cost engine; model top-K vs 12-1 momentum top-K vs 200 random portfolios vs the Nifty 50; moving-block bootstrap CI on each difference | **Built** (report keys `baselines`, `strategy_metrics`). Benchmark is the price index: dividends are excluded on both sides until H-CA1; a TRI comparison needs dividend-adjusted labels |
+| 4. Frozen forward predictions | What did it believe before the outcome, and was it right? | Write-once rankings (digest, created-before-the-open check) + write-once outcome files `runs/forward/<day>/<digest>.json`: every prediction beside the actual next-open entry, exit, own/excess/net returns, range coverage, IC | **Built.** Accumulates nightly once `scripts/daily_update.cmd` is scheduled (owner) |
+
+**Holdout contamination, stated before it is frozen (7 Nov 2026).** The spec seals the last 250 sessions (about
+Nov 2025–Nov 2026). The diagnosis behind errata E19–E23 looked at data inside that window (the Jul–Oct 2026
+calibration window and the 5–6 Nov rankings), so design choices were informed by part of it. A holdout pass is
+therefore weaker evidence than the spec intends. The 2016–2025 history behind the development folds was never looked
+at before the evaluation runs; the forward record (stage 4) is the clean, decisive test.
+
+Multiple testing: the walk-forward is one registered trial per configuration (trial ids now include seed,
+bootstrap, step, holdout and benchmark: audit fix 87ce283); the DSR deflates by the number of registered trials and
+PBO estimates overfitting across them. Baseline comparisons are diagnostics inside one trial, not extra trials.
+
 ## 1. Where the evidence stands (6 Nov 2026)
 
 **The arithmetic is exact.** All 801 forecast stocks of the 5 Nov ranking reproduce from the stored model with zero
