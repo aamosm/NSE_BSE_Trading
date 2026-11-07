@@ -198,7 +198,9 @@ def build_dataset(view: Panel, cfg: Config, *, calendar, rule_inputs_fn=None, li
     nan_stock = {f: float("nan") for f in features.STOCK_FEATURES}
     nan_mkt = {f: float("nan") for f in features.MARKET_FEATURES}
     opps, counts, fmiss = [], {}, 0
-    for d in decision_days:
+    for n_day, d in enumerate(decision_days):
+        if progress and n_day % 250 == 0:
+            progress(f"labels {n_day}/{len(decision_days)} decision days, {len(opps)} opportunities")
         u = universe[d]
         if not u.isins:
             continue
@@ -651,7 +653,12 @@ def walk_forward(panel: Panel, cfg: Config, *, runs: Path, calendar, rule_inputs
     ds = build_dataset(view, cfg, calendar=calendar, rule_inputs_fn=rule_inputs_fn, listed_actions=listed_actions, actions=actions,
                        progress=progress)
     listed = (lambda isin, d: d in (listed_actions(isin) or set())) if listed_actions else None
-    results = [run_fold(ds, f, cfg, trial_id, view, listed, actions) for f in folds(ds.sessions, cfg, hs)]
+    plan_ = folds(ds.sessions, cfg, hs)
+    results = []
+    for i, f in enumerate(plan_, 1):
+        if progress:
+            progress(f"fold {i}/{len(plan_)}: test {ds.sessions[f['test_start']]} -> {ds.sessions[f['test_end']]}")
+        results.append(run_fold(ds, f, cfg, trial_id, view, listed, actions))
     report = summarize(results, cfg, ds, trial_id)
     report.update(candidate_spec=candidates.describe(spec, cfg.ablate), policy=cfg.effective_policy().to_json(),
                   policy_digest=cfg.effective_policy().digest(), execution=cfg.execution.to_json(),
