@@ -333,6 +333,15 @@ function renderStockSheet(body, d) {
     const c1 = card("Forecast range vs what a buy needs"); c1.append(rangeChart(c, rk.policy || {}), el("p", "Shaded: where 80% of outcomes fell in calibration. Dot: the shrunk forecast used for decisions (hollow: raw forecast). Dashed lines: the buy threshold (cost + minimum edge), the avoid threshold, and the lowest 10% outcome the tail gate accepts.", "muted")); charts.append(c1);
     const c2 = card("What drives the forecast"); c2.append(contributionChart(c), el("p", "Each bar is one feature's contribution (coefficient × today's rank). Blue raises the forecast, red lowers it; signs are printed. The common part is the same for every stock today.", "muted")); charts.append(c2);
     const c3 = card("Where a round trip's cost goes"); c3.append(costBar(costs)); charts.append(c3);
+    const ut = (c.allocation || {}).utility;
+    if (ut && ut.utility != null) {
+      const c4 = card("Why the allocator buys it or keeps cash");
+      c4.append(el("p", "The allocator scores every whole-share quantity: expected net gain after variable costs, minus the fixed DP fee, minus a risk penalty that grows with the square of the position (γ/2 × (value × σ)², half-Kelly). Cash scores ₹0.", "muted"));
+      c4.append(table(["Best quantity", "Value", "Expected net ₹", "DP fee ₹", "Risk penalty ₹", "Utility ₹", "Cash ₹"],
+        [[ut.q, money(ut.value), ut.expected_net_rupees.toFixed(2), ut.dp_fee.toFixed(2), ut.risk_penalty.toFixed(2), ut.utility.toFixed(2), "0.00"]]));
+      c4.append(el("p", ut.prefers_cash ? "Utility is below zero at every quantity, so holding cash is the rational choice. The forecast is a return against the Nifty and assumes no market return; under an absolute-return objective the answer can differ (see How it works)." : "Utility is positive at this quantity: the allocator would hold it if cash, the position limit and the portfolio loss budget allow.", "muted"));
+      charts.append(c4);
+    }
   }
   const c4 = card("Price over the last year (" + c.symbol + " vs Nifty 50)"); c4.append(priceChart(d.prices || {}, c.symbol)); charts.append(c4);
   if (d.insights && d.insights.length) {

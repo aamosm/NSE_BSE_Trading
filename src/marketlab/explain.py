@@ -130,6 +130,9 @@ CLASS_INFO = {
 REASON_TEXT = {
     "PASSES_GATES_AND_ALLOCATOR": "Passes the edge and tail gates at its whole-share quantity and was chosen by the allocator.",
     "NOT_SELECTED_K_LIMIT": "Passes the gates, but all K position slots went to stocks with a better risk-adjusted net edge.",
+    "ALLOCATOR_PREFERS_CASH": "Passes both gates, but at every whole-share quantity its expected net gain is smaller "
+                              "than the fixed DP fee plus the risk penalty, so holding cash scores higher (see the "
+                              "allocator utility on the card).",
     "NOT_IN_TOP_10_POOL": "Passes the gates, but only the 10 best net edges are considered for allocation.",
     "NOT_SELECTED_PORTFOLIO_FIT": "Passes the gates, but adding it did not improve the portfolio objective (cash, cap or correlation).",
     "NOT_SELECTED": "Passes the gates but was not selected.",
@@ -211,9 +214,14 @@ def glossary() -> dict:
                    "adjustment for its own uncertainty."},
         "se": {"term": "Standard error (bootstrap)", "plain": "How much μ̂ changes when the model is refitted 50 times on "
                "resampled blocks of past dates. Large se = the model is unsure about this particular stock."},
-        "shrinkage": {"term": "Shrunk forecast μ̃", "plain": "μ̂ pulled toward zero in proportion to its uncertainty: "
-                      "μ̃ = μ̂ × τ² / (τ² + se²) with τ = 0.5% (the size of real edges we expect over 20 sessions). "
-                      "Decisions use μ̃, never μ̂.", "formula": "μ̃ = μ̂ × τ²/(τ² + se²)"},
+        "shrinkage": {"term": "Shrunk forecast μ̃", "plain": "μ̂ has two parts: a market-timing part (the intercept and "
+                      "the four market features, the same for every stock on a day) and a stock-specific part. Each is "
+                      "pulled toward zero by its own uncertainty, f = τ²/(τ² + se²) with se from 50 block-bootstrap refits "
+                      "over dates and τ = 0.5% (the spec's prior for real 20-session edges: about IC 0.045 × an 11% typical "
+                      "move; robustness to τ = 0.25–1% is hypothesis H5). The stock factor is further capped by the "
+                      "out-of-sample slope of realized on predicted differences between stocks. μ̃ can exceed μ̂ when an "
+                      "uncertain negative market part offsets a reliable positive stock part. Decisions use μ̃, never μ̂.",
+                      "formula": "μ̃ = f_c × μ̂_common + min(f_s, slope) × μ̂_stock"},
         "sigma_hat": {"term": "Typical move σ̂", "plain": "The stock's 20-session volatility scaled to the horizon "
                       "(vol_20 × √h): roughly how big a normal move over the horizon is."},
         "interval": {"term": "10% / 50% / 90% outcomes", "plain": "A range for the excess return from split-conformal "
@@ -242,9 +250,15 @@ def glossary() -> dict:
                       "quantity the cap allows."},
         "tail_gate": {"term": "Tail gate", "plain": "(position ÷ capital) × (q10 - round-trip cost) ≥ -tail limit, at the same "
                       "quantity: a bad month in this one stock may not cost the account more than the limit."},
-        "allocator": {"term": "Allocator", "plain": "Chooses whole-share quantities across the stocks that pass both gates, "
-                      "maximising expected net rupees minus a risk penalty (γ/2 × portfolio variance, using correlations "
-                      "over 60 sessions), with at most K positions, a per-stock cap, a cash reserve and exact charges."},
+        "allocator": {"term": "Allocator", "plain": "Chooses whole-share quantities across the stocks that pass both gates "
+                      "at their real quantity, maximising expected net rupees minus a risk penalty (γ/2 × portfolio "
+                      "variance, correlations over 60 sessions; γ = 2/W is half-Kelly), with at most K positions, a "
+                      "per-stock cap, a cash reserve, exact charges, and one portfolio bad-month budget (the positions' "
+                      "bad months summed as if together must stay within the tail limit). Cash scores 0, so it can "
+                      "rationally choose nothing; each candidate's utility is shown on its card. Objective note: μ̃ is a "
+                      "return against the Nifty, so the utility assumes no market return (a benchmark-relative "
+                      "investor's view). An absolute-return investor would add the expected market return; that choice "
+                      "is the owner's."},
         "K": {"term": "K (positions)", "plain": "The most stocks held at once. The value comes from the selected capital's policy tier; "
                "for example, the default tier allows 2 positions at ₹10,000."},
         "cap": {"term": "Per-stock cap", "plain": "The most one position may be worth. It is derived from the selected capital's "
@@ -686,15 +700,25 @@ def how_it_works(ranking: dict | None) -> dict:
          "status": (f"trained on {m.get('train_rows')} rows over {m.get('train_days')} dates ({' → '.join(m.get('train', []))}); "
                     f"λ = {m.get('lam')}") if m else r.get("status", "not trained")},
         {"id": "uncertainty", "title": "8. Uncertainty", "what": glossary()["shrinkage"]["plain"] + " " + glossary()["interval"]["plain"],
-         "maths": "μ̃ = μ̂ τ²/(τ²+se²);  q_p = μ̂ + σ̂ z_p, z_p from calibration residuals (y-μ̂)/σ̂",
-         "status": f"{m.get('calibration_n')} calibration residuals ({' → '.join(m.get('calibration', []))}); "
-                   f"{m.get('bootstraps')} bootstrap refits" if m else "none"},
+         "maths": "μ̃ = f_c μ̂_common + min(f_s, slope) μ̂_stock,  f = τ²/(τ²+se²);  against the Nifty: q_p = μ̂ + σ̂ z_p "
+                  "(z from excess residuals);  your money: q_p^abs = μ̂ + σ̂ z_p^abs (z from the stock's own return minus "
+                  "the index's window mean: no market drift, no dividends yet)",
+         "status": (f"fit on {((m.get('dates') or {}).get('fit') or {}).get('count')} dates "
+                    f"({' → '.join(m.get('train', []))}), {(m.get('dates') or {}).get('purged_gap')} dates purged, "
+                    f"calibrated on {((m.get('dates') or {}).get('calibration') or {}).get('count')} dates "
+                    f"({' → '.join(m.get('calibration', []))}; {m.get('calibration_n')} residuals, which overlap and "
+                    f"share each day's market: far fewer independent observations); {m.get('bootstraps')} bootstrap "
+                    f"refits") if m else "none"},
         {"id": "costs", "title": "9. Costs", "what": glossary()["round_trip_cost"]["plain"],
          "maths": "cost(q) = [buy charges(q·P) + sell charges(q·P) + DP] / (q·P) + 2 × slippage"},
         {"id": "gates", "title": "10. Gates", "what": glossary()["edge_gate"]["plain"] + " " + glossary()["tail_gate"]["plain"],
+         "maths": "edge: μ̃ − cost(q) ≥ min_edge (against the Nifty);  tail: (q·P / W)(q10^abs − cost(q)) ≥ −L (money); "
+                  "portfolio: Σ_i (V_i/W)(q10_i^abs − cost_i) ≥ −L",
          "status": f"minimum edge {pct(pol.get('min_edge'), sign=False)}, tail limit {pct(pol.get('tail_limit'), sign=False)}"},
         {"id": "allocation", "title": "11. Allocation", "what": glossary()["allocator"]["plain"],
-         "maths": "max Σ[(μ̃_i - c_v - s_i)V_i - F·1(q_i>0)] - γ/2 Σ V_i V_j σ_i σ_j ρ_ij",
+         "maths": "max Σ[(μ̃_i − c_v − s_i)V_i − F·1(q_i>0)] − γ/2 Σ V_i V_j σ_i σ_j ρ_ij  (c_v: STT, exchange, SEBI, "
+                  "stamp, GST as one rate; F: the ₹15.34 DP fee; s_i: slippage both ways; each charged once — the "
+                  "gates use the exact rupee-rounded schedule at the chosen quantity)",
          "status": f"K = {pol.get('K')}, cap {rupees(pol.get('cap_rupees'), 0)}, reserve {rupees(pol.get('reserve_rupees'), 0)}, γ = {pol.get('gamma')}"},
         {"id": "classes", "title": "12. Classes", "what": "; ".join(f"{v['title']}: {v['rule']}" for v in CLASS_INFO.values()) + ".",
          "status": ", ".join(f"{k.replace('_', ' ').lower()} {n}" for k, n in (r.get("counts") or {}).items())},

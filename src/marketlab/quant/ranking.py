@@ -400,7 +400,8 @@ def build(panel, cfg: evaluate.Config, *, root: Path, calendar, rule_inputs_fn=N
     all_today = {o["isin"]: o for o in fit.get("today_all", [])} if model else {o["isin"]: o for o in ds.opportunities if o["day"] == day}
     todays = fit.get("todays", {}) if body["status"] == "RANKED" else {}
     cands = {i: replay.candidate_for(i, fc, cfg.execution) for i, fc in todays.items()}
-    passing = [c for c in cands.values() if allocate.entry_gate(c, policy)[0]]
+    invest = policy.W * (1 - policy.reserve_fraction)
+    passing = [c for c in cands.values() if allocate.qualifies(c, policy, invest)]  # gates at the real quantity
     plan = {"quantities": {}, "positions": {}}
     if passing:
         passing.sort(key=lambda c: -(c.mu - allocate.VARIABLE_ROUND_TRIP - c.slippage))
@@ -460,8 +461,12 @@ def build(panel, cfg: evaluate.Config, *, root: Path, calendar, rule_inputs_fn=N
         pos = plan.get("positions", {}).get(isin)
         card["allocation"] = {"selected": bool(sel), "q": sel, "value": _f(pos["value"], 2) if pos else None,
                               "costs_at_plan_q": {k: _f(pos[k]) for k in ("cost_fraction", "net_edge")} if pos else None}
+        if not reasons_q:
+            card["allocation"]["utility"] = allocate.standalone_utility(c, policy, invest)
         if not sel and not reasons_q:
-            card["allocation"]["why_not"] = ("NOT_SELECTED_K_LIMIT" if len(selected) >= policy.K else
+            util = card["allocation"]["utility"]
+            card["allocation"]["why_not"] = ("ALLOCATOR_PREFERS_CASH" if util["prefers_cash"] else
+                                             "NOT_SELECTED_K_LIMIT" if len(selected) >= policy.K else
                                              "NOT_IN_TOP_10_POOL" if c not in passing[:10] else "NOT_SELECTED_PORTFOLIO_FIT")
         card["class"], card["reasons"] = classify(card, policy)
         if (card.get("median_value_20") or 0) < LOW_LIQUIDITY_VALUE:

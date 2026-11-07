@@ -108,3 +108,39 @@ def test_calendar_reads_publication_in_either_bhavcopy_format(tmp_path, monkeypa
     assert cal.is_trading_day(Exchange.NSE, date(2020, 2, 21)) is False  # a holiday the legacy archive refused
     assert cal.is_trading_day(Exchange.NSE, date(2024, 7, 8)) is True
     assert cal.previous_trading_day(Exchange.NSE, date(2020, 2, 3)) == date(2020, 2, 1)
+
+
+def test_a_stock_passing_only_at_the_cap_cannot_crowd_out_one_that_really_qualifies():
+    """Owner review 2026-11-07. At Rs 10,000 a Rs 2,600 share buys one unit (Rs 2,600, not the Rs 5,000 cap), where
+    the fixed DP fee makes the edge fail; such a stock passed the coarse at-cap gate and filled the pool."""
+    from marketlab.quant import allocate
+    pol = allocate.Policy.for_capital(10_000)
+    crowd = allocate.Candidate("CROWD", 2600.0, 0.010, 0.05, 0.002, q10=-0.02)
+    real = allocate.Candidate("REAL", 100.0, 0.009, 0.05, 0.002, q10=-0.02)
+    assert allocate.entry_gate(crowd, pol)[0] and not allocate.qualifies(crowd, pol, 8000.0)
+    assert allocate.qualifies(real, pol, 8000.0)
+
+
+def test_allocator_utility_is_explained_and_cash_wins_when_it_should():
+    from marketlab.quant import allocate
+    pol = allocate.Policy.for_capital(10_000)
+    weak = allocate.standalone_utility(allocate.Candidate("W", 773.0, 0.0088, 0.1172, 0.002), pol, 8000.0)
+    assert weak["prefers_cash"] and weak["utility"] < 0 and weak["cash_utility"] == 0.0  # CGPOWER, 6 Nov 2026
+    assert abs(weak["utility"] - (weak["expected_net_rupees"] - weak["dp_fee"] - weak["risk_penalty"])) < 0.02
+    strong = allocate.standalone_utility(allocate.Candidate("S", 100.0, 0.05, 0.05, 0.002), pol, 8000.0)
+    assert not strong["prefers_cash"] and strong["utility"] > 0
+
+
+def test_the_portfolio_tail_budget_is_one_budget_not_one_per_stock():
+    """Two positions that could each lose about 7% of capital in their bad month must not be held together."""
+    from marketlab.quant import allocate
+    pol = allocate.Policy(10_000.0, K=2, cap_fraction=0.5, reserve_fraction=0.0, gamma=1e-9)
+    a = allocate.Candidate("A", 100.0, 0.05, 0.05, 0.002, q10=-0.135)
+    b = allocate.Candidate("B", 100.0, 0.05, 0.05, 0.002, q10=-0.135)
+    one = allocate.portfolio_tail_loss([50, 0], [a, b], pol)
+    both = allocate.portfolio_tail_loss([50, 50], [a, b], pol)
+    assert -0.08 < one < -0.06 and both < -0.08  # each alone fits the 8% budget; together they do not
+    out = allocate.plan([a, b], [[1.0, 0.0], [0.0, 1.0]], pol, 10_000.0)
+    held = [k for k, q in out["quantities"].items() if q]
+    assert out["quantities"] and allocate.portfolio_tail_loss(
+        [out["quantities"].get("A", 0), out["quantities"].get("B", 0)], [a, b], pol) >= -0.08

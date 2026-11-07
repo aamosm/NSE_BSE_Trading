@@ -38,6 +38,9 @@ class Model:
     z_abs_sorted: list[float] = field(default_factory=list)
     # E23: out-of-sample slope of realized excess on the stock-specific forecast, date-demeaned, calibration window
     calibration_slope: float | None = None
+    fit_dates_n: int = 0  # distinct dates the coefficients were fitted on
+    calibration_dates_n: int = 0  # distinct dates of the held-out calibration window
+    purged_dates_n: int = 0  # training dates dropped between them so no fit label overlaps the calibration window
 
     def to_json(self) -> dict:
         return {"target_id": self.target_id, "h": self.h, "beta": self.beta, "lam": self.lam,
@@ -47,6 +50,11 @@ class Model:
                 "inner_scores": self.inner_scores, "z_quantiles": {p: conformal_z(self.z_sorted, p) for p in (0.1, 0.5, 0.9)}
                 if self.z_sorted else {}, "z_abs_quantiles": {p: conformal_z(self.z_abs_sorted, p) for p in (0.1, 0.5, 0.9)}
                 if self.z_abs_sorted else {}, "calibration_slope": self.calibration_slope,
+                "dates": {"fit": {"first": self.train_start.isoformat(), "last": self.train_end.isoformat(),
+                                  "count": self.fit_dates_n},
+                          "purged_gap": self.purged_dates_n,
+                          "calibration": {"first": self.calibration_start.isoformat(),
+                                          "last": self.calibration_end.isoformat(), "count": self.calibration_dates_n}},
                 "bootstraps": len(self.bootstrap_betas)}
 
 
@@ -178,6 +186,8 @@ def fit(rows: list[dict], *, h: int, target_id: str, lam_grid=LAM_GRID, inner_fr
         m_idx = sum(idx) / len(idx) if idx else 0.0
         model.z_abs_sorted = sorted((r["y_abs"] - m_idx - dot(beta, design_vector(r["x"]))) / r["sigma"] for r in abs_rows)
     model.calibration_slope = _specific_slope(beta, cal_rows)
+    model.fit_dates_n, model.calibration_dates_n = len(fit_days), len(cal_days)
+    model.purged_dates_n = len(days) - len(fit_days) - len(cal_days)
     if bootstrap:
         rng = random.Random(seed)
         model.bootstrap_betas = block_bootstrap_betas(grams, fit_days, best, h, bootstrap, rng)

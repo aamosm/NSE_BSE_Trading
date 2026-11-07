@@ -215,11 +215,62 @@ def _continuous_subset(idx: list[int], cands, corr, policy, cash_available) -> l
     return V
 
 
+def portfolio_tail_loss(qs, cands, policy) -> float:
+    """The portfolio's bad-month loss as a share of capital when every held position has its bad month together
+    (comonotone: the conservative case, since bad months cluster in a falling market). Each position contributes
+    (value / W) * (q10 - cost at its quantity); the sum must stay within the one tail budget L (owner review
+    2026-11-07: per-position limits alone let two -7% positions make -14%)."""
+    total = 0.0
+    for q, c in zip(qs, cands):
+        if q > 0 and not math.isnan(c.q10):
+            pc = position_costs(c, q)
+            total += capital_tail_loss(c.q10, pc["cost_fraction"], pc["value"], policy)
+    return total
+
+
 def _accept(qs, subset, cands, policy, cash_available) -> bool:
-    """Exact cash at the blocked price, and every held position passes its gate at the chosen quantity."""
+    """Exact cash at the blocked price, every held position passes its gate at the chosen quantity, and the
+    portfolio's combined bad-month loss stays within the tail limit."""
     if not exact_charges_feasible(qs, cands, cash_available):
         return False
-    return all(not position_gate(cands[i], qs[i], policy)[0] for i in subset if qs[i] > 0)
+    if not all(not position_gate(cands[i], qs[i], policy)[0] for i in subset if qs[i] > 0):
+        return False
+    return portfolio_tail_loss(qs, cands, policy) >= -policy.tail_limit
+
+
+def max_quantity(c: Candidate, policy: Policy, cash_available: float | None = None) -> int:
+    """The largest whole-share quantity the per-stock cap (and the cash, when given) allows at the decision price."""
+    cap = policy.cap_fraction * policy.W
+    room = cap if cash_available is None else min(cap, cash_available)
+    return int(room // c.price) if c.price > 0 else 0
+
+
+def qualifies(c: Candidate, policy: Policy, cash_available: float | None = None) -> bool:
+    """Both gates pass at the largest affordable quantity (what the stock's card shows). The allocation pool is
+    built from these, so a stock that passes only the coarse at-cap gate cannot crowd out one that really
+    qualifies (owner review 2026-11-07: CGPOWER and RRKABEL were labelled NOT_IN_TOP_10_POOL)."""
+    q = max_quantity(c, policy, cash_available)
+    return q > 0 and entry_gate(c, policy)[0] and not position_gate(c, q, policy)[0]
+
+
+def standalone_utility(c: Candidate, policy: Policy, cash_available: float | None = None) -> dict:
+    """The allocator's objective for this stock alone at every whole-share quantity, and its best: expected net
+    rupees after variable costs and slippage, the fixed DP fee, and the risk penalty gamma/2 (V sigma)^2. Holding
+    cash scores 0, so a best utility at or below 0 means the allocator rationally prefers cash."""
+    g = policy.risk_aversion()
+    best = None
+    for q in range(1, max_quantity(c, policy, cash_available) + 1):
+        v = q * c.price
+        gain = (c.mu - VARIABLE_ROUND_TRIP - c.slippage) * v
+        risk = g / 2 * (v * c.sigma) ** 2
+        u = gain - FIXED_SELL - risk
+        if best is None or u > best["utility"]:
+            best = {"q": q, "value": round(v, 2), "expected_net_rupees": round(gain, 2), "dp_fee": FIXED_SELL,
+                    "risk_penalty": round(risk, 2), "utility": round(u, 2)}
+    out = best or {"q": 0, "utility": None}
+    out.update(cash_utility=0.0, gamma=g, mu=c.mu, sigma=c.sigma,
+               prefers_cash=best is None or best["utility"] <= 0)
+    return out
 
 
 def plan(cands: list[Candidate], corr: list[list[float]], policy: Policy, cash_available: float, *,

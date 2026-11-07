@@ -68,6 +68,8 @@ def plan_entries(led: Ledger, view, sessions: list[date], k: int, day: date, tod
             continue
         c = candidate_for(isin, fc, execution)
         ok, why = allocate.entry_gate(c, policy)
+        if ok and not allocate.qualifies(c, policy, policy.W * (1 - policy.reserve_fraction)):
+            ok, why = False, ["FAILS_GATES_AT_QUANTITY"]  # same pool rule as the ranking
         if ok:
             cands.append(c)
         else:
