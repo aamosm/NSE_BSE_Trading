@@ -6,7 +6,7 @@ which carry the rules (read-only broker, no orders, no secrets, official hosts, 
 
 ---
 
-## 1. Verify every split/bonus factor with Kite's adjusted candles — Claude Sonnet 5.5 (Opus 5.5 reviews)
+## 1. ~~Verify every split/bonus factor with Kite's adjusted candles~~ — DONE 7 Nov (`scripts/kite_factor_check.py`, 613/614 agree; the one miss is Kite's). Kept for re-running after new imports.
 
 ```
 Read CLAUDE.md, docs/audit/AUDIT_BRIEF.md and docs/ROADMAP_NEXT.md (job 7) first.
