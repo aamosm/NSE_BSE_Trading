@@ -578,35 +578,105 @@ def load(root: Path, digest: str | None = None) -> dict | None:
     return body
 
 
+FORWARD = "forward"  # runs/forward/<day>/<digest16>.json: the frozen outcome of a frozen ranking, written once
+
+
+def _spearman(a: list[float], b: list[float]) -> float | None:
+    n = len(a)
+    if n < 10:
+        return None
+    ra = {i: r for r, i in enumerate(sorted(range(n), key=lambda i: a[i]))}
+    rb = {i: r for r, i in enumerate(sorted(range(n), key=lambda i: b[i]))}
+    m = (n - 1) / 2
+    den = sum((ra[i] - m) ** 2 for i in range(n))
+    return sum((ra[i] - m) * (rb[i] - m) for i in range(n)) / den if den else None
+
+
+def outcome_card(s: dict, lab, h: int) -> dict:
+    """One prediction next to what happened: entry at the next open (filled only if the open was at or below the
+    card's limit, as EXEC.v1), exit at the open h sessions later, gross / absolute / excess returns, the net return
+    after exact charges and slippage at the card's quantity and the actual prices, and where the outcome fell
+    against the predicted ranges."""
+    fc, c = s.get("forecast") or {}, s.get("costs") or {}
+    out = {"isin": s["isin"], "symbol": s["symbol"], "class": s["class"], "reasons": s.get("reasons"),
+           "predicted": {k: fc.get(k) for k in ("mu_hat", "mu_shrunk", "q10", "q50", "q90", "q10_abs", "q50_abs", "q90_abs")},
+           "predicted_cost_fraction": c.get("cost_fraction"), "limit_price": c.get("limit_price"), "q": c.get("q"),
+           "gates": (s.get("gates") or {}).get("at_quantity"), "status": lab.status, "reason": lab.reason}
+    if lab.status != labels.RESOLVED:
+        return out
+    filled = c.get("limit_price") is None or lab.entry_open <= c["limit_price"]
+    out.update(entry_day=lab.entry_day.isoformat(), exit_day=lab.exit_day.isoformat(), entry_open=lab.entry_open,
+               exit_open=lab.exit_open, factor=lab.factor, gross=_f(lab.gross), abs_log=_f(lab.gross_log),
+               index_log=_f(lab.index_log), excess=_f(lab.excess), would_fill=filled)
+    q = c.get("q") or 0
+    if q > 0 and filled:
+        cand = allocate.Candidate(s["isin"], lab.entry_open, 0.0, 0.0, c.get("slippage_fraction") or 0.0)
+        pc = allocate.position_costs(cand, q)
+        out.update(actual_cost_fraction=_f(pc["cost_fraction"]), net=_f(lab.gross - pc["cost_fraction"]),
+                   net_rupees=_f(q * lab.entry_open * lab.gross - pc["charges"] - pc["slippage"], 2))
+    if fc:
+        out["within"] = {"excess_below_q10": lab.excess < fc["q10"], "excess_above_q90": lab.excess > fc["q90"]}
+        if fc.get("q10_abs") is not None:
+            out["within"].update(abs_below_q10=lab.gross_log < fc["q10_abs"], abs_above_q90=lab.gross_log > fc["q90_abs"])
+    return out
+
+
+def outcome_summary(cards: list[dict]) -> dict:
+    res = [o for o in cards if o["status"] == labels.RESOLVED]
+    fcs = [o for o in res if o["predicted"].get("mu_shrunk") is not None]
+    by_class: dict = {}
+    for o in res:
+        by_class.setdefault(o["class"], []).append(o)
+    share = lambda xs, k: (sum(1 for o in xs if (o.get("within") or {}).get(k)) / len(xs)) if xs else None  # noqa: E731
+    return {"resolved": len(res), "unresolved": len(cards) - len(res),
+            "ic_mu_shrunk_vs_excess": _f(_spearman([o["predicted"]["mu_shrunk"] for o in fcs], [o["excess"] for o in fcs]), 4),
+            "coverage": {"excess_below_q10": _f(share(fcs, "excess_below_q10"), 4), "excess_above_q90": _f(share(fcs, "excess_above_q90"), 4),
+                         "abs_below_q10": _f(share(fcs, "abs_below_q10"), 4), "abs_above_q90": _f(share(fcs, "abs_above_q90"), 4),
+                         "expected": 0.10},
+            "by_class": {k: {"n": len(v), "mean_excess": _f(sum(o["excess"] for o in v) / len(v)),
+                             "mean_net": _f(sum(o["net"] for o in v if "net" in o) / max(1, sum(1 for o in v if "net" in o)))
+                             if any("net" in o for o in v) else None,
+                             "win_rate_net": _f(sum(1 for o in v if o.get("net", -1) > 0) / max(1, sum(1 for o in v if "net" in o)), 4)
+                             if any("net" in o for o in v) else None} for k, v in sorted(by_class.items())}}
+
+
 def forward_record(panel, calendar, root: Path, *, index_name: str = "Nifty 50") -> dict:
-    """Scores rankings that were recorded before their entry session opened, once their horizon has passed: the
-    realised gross excess return of each class (same label as training). Rankings created later are listed but
-    never scored (their outcomes could have been known)."""
+    """Scores rankings that were recorded before their entry session opened, once their horizon has passed. A fully
+    resolved ranking gets a write-once outcome file (runs/forward/<day>/<digest16>.json) holding every prediction
+    beside what happened; it is never rewritten, so what the model believed before the outcome stays on record.
+    Rankings created later are listed but never scored (their outcomes could have been known)."""
     from .sessions import exchange_sessions
     stored = set(panel.sessions())
     if not stored:
         return {"rankings": [], "note": "no panel"}
     sessions = exchange_sessions(calendar, min(stored), max(stored), stored)[0]
+    runs = decisions.runs_dir(root)
     out = []
     for r in list_rankings(root):
         entry = {"day": r["day"], "digest": (r["digest"] or "")[:16], "forward": (r.get("forward") or {}).get("eligible")}
         if not entry["forward"]:
             out.append(entry | {"scored": False, "why": (r.get("forward") or {}).get("why")})
             continue
+        path = runs / FORWARD / r["day"] / f"{entry['digest']}.json"
+        if path.exists():
+            done = json.loads(path.read_text(encoding="utf-8"))
+            out.append(entry | {"scored": True, "frozen": str(path), **done["summary"]})
+            continue
         body = json.loads(Path(r["path"]).read_text(encoding="utf-8"))
         d = date.fromisoformat(body["day"])
-        by_class = {}
-        pending = 0
+        cards = []
         for s in body["stocks"]:
-            if s["class"] in ("INELIGIBLE",):
+            if s["class"] == "INELIGIBLE":
                 continue
             lab = labels.forward_return(panel, s["isin"], d, int(body["h"]), sessions=sessions, panel_days=stored,
                                         index_name=index_name)
-            if lab.status != labels.RESOLVED:
-                pending += lab.status == labels.UNRESOLVED
-                continue
-            by_class.setdefault(s["class"], []).append(lab.excess)
-        out.append(entry | {"scored": True, "pending": pending,
-                            "by_class": {k: {"n": len(v), "mean_excess": _f(sum(v) / len(v))} for k, v in by_class.items()}})
-    return {"rankings": out, "note": "Gross excess log return over the horizon (before costs), only for rankings that "
+            cards.append(outcome_card(s, lab, int(body["h"])))
+        summary = outcome_summary(cards)
+        pending = sum(1 for o in cards if o["status"] == labels.UNRESOLVED)
+        if pending == 0 and cards:
+            decisions._write_once(path, {"ranking_digest": r["digest"], "day": body["day"], "h": body["h"],
+                                         "created_at": now().isoformat(), "summary": summary, "outcomes": cards})
+        out.append(entry | {"scored": True, "pending": pending, "frozen": str(path) if pending == 0 else None, **summary})
+    return {"rankings": out, "note": "Per class: gross excess log return and net return after exact costs; IC and range "
+                                     "coverage; only for rankings that "
                                      "existed before their entry session opened."}

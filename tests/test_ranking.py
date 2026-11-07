@@ -245,3 +245,35 @@ def test_limits_are_owner_filters_that_move_calls_but_never_forecasts(built, tmp
     import pytest as _pt
     with _pt.raises(ValueError):
         service.set_policy(tmp_path, {"tail_limit": 5.0})
+
+
+def test_a_forward_ranking_gets_one_frozen_outcome_file_with_every_prediction_beside_what_happened(tmp_path):
+    """Stage 4: rank on 420 sessions before the next open; score against the same market 40 sessions later. Every
+    scored card carries its prediction, the actual next-open entry and exit, the net after exact costs and where it
+    fell against its ranges; the file is written once and never rewritten."""
+    short = make_panel(tmp_path / "a.sqlite3", n=420, n_stocks=30, bonus_at=10_000)
+    root = tmp_path / "private"
+    root.mkdir()
+    day = short.sessions()[-1]
+    created = datetime(day.year, day.month, day.day, 20, 0, tzinfo=IST)  # the evening of the decision day
+    r = ranking.build(short, cfg(), root=root, calendar=CAL, bootstrap=10, created_at=created)
+    short.close()
+    assert r["forward"]["eligible"] is True, r["forward"]
+    long_ = make_panel(tmp_path / "b.sqlite3", n=460, n_stocks=30, bonus_at=10_000)
+    assert long_.sessions()[:420] == [d for d in long_.sessions()[:420]] and long_.sessions()[419] == day
+    rec = ranking.forward_record(long_, CAL, root)
+    row = next(x for x in rec["rankings"] if x["day"] == r["day"])
+    assert row["scored"] and row["pending"] == 0 and row["frozen"] and row["resolved"] > 0
+    import json as _json
+    from pathlib import Path as _P
+    frozen = _json.loads(_P(row["frozen"]).read_text(encoding="utf-8"))
+    resolved = [o for o in frozen["outcomes"] if o["status"] == "RESOLVED"]
+    for o in resolved:
+        assert abs(o["excess"] - (o["abs_log"] - o["index_log"])) < 2e-6  # excess = own return - index return
+        if "net" in o:
+            assert abs(o["net"] - (o["gross"] - o["actual_cost_fraction"])) < 2e-6 and o["would_fill"]
+    before = _P(row["frozen"]).read_bytes()
+    again = ranking.forward_record(long_, CAL, root)
+    assert _P(row["frozen"]).read_bytes() == before  # never rewritten
+    assert next(x for x in again["rankings"] if x["day"] == r["day"])["resolved"] == row["resolved"]
+    long_.close()
