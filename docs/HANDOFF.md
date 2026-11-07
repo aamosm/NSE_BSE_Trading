@@ -1,5 +1,38 @@
 # Handoff
 
+## Prediction-first redesign — 7 November 2026
+
+The registered walk-forward evaluation `A.h20` was intentionally stopped before
+its first fold completed. Its append-only progress log remains at
+`data/research/evaluate-A-h20.log`; no partial evaluation report was written.
+The evaluation processes were terminated by PID, and no new heavy job was
+started.
+
+The redesign has begun without deleting Baseline V1:
+
+- `src/marketlab/quant/prediction.py` defines a prediction-only contract with
+  absolute and benchmark-relative targets, horizons 1/5/20/60/120/252,
+  explicit unavailable-data statuses, quantiles, probabilities and uncertainty.
+- `src/marketlab/quant/universe.py::research_universe` keeps every
+  point-in-time security in the research opportunity set. The existing
+  `screen` path remains an execution-eligibility screen.
+- `src/marketlab/quant/evaluate.py` now builds opportunities from the full
+  research universe rather than affordability, liquidity, surveillance, band,
+  auction or execution filters.
+- `tests/test_prediction_contract.py` and
+  `tests/test_research_universe.py` cover the new boundary.
+
+Validation completed on the Windows Python 3.13 environment:
+
+- prediction contract, research-universe and quant-pipeline tests passed;
+- source and test compilation passed.
+
+Still required before calling the redesign complete: independently fitting
+absolute total-return and benchmark-relative targets, dividend-aware labels,
+prediction-only evaluation/export, capital/K/cost invariance against the real
+model fit, and the six-horizon walk-forward evaluation. No live trading
+capability was added.
+
 ## State on 7 Nov 2026 (Claude Opus 5.5, branch `main`) — read this section first
 
 **Data.** Panel 1 Jan 2016 → 6 Nov 2026: 2,688 sessions, 4,795 securities (delisted included), zero calendar gaps;

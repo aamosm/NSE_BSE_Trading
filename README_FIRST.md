@@ -38,7 +38,7 @@ Everything else (fetching files, building the panel, screening, evaluating, deci
 
 1. **Lower-cost implementation models:** the historical backfill, the H-CA1 check, the registered trials, the event registry, the paper ledger (`docs/ROADMAP.md` §2).
 2. **Owner:** daily login; policy in Controls; server when ready; revoke the exposed keys.
-3. **GPT:** review the new commits with `docs/GPT_SUMMARY.md`; answer the source questions.
+3. **GPT:** review the current state in `docs/HANDOFF.md`; answer the source questions.
 4. **Fable, session 2:** the audit, after paper observation.
 
 A passing test suite is not permission to trade. There is no live switch.

@@ -33,7 +33,7 @@ from .ledger import ExecutionPolicy
 from .linalg import quantile, spearman
 from .panel import Panel
 from .sessions import exchange_sessions, next_session
-from .universe import ScreenPolicy, Screened, screen
+from .universe import ScreenPolicy, Screened, research_universe, screen
 
 MIN_COVERAGE_N = 200  # fewer resolved test forecasts: the calibration test is inconclusive
 
@@ -167,7 +167,9 @@ def build_dataset(view: Panel, cfg: Config, *, calendar, rule_inputs_fn=None, li
     for d in decision_days:
         entry = next_session(calendar, d, sessions)
         ri = rule_inputs_fn(entry) if (rule_inputs_fn and entry) else None
-        universe[d] = screen(view, d, cfg.screen, ri, sessions, panel_days)
+        # Research must cover the full point-in-time equity universe. Execution
+        # eligibility is applied only after predictions are produced.
+        universe[d] = research_universe(view, d, sessions=sessions, panel_days=panel_days)
     isins = sorted({i for s in universe.values() for i in s.isins})
     feats, closes, data = {}, {}, {}
     unchecked = view.unchecked_days()

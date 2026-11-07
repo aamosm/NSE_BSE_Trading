@@ -44,6 +44,44 @@ class Screened:
         return not self.unverified
 
 
+def research_universe(panel: Panel, day: date, *, sessions: list[date] | None = None,
+                      panel_days: set[date] | None = None) -> Screened:
+    """Return every security present on ``day`` for prediction research.
+
+    This is deliberately not an execution screen: price, turnover, trading
+    frequency, surveillance, bands, auctions, and affordability do not remove
+    a security. Those facts remain available for downstream eligibility and as
+    model features where supported.
+    """
+    sessions = sessions or panel.sessions()
+    panel_days = panel_days if panel_days is not None else set(panel.sessions())
+    if day not in panel_days:
+        return Screened(day, [], {}, ["DAY_NOT_IN_PANEL"], availability="NONE")
+    today = {isin: b for isin, b in panel.cross_section(day)}
+    if not today:
+        return Screened(day, [], {}, ["NO_SECURITIES_ON_DAY"], availability="NONE")
+    medians: dict[str, float] = {}
+    try:
+        i = sessions.index(day)
+    except ValueError:
+        return Screened(day, [], {}, ["DAY_NOT_IN_SESSIONS"], availability="NONE")
+    window = sessions[max(0, i - 19):i + 1]
+    for isin in today:
+        values = [b.value for d in window for candidate, b in panel.cross_section(d)
+                  if candidate == isin and b.value > 0]
+        if values:
+            medians[isin] = statistics.median(values[-20:])
+    return Screened(
+        day=day,
+        isins=sorted(today),
+        excluded={},
+        unverified=[],
+        stats={"kept": len(today), "research_universe": len(today)},
+        median_value=medians,
+        availability="NONE",
+    )
+
+
 def rule_inputs_for(market: Path, day: date, calendar=None, availability: str = "RECEIPT") -> dict | None:
     """Series, band and surveillance for session ``day`` (the entry session) from the after-close files of the
     previous session, or None.
