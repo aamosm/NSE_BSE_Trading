@@ -361,7 +361,7 @@ def run_fold(ds: Dataset, fold: dict, cfg: Config, trial_id: str, view: Panel, l
               "mom": (feats[(pr["day"], pr["isin"])].get("features") or {}).get("mom_12_1"),
               "median_value": feats[(pr["day"], pr["isin"])].get("median_value"),
               "ref_close": feats[(pr["day"], pr["isin"])].get("ref_close")} for pr in preds]
-    bper = baselines.fold_periods(brows, s, ts, te, cfg.h, policy, seed=cfg.seed)
+    bper = baselines.fold_periods(brows, s, ts, te, cfg.h, policy, seed=cfg.seed, max_gap=cfg.execution.max_entry_gap)
     return {"fold": fold_dates, "trial_id": trial_id, "model": model.to_json(), "n_train": len(train),
             "n_test": len(test), "metrics": metrics, "simulation": {k: v for k, v in sim.items() if k != "events"},
             "events_sample": sim["events"][:200], "stresses": stresses, "evidence": evidence,

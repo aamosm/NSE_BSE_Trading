@@ -81,9 +81,20 @@ def test_choices_use_the_decision_close_not_the_next_open():
     its quantity is fixed from that close; the next open only sets the fill."""
     d = date(2020, 1, 1)
     gap = {"day": d, "isin": "GAP", "mu": 0.05, "mom": 0, "median_value": 2e8, "ref_close": 15_000.0,
-           "label": _label(d, 0.0, entry=17_000.0)}  # one share: 15,000 at the close (fits 16,000), 17,000 at the open
+           "label": _label(d, 0.0, entry=15_500.0)}  # one share: 15,000 at the close (fits 16,000); opens 3.3% up
     rest = [{"day": d, "isin": f"S{j}", "mu": 0.0, "mom": 0, "median_value": 2e8, "ref_close": 100.0,
              "label": _label(d, 0.0)} for j in range(6)]
     per = baselines.fold_periods([gap] + rest, [d], 0, 0, 20, POL, draws=2)
     m = per["model"][0]
-    assert m["n"] == 5 and abs(m["invested"] - (17_000.0 + 4 * 160 * 100.0)) < 1e-6  # q = 1 from the close
+    assert m["n"] == 5 and abs(m["invested"] - (15_500.0 + 4 * 160 * 100.0)) < 1e-6  # q = 1 from the close
+
+
+def test_a_gap_above_the_limit_is_not_bought_exactly_as_in_the_ledger():
+    """EXEC.v1: the limit is close x 1.05; an open above it stays unfilled, never a purchase at the higher open."""
+    d = date(2020, 1, 1)
+    gap = {"day": d, "isin": "GAP", "mu": 0.05, "mom": 0, "median_value": 2e8, "ref_close": 100.0,
+           "label": _label(d, 0.20, entry=106.0)}  # opens 6% above the close: rejected
+    rest = [{"day": d, "isin": f"S{j}", "mu": 0.0, "mom": 0, "median_value": 2e8, "ref_close": 100.0,
+             "label": _label(d, 0.0)} for j in range(6)]
+    m = baselines.fold_periods([gap] + rest, [d], 0, 0, 20, POL, draws=2)["model"][0]
+    assert m["rejected_gap"] == 1 and len(m["trades"]) == 4  # the 20% winner was not bought

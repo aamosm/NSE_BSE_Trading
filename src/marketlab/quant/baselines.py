@@ -29,13 +29,15 @@ from . import allocate, labels
 STRATEGIES = ("model", "momentum", "random", "nifty")
 
 
-def _net(label, decision_price: float, value_target: float, slippage_side: float) -> dict | None:
+def _net(label, decision_price: float, value_target: float, slippage_side: float, max_gap: float = 0.05) -> dict | None:
     """Net result of one whole-share position held over the label's window, or None when it cannot be scored.
     The quantity is fixed at decision time from the decision close (as EXEC.v1 freezes intents); the fill is the
     next open, which is not known when the stock is chosen."""
     entry = label.entry_open
     if not (entry and entry > 0) or label.status != labels.RESOLVED or not decision_price > 0:
         return None
+    if entry > decision_price * (1 + max_gap):
+        return {"rejected_gap": True}  # EXEC.v1: a limit buy at close x (1 + gap) does not fill above it
     q = int(value_target // decision_price)
     if q <= 0:
         return None
@@ -58,17 +60,20 @@ def _pick(ordered: list[dict], k: int, value_target: float) -> list[dict]:
     return out
 
 
-def _period(picks: list[dict], value_target: float, W: float) -> dict:
-    res = [_net(r["label"], r["ref_close"], value_target, labels.slippage_for(r.get("median_value") or 0.0)) for r in picks]
+def _period(picks: list[dict], value_target: float, W: float, max_gap: float = 0.05) -> dict:
+    res = [_net(r["label"], r["ref_close"], value_target, labels.slippage_for(r.get("median_value") or 0.0), max_gap)
+           for r in picks]
     unresolved = sum(1 for x in res if x is None)
-    done = [x for x in res if x is not None]
+    gaps = sum(1 for x in res if x and x.get("rejected_gap"))
+    done = [x for x in res if x is not None and not x.get("rejected_gap")]
     net = sum(x["net"] for x in done)
     return {"ret": net / W, "net": net, "costs": sum(x["costs"] for x in done), "invested": sum(x["invested"] for x in done),
-            "trades": [x["net"] / x["invested"] for x in done], "unresolved": unresolved, "n": len(picks)}
+            "trades": [x["net"] / x["invested"] for x in done], "unresolved": unresolved, "rejected_gap": gaps,
+            "n": len(picks)}
 
 
 def fold_periods(rows: list[dict], sessions: list, ts: int, te: int, h: int, policy: allocate.Policy, *,
-                 draws: int = 200, seed: int = 0) -> dict:
+                 draws: int = 200, seed: int = 0, max_gap: float = 0.05) -> dict:
     """rows: one per (decision day, eligible stock) in the fold's test window with day, isin, mu, mom, label,
     median_value and ref_close (the decision close: every choice uses decision-time information only). Returns per-strategy period results (random: each draw's mean and per-period values)."""
     k = max(1, policy.K)
@@ -89,16 +94,16 @@ def fold_periods(rows: list[dict], sessions: list, ts: int, te: int, h: int, pol
         if not resolved_idx:
             continue  # the holding window has not resolved yet for anyone: nothing can be scored
         out["days"].append(d.isoformat() if hasattr(d, "isoformat") else str(d))
-        out["model"].append(_period(_pick(sorted(day_rows, key=lambda r: -r["mu"]), k, slice_), slice_, policy.W))
+        out["model"].append(_period(_pick(sorted(day_rows, key=lambda r: -r["mu"]), k, slice_), slice_, policy.W, max_gap))
         mom = [r for r in day_rows if r.get("mom") is not None]
-        out["momentum"].append(_period(_pick(sorted(mom, key=lambda r: -r["mom"]), k, slice_), slice_, policy.W))
+        out["momentum"].append(_period(_pick(sorted(mom, key=lambda r: -r["mom"]), k, slice_), slice_, policy.W, max_gap))
         idx_simple = math.exp(statistics.median(resolved_idx)) - 1
         out["nifty"].append({"ret": (1 - policy.reserve_fraction) * idx_simple, "net": invest * idx_simple, "costs": 0.0,
                              "invested": invest, "trades": [idx_simple], "unresolved": 0, "n": 1})
         for j in range(draws):
             sample = day_rows[:]
             rng.shuffle(sample)
-            out["random_draws"][j].append(_period(_pick(sample, k, slice_), slice_, policy.W)["ret"])
+            out["random_draws"][j].append(_period(_pick(sample, k, slice_), slice_, policy.W, max_gap)["ret"])
     return out
 
 
@@ -137,7 +142,8 @@ def metrics(periods: list[dict], h: int) -> dict:
             "sortino_annualized": m / dsd * ann if dsd and dsd > 0 else None,
             "profit_factor": gains / losses if losses > 0 else None,
             "turnover_per_period": 1.0,  # every position is replaced each holding period by construction
-            "unresolved_picks": sum(p["unresolved"] for p in periods), "picks": sum(p["n"] for p in periods)}
+            "unresolved_picks": sum(p["unresolved"] for p in periods),
+            "rejected_gap_picks": sum(p.get("rejected_gap", 0) for p in periods), "picks": sum(p["n"] for p in periods)}
 
 
 def block_bootstrap_ci(diffs: list[float], *, block: int = 3, reps: int = 2000, seed: int = 0) -> dict:
