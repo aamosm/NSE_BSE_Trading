@@ -26,6 +26,12 @@ Validation completed on the Windows Python 3.13 environment:
 
 - prediction contract, research-universe and quant-pipeline tests passed;
 - source and test compilation passed.
+- full active test suite passed: 695 tests.
+
+The cleanup and redesign checkpoint was committed and pushed:
+
+- commit `92c777c` (`Begin prediction-first architecture`);
+- pushed to `origin/main` at `https://github.com/aamosm/NSE_BSE_Trading.git`.
 
 Still required before calling the redesign complete: independently fitting
 absolute total-return and benchmark-relative targets, dividend-aware labels,
